@@ -151,9 +151,19 @@ class CallSession:
                     pcm16 = ulaw_to_pcm16(ulaw)
                     self.audio_buf.extend(pcm16)
 
-                    # Process every ~1 s of accumulated audio
-                    if len(self.audio_buf) >= TELNYX_RATE * 2:
-                        await self._process_buffer(ws)
+                    # Wait for a natural pause (500ms silence) before transcribing.
+                    # This ensures Arthur hears a complete sentence, not a fragment.
+                    # Minimum 1s of audio before triggering to avoid single-word noise.
+                    if len(self.audio_buf) >= TELNYX_RATE * 2:  # at least 1s buffered
+                        chunk = np.frombuffer(bytes(self.audio_buf[-TELNYX_RATE // 2:]),
+                                              dtype=np.int16).astype(np.float32)
+                        rms = float(np.sqrt(np.mean(chunk ** 2))) / 32768.0
+                        # Silence threshold: RMS < 0.01 = ~quiet for last 500ms
+                        if rms < 0.01 and len(self.audio_buf) >= TELNYX_RATE * 1:
+                            await self._process_buffer(ws)
+                        # Hard cap: process after 8s regardless (prevents infinite wait)
+                        elif len(self.audio_buf) >= TELNYX_RATE * 16:
+                            await self._process_buffer(ws)
 
                 elif event == "stop":
                     break
