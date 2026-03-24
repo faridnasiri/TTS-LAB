@@ -1,46 +1,33 @@
 param(
-    [string]$VM   = "192.168.0.153",
-    [string]$User = "",
-    [string]$Pass = ""
+    [string]$VM   = "192.168.0.87",   # Ubuntu VM (not the Hyper-V host at .153)
+    [string]$User = "arthur",
+    [string]$Key  = "$env:USERPROFILE\.ssh\id_arthur_vm"
 )
-
-if (-not $User) { $User = Read-Host "SSH username" }
-if (-not $Pass) { $Pass = Read-Host "SSH password" -AsSecureString | ForEach-Object { [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($_)) } }
 
 $root = Split-Path $PSScriptRoot -Parent
 
+if (-not (Test-Path $Key)) {
+    Write-Error "SSH key not found: $Key"
+    exit 1
+}
+
 Write-Host ""
 Write-Host "=== Deploying Arthur Server to $User@$VM ===" -ForegroundColor Cyan
+Write-Host "    Key: $Key" -ForegroundColor DarkGray
 
-# Check plink/pscp (PuTTY tools) or openssh
-$usePlink = $null -ne (Get-Command plink -ErrorAction SilentlyContinue)
-$useSsh   = $null -ne (Get-Command ssh   -ErrorAction SilentlyContinue)
-
-if (-not $usePlink -and -not $useSsh) {
-    Write-Error "Neither ssh nor plink found. Install OpenSSH (built into Windows 10+) or PuTTY."
+if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
+    Write-Error "ssh not found. Install OpenSSH (built into Windows 10+)."
     exit 1
 }
 
 function Invoke-Remote([string]$cmd) {
-    if ($useSsh) {
-        # openssh — password auth via sshpass (Linux) or just prompt
-        Write-Host "  >> $cmd" -ForegroundColor DarkGray
-        $env:SSHPASS = $Pass
-        ssh -o StrictHostKeyChecking=no "${User}@${VM}" $cmd
-    } else {
-        Write-Host "  >> $cmd" -ForegroundColor DarkGray
-        plink -ssh -pw $Pass "${User}@${VM}" $cmd
-    }
+    Write-Host "  >> $cmd" -ForegroundColor DarkGray
+    ssh -i $Key -o StrictHostKeyChecking=no "${User}@${VM}" $cmd
 }
 
 function Send-File([string]$local, [string]$remote) {
-    Write-Host "  COPY $local → $remote" -ForegroundColor DarkGray
-    if ($useSsh) {
-        $env:SSHPASS = $Pass
-        scp -o StrictHostKeyChecking=no $local "${User}@${VM}:${remote}"
-    } else {
-        pscp -pw $Pass $local "${User}@${VM}:${remote}"
-    }
+    Write-Host "  COPY $(Split-Path $local -Leaf) → $remote" -ForegroundColor DarkGray
+    scp -i $Key -o StrictHostKeyChecking=no $local "${User}@${VM}:${remote}"
 }
 
 # ── 1. Create target dirs ──────────────────────────────────────────────────────
@@ -51,9 +38,15 @@ Invoke-Remote "sudo mkdir -p /opt/arthur && sudo chmod 777 /opt/arthur"
 # ── 2. Copy files ──────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "--- Step 2: Copying files ---" -ForegroundColor Yellow
-Send-File "$root\arthur_server\arthur_server.py" "/opt/arthur/arthur_server.py"
-Send-File "$root\arthur_server\requirements.txt" "/tmp/requirements.txt"
-Send-File "$root\arthur_server\setup_vm.sh"      "/tmp/setup_vm.sh"
+Send-File "$root\arthur_server\arthur_server.py"          "/opt/arthur/arthur_server.py"
+Send-File "$root\arthur_server\requirements.txt"          "/tmp/requirements.txt"
+Send-File "$root\arthur_server\setup_vm.sh"               "/tmp/setup_vm.sh"
+Send-File "$root\arthur_server\tts_benchmark.py"          "/opt/arthur/tts_benchmark.py"
+Send-File "$root\arthur_server\requirements_benchmark.txt" "/opt/arthur/requirements_benchmark.txt"
+Send-File "$root\arthur_server\run_benchmark.sh"          "/opt/arthur/run_benchmark.sh"
+Send-File "$root\arthur_server\download_models.sh"        "/opt/arthur/download_models.sh"
+Send-File "$root\arthur_server\tts_lab.py"                "/opt/arthur/tts_lab.py"
+Send-File "$root\arthur_server\setup_tts_lab.sh"          "/opt/arthur/setup_tts_lab.sh"
 
 # ── 3. Run setup script ────────────────────────────────────────────────────────
 Write-Host ""
@@ -79,3 +72,13 @@ Write-Host "  3. On VM: cloudflared tunnel route dns arthur arthur.YOURDOMAIN.co
 Write-Host "  4. On VM: sudo systemctl start cloudflared-arthur" -ForegroundColor White
 Write-Host "  5. Telnyx webhook: https://arthur.YOURDOMAIN.com/incoming-call" -ForegroundColor White
 Write-Host "  6. Update Secrets.cs: AiBridgeNumber = your Telnyx number" -ForegroundColor White
+Write-Host ""
+Write-Host "To run TTS benchmark on the VM:" -ForegroundColor Cyan
+Write-Host "  ssh arthur@192.168.0.87 'sudo bash /opt/arthur/run_benchmark.sh'" -ForegroundColor White
+Write-Host "  # Then copy WAVs to Windows to listen:" -ForegroundColor DarkGray
+Write-Host "  scp arthur@192.168.0.87:/tmp/tts_bench/*.wav ." -ForegroundColor White
+Write-Host ""
+Write-Host "To launch the TTS Lab web UI:" -ForegroundColor Cyan
+Write-Host "  ssh arthur@192.168.0.87 'sudo bash /opt/arthur/setup_tts_lab.sh'" -ForegroundColor White
+Write-Host "  # Then open in browser:" -ForegroundColor DarkGray
+Write-Host "  http://192.168.0.87:8001" -ForegroundColor Green
