@@ -93,8 +93,11 @@ INITIAL_GREETING = (
 
 # ── Model loading ─────────────────────────────────────────────────────────────
 
-log.info("Loading Whisper '%s'...", WHISPER_MODEL)
-whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+CPU_THREADS = int(os.environ.get("CPU_THREADS", os.cpu_count() or 6))
+
+log.info("Loading Whisper '%s' on %d threads...", WHISPER_MODEL, CPU_THREADS)
+whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8",
+                       cpu_threads=CPU_THREADS, num_workers=1)
 log.info("Whisper ready.")
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
