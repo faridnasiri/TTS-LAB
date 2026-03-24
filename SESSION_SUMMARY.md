@@ -13,19 +13,19 @@ Android app now has **3 conversation modes**:
 |---|---|
 | `LocalGemini` | Android on-device Gemini + Gemini TTS via TRRS loopback |
 | `VapiBridge` | Outbound call to VAPI number → VAPI handles AI |
-| **`HomeBridge`** ← **new** | Outbound call to Telnyx DID → arthur.sys.tips → Ubuntu VM |
+| **`HomeBridge`** ← **new** | Outbound call to Twilio DID → arthur.sys.tips → Ubuntu VM |
 
 The Home Bridge flow:
 ```
 Scammer calls Pixel 5
        ↓
-Android conferences in a 2nd outbound call to Telnyx DID
+Android conferences in a 2nd outbound call to Twilio DID
        ↓
-Telnyx TeXML → MediaStream WebSocket → arthur.sys.tips (Cloudflare Tunnel)
+Twilio TwiML → MediaStream WebSocket → arthur.sys.tips (Cloudflare Tunnel)
        ↓
 Ubuntu VM (192.168.0.87): faster-whisper STT → Gemini Flash LLM → Gemini TTS
        ↓
-PCM audio → μ-law → Telnyx → back into the conference → scammer hears Arthur
+PCM audio → μ-law → Twilio → back into the conference → scammer hears Arthur
 ```
 
 ---
@@ -96,15 +96,15 @@ GEMINI_FLASH     = "gemini-2.0-flash"          # LLM
 GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"  # TTS
 GEMINI_TTS_VOICE = "Gacrux"                    # Mature male voice
 WHISPER_MODEL    = "base.en"                   # STT
-TELNYX_RATE      = 8000                        # μ-law 8kHz from Telnyx
+TWILIO_RATE      = 8000                        # μ-law 8kHz from Twilio
 ```
 
 **Call flow per utterance:**
-1. Telnyx streams 8kHz μ-law audio chunks via WebSocket
+1. Twilio streams 8kHz μ-law audio chunks via WebSocket
 2. Server accumulates chunks, detects silence via energy threshold
 3. Converts μ-law → 16kHz PCM → faster-whisper → text
 4. Text → Gemini Flash (with Arthur persona + stage prompts) → response text
-5. Response text → Gemini TTS → 24kHz PCM → resample to 8kHz → μ-law → Telnyx stream
+5. Response text → Gemini TTS → 24kHz PCM → resample to 8kHz → μ-law → Twilio stream
 
 **Arthur persona stages** (time-based, gets more confused):
 - Stage 0 (0–3 min): Politely confused, asks clarifying questions
@@ -159,7 +159,7 @@ ssh -i $key arthur@192.168.0.87 "sudo journalctl -u arthur -f"
 | LLM (Gemini Flash) | Google free tier | $0 |
 | TTS (Gemini TTS) | Google free tier | $0 |
 | Inbound call | Carrier | $0 (personal number) |
-| Outbound to Telnyx DID | Telnyx | ~$0.008/min |
+| Outbound to Twilio DID | Twilio | ~$0.008/min |
 | **Total per call** | | **~$0.008/min** |
 
 ---
@@ -171,7 +171,7 @@ ssh -i $key arthur@192.168.0.87 "sudo journalctl -u arthur -f"
 | `Spamblocker/Services/BaiterInCallService.cs` | Added `InitiateHomeBridge()`, `_pendingHomeBridge`, `isHomeBridge` param to `MonitorBridgeCall()` |
 | `Spamblocker/IncomingCallActivity.cs` | Added Home Bridge button wiring |
 | `Spamblocker/Resources/layout/activity_bait_call.xml` | Added `btnBaitHomeBridge` button |
-| `tools/arthur_server/arthur_server.py` | Full Python home bridge server |
+| `tools/arthur_server/arthur_server.py` | Full Python home bridge server (Twilio MediaStream) |
 | `tools/arthur_server/deploy.ps1` | Windows deploy script |
 | `tools/arthur_server/setup_vm.sh` | Ubuntu VM one-shot setup script |
 
