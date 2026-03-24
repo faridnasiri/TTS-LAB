@@ -4,6 +4,88 @@
 
 ---
 
+## Project Goal
+
+**SpamBlocker** is an Android scam-baiting app for Google Pixel running on the user's personal phone number.
+
+When a scam call comes in, instead of hanging up, the app **wastes scammers' time** by deploying Arthur Henderson — a convincingly confused 78-year-old retired postal worker from Phoenix, Arizona — as an AI decoy. Arthur keeps scammers on the line as long as possible while extracting real operational intelligence that can be reported to law enforcement:
+
+| Intelligence target | Why it matters |
+|---|---|
+| Callback number | VoIP provider can be subpoenaed for account owner |
+| Website / URL | WHOIS + hosting company have registrant identity |
+| AnyDesk / TeamViewer ID | Both companies cooperate with law enforcement |
+| Crypto wallet addresses | Traceable via blockchain + exchange KYC |
+| Badge / case numbers | Links to scam operation structure |
+
+**Arthur's character:**  
+Lives alone with his cat Mr. Whiskers since wife Martha passed. Son in Tucson calls Sundays. Slow, polite, always "about to comply", never hostile. Progresses through 4 frustration stages across the call to stay believable.
+
+---
+
+## Full System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ANDROID (Pixel 5 — user's personal number)                     │
+│                                                                 │
+│  BaiterScreeningService                                         │
+│    ↓ unknown caller + high spam score                           │
+│    → silence ringer, flag PendingAutoBait                       │
+│                                                                 │
+│  IncomingCallActivity  →  user taps [BAIT]                      │
+│                                                                 │
+│  BaiterInCallService  (InCallService)                           │
+│    ├─ STT: Android SpeechRecognizer (on-device)                 │
+│    ├─ ScamKeywordDetector  → scam alert overlay                 │
+│    ├─ ScammerIntelExtractor → callback#, URLs, AnyDesk IDs      │
+│    │                                                            │
+│    └─ ConversationMode ─────────────────────────────────────┐  │
+│         ├─ LocalGemini  → GeminiConversationEngine           │  │
+│         │                  ↓ Gemini Flash API (LLM)          │  │
+│         │                  ↓ Gemini TTS / ElevenLabs         │  │
+│         │                  ↓ HardwareLoopbackPlayer          │  │
+│         │                    (speaker → mic acoustic inject)  │  │
+│         │                                                    │  │
+│         ├─ VapiBridge  → PlaceCall(AiBridgeNumber)           │  │
+│         │                  ↓ conference with scammer         │  │
+│         │                  ↓ VAPI handles AI + voice         │  │
+│         │                  ↓ VapiCallMonitor polls transcript │  │
+│         │                                                    │  │
+│         └─ HomeBridge  → PlaceCall(HomeBridgeNumber) ────────┘  │
+│                            ↓ conference with scammer            │
+└────────────────────────────┼────────────────────────────────────┘
+                             │ PSTN / carrier
+                             ↓
+┌────────────────────────────────────────────────────────────────┐
+│  TWILIO  (+1 425-675-6272)                                     │
+│    TwiML → MediaStream WebSocket                               │
+│    ↓ 8kHz μ-law audio (bidirectional)                          │
+└────────────────────────────┼───────────────────────────────────┘
+                             │ WSS
+                             ↓
+┌────────────────────────────────────────────────────────────────┐
+│  CLOUDFLARE TUNNEL  (arthur.sys.tips)                          │
+│    ↓ forwards to localhost:8000                                │
+└────────────────────────────┼───────────────────────────────────┘
+                             │
+                             ↓
+┌────────────────────────────────────────────────────────────────┐
+│  UBUNTU VM  192.168.0.87  (Hyper-V, 6 vCPU, Xeon D-1528)     │
+│                                                                │
+│  nginx → uvicorn → arthur_server.py                           │
+│                                                                │
+│  Per utterance:                                               │
+│    μ-law chunks → PCM 16kHz                                   │
+│    → faster-whisper base.en (local, RTF 0.35x)  → text        │
+│    → Gemini Flash 2.0 (Arthur persona + stage)  → response    │
+│    → Gemini 2.5 Flash TTS, voice=Gacrux         → PCM 24kHz  │
+│    → resample → μ-law 8kHz → Twilio stream                   │
+└────────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## What Was Built
 
 ### Home Bridge Mode (new conversation path)
