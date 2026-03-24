@@ -1,0 +1,52 @@
+# ── Arthur TTS Lab — dependencies (11 engines) ────────────────────────────────
+#
+# Install in the bench venv:
+#   source /opt/arthur-bench-env/bin/activate
+#   pip install -r requirements_benchmark.txt
+#
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Utilities
+psutil>=5.9.0
+numpy>=1.26.0
+soundfile>=0.12.1
+
+# ── 1. Piper TTS ──────────────────────────────────────────────────────────────
+piper-tts>=1.2.0
+onnxruntime>=1.18.0
+
+# ── 2. Kokoro-82M ─────────────────────────────────────────────────────────────
+kokoro-onnx>=0.4.0
+
+# ── 3. MeloTTS ────────────────────────────────────────────────────────────────
+# pip install git+https://github.com/myshell-ai/MeloTTS.git
+
+# ── 4. Bark (emotion tokens) ──────────────────────────────────────────────────
+bark>=0.1.5
+
+# ── 5. StyleTTS 2 ─────────────────────────────────────────────────────────────
+styletts2>=0.1.6
+
+# ── 6. F5-TTS (zero-shot cloning) ─────────────────────────────────────────────
+f5-tts>=1.1.0
+
+# ── 7. Dia-1.6B (dialogue + emotion tags) ─────────────────────────────────────
+# pip install git+https://github.com/nari-labs/dia.git
+
+# ── 8. XTTS-v2 (Coqui TTS) ───────────────────────────────────────────────────
+coqui-tts>=0.27.0
+
+# ── 9. CosyVoice2-0.5B ───────────────────────────────────────────────────────
+# NOT on PyPI — see setup_tts_lab.sh Step 11 for manual git clone install.
+
+# ── 10. Parler-TTS mini ───────────────────────────────────────────────────────
+parler-tts>=1.0.0
+transformers==4.46.1
+
+# ── 11. Chatterbox ───────────────────────────────────────────────────────────
+chatterbox-tts>=0.1.0
+
+# PyTorch (CPU-only — must be installed first via index-url)
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+torch>=2.2.0
+torchaudio>=2.2.0
