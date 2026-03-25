@@ -407,9 +407,13 @@ def _synth_parler(inst, text, params):
 
 # -- 11. Chatterbox --
 def _load_chatterbox():
+    import perth
+    # perth 1.0.0 ships PerthImplicitWatermarker=None (proprietary stub).
+    # Chatterbox calls it in __init__; patch with DummyWatermarker so it loads.
+    if perth.PerthImplicitWatermarker is None:
+        perth.PerthImplicitWatermarker = perth.DummyWatermarker
     from chatterbox.tts import ChatterboxTTS
-    try:    return ChatterboxTTS.from_pretrained("resemble-ai/chatterbox-turbo", device="cpu")
-    except Exception: return ChatterboxTTS.from_pretrained(device="cpu")
+    return ChatterboxTTS.from_pretrained(device="cpu")
 
 def _synth_chatterbox(inst, text, params):
     import torchaudio as ta
