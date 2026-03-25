@@ -3,372 +3,363 @@
 > All CPU RTF figures are live-measured on the VM. GPU RTF figures are **estimates**,
 > derived by scaling from known community benchmarks on comparable GPUs.
 > See Section 9 for methodology.
+> **Specs sourced from: https://technical.city/en/video/RTX-A2000-vs-RTX-A1000**
 
 ---
 
-## 1. GPU Specifications
+## ⚠️ Key Finding (Corrected)
 
-| Spec | **RTX A1000 8 GB** | **RTX A2000 6 GB** | CPU baseline |
+**The RTX A2000 6GB is the faster card for AI inference — by ~25%.**
+My earlier analysis had the bandwidth wrong. Actual figures:
+- A2000: **288 GB/s** memory bandwidth (was incorrect at 192)
+- A1000: **192 GB/s** memory bandwidth (was incorrect at 224)
+- Both are **Ampere architecture** (A1000 is GA107, not Ada Lovelace as previously assumed)
+- A2000 has **44% more Tensor Cores** (104 vs 72) and **19% more FP32 TFLOPS** (7.99 vs 6.74)
+
+The tradeoff is now: **A2000 = faster** vs **A1000 = more VRAM + lower power + single-slot**.
+
+---
+
+## 1. GPU Specifications (Corrected — sourced from technical.city)
+
+| Spec | **RTX A2000 6 GB** | **RTX A1000 8 GB** | CPU baseline |
 |---|---|---|---|
-| **Architecture** | Ada Lovelace (AD107) | Ampere (GA106) | Broadwell-DE |
-| **Generation** | 2023 | 2021 | 2015 |
-| **CUDA cores** | 2 816 | 3 328 | — |
-| **Tensor Cores** | 88 × 4th-gen | 104 × 3rd-gen | — |
-| **FP32 throughput** | 8.2 TFLOPS | 8.0 TFLOPS | ~0.2 TFLOPS (AVX2) |
-| **FP16 (Tensor, dense)** | 32.8 TFLOPS | 16.0 TFLOPS | — |
-| **INT8 (Tensor, dense)** | 65.5 TOPS | 32.0 TOPS | — |
-| **VRAM** | **8 GB GDDR6** | **6 GB GDDR6** | 32 GB DDR4 (shared) |
-| **Memory bus** | 128-bit | 192-bit | 128-bit (2ch) |
-| **Memory bandwidth** | **224 GB/s** | **192 GB/s** | ~25 GB/s (practical) |
-| **TDP** | **50 W** ← lower | 70 W | N/A |
-| **Form factor** | Low-profile **single slot** ← smaller | Low-profile dual slot | — |
-| **PCIe slot** | Gen 4 × 8 | Gen 4 × 8 | — |
-| **Display outputs** | 4× mDP 1.4 | 4× mDP 1.4 | — |
-| **Hyper-V DDA** | ✅ supported | ✅ supported | — |
-| **Street price (2025)** | ~$400–480 new | ~$280–350 used/new | — |
+| **Architecture** | Ampere (GA106) | Ampere (GA107) | Broadwell-DE |
+| **Generation** | Same — both 8 nm Ampere | Same — both 8 nm Ampere | 2015 |
+| **Release date** | 10 Aug 2021 | 16 Apr 2024 | — |
+| **CUDA cores** | — | — | — |
+| **Tensor Cores** | **104** (3rd gen) | 72 (3rd gen) | — |
+| **RT Cores** | **26** | 18 | — |
+| **TMUs** | **104** | 72 | — |
+| **ROPs** | **48** | 32 | — |
+| **FP32 throughput** | **7.99 TFLOPS** | 6.74 TFLOPS | ~0.2 TFLOPS |
+| **FP16 Tensor (est)** | **~16 TFLOPS** | ~10.7 TFLOPS | — |
+| **VRAM** | 6 GB GDDR6 | **8 GB GDDR6** | 32 GB DDR4 |
+| **Memory bus** | **192-bit** | 128-bit | 128-bit (2ch) |
+| **Memory bandwidth** | **288 GB/s** ← faster | 192 GB/s | ~25 GB/s |
+| **Memory clock** | 1500 MHz | 1500 MHz | — |
+| **L1 Cache** | **3.3 MB** | 2.3 MB | — |
+| **L2 Cache** | **3 MB** | 2 MB | — |
+| **TDP** | 70 W | **50 W** ← lower | — |
+| **Form factor** | Low-profile **dual slot** | Low-profile **single slot** | — |
+| **PCIe** | Gen 4 | Gen 4 | — |
+| **Transistors** | **12 000M** | 8 700M | — |
+| **Manufacturing** | 8 nm | 8 nm | — |
+| **Hyper-V DDA** | ✅ | ✅ | — |
+| **Launch price** | **$449** | no data | — |
+| **Aggregate score** | **32.12** (+24.6%) | 25.78 | — |
+| **GeekBench 5 OpenCL** | **73 415** (+37.3%) | 53 482 | — |
+| **GeekBench 5 Vulkan** | **69 653** (+38.6%) | 50 266 | — |
+| **Passmark** | **13 427** (+24.5%) | 10 786 | — |
 
-### Why A1000 wins despite fewer CUDA cores
-A2000 has more CUDA cores but they are Ampere 3rd-gen with older Tensor Cores.
-A1000 Ada has 4th-gen Tensor Cores: 2× FP16 throughput per core vs Ampere.
-For TTS inference (FP16 on GPU): A1000 Tensor FLOPS **32.8 vs 16.0** — twice as fast.
-Memory bandwidth is A1000: 224 vs 192 GB/s (+17%).
-Combined effect: A1000 is **~35–45% faster** than A2000 for FP16 inference workloads.
+### The bandwidth story — why A2000 wins inference
+Memory bandwidth is the dominant bottleneck for neural network inference (loading
+weights each forward pass). The wider 192-bit bus on the A2000 gives it a 50%
+bandwidth advantage over the A1000's 128-bit bus, despite both using the same
+1500 MHz GDDR6 memory.
+
+```
+A2000: 192-bit × 2 × 1500 MHz × 2 (DDR) = 288 GB/s
+A1000: 128-bit × 2 × 1500 MHz × 2 (DDR) = 192 GB/s
+Ratio: 288 / 192 = 1.50 — A2000 is 50% more bandwidth
+```
 
 ---
 
-## 2. Master RTF Comparison — All 10 Models
+## 2. Master RTF Comparison — All 10 Models (Corrected)
 
-All GPU figures estimated from RTX 3060 community benchmarks (360 GB/s bandwidth),
-scaled by bandwidth ratio + architecture efficiency factor.
-Scale factors: A2000 = ×1.60 slower than RTX 3060 | A1000 = ×1.15 slower than RTX 3060
+Scale factors from RTX 3060 (360 GB/s, Ampere, community benchmarks available):
+- A2000: 360 / 288 = **×1.25** slower than RTX 3060
+- A1000: 360 / 192 = **×1.875** slower than RTX 3060
 
-| Engine | CPU RTF | A2000 6 GB | A1000 8 GB | Speedup A2000 | Speedup A1000 | Real-time A2000? | Real-time A1000? |
+Both Ampere → no architecture correction factor needed.
+
+| Engine | CPU RTF | **A2000 6 GB** | **A1000 8 GB** | Speedup A2000 | Speedup A1000 | Real-time A2000? | Real-time A1000? |
 |---|---|---|---|---|---|---|---|
-| **Piper** | 0.08× | ~0.008× | ~0.006× | ~10× | ~13× | ✅✅ | ✅✅ |
-| **MeloTTS** | 1.08× | ~0.045× | ~0.032× | ~24× | ~34× | ✅✅ | ✅✅ |
-| **StyleTTS 2** | 1.67× | ~0.050× | ~0.036× | ~33× | ~46× | ✅✅ | ✅✅ |
-| **Kokoro-82M** | 3.07× | ~0.075× | ~0.055× | ~41× | ~56× | ✅✅ | ✅✅ |
-| **XTTS-v2** | 4.74× | ~0.24× | ~0.17× | ~20× | ~28× | ✅ | ✅ |
-| **F5-TTS** | ~5× | ~0.16× | ~0.11× | ~31× | ~45× | ✅ | ✅ |
-| **Chatterbox** | 11.7× | ~0.32× | ~0.22× | ~37× | ~53× | ✅ | ✅ |
-| **Bark** | 20.3× | ~0.80× | ~0.58× | ~25× | ~35× | ✅ | ✅ |
-| **Parler-TTS** | 23.4× | ~0.40× | ~0.29× | ~59× | ~81× | ✅ | ✅ |
-| **Dia-1.6B** | ~55× | ~2.4× | ~1.8× | ~23× | ~31× | ❌ | ❌ |
+| **Piper** | 0.08× | ~0.006× | ~0.009× | ~13× | ~9× | ✅✅ | ✅✅ |
+| **MeloTTS** | 1.08× | ~0.038× | ~0.056× | ~28× | ~19× | ✅✅ | ✅✅ |
+| **StyleTTS 2** | 1.67× | ~0.040× | ~0.060× | ~42× | ~28× | ✅✅ | ✅✅ |
+| **Kokoro-82M** | 3.07× | ~0.063× | ~0.094× | ~49× | ~33× | ✅✅ | ✅✅ |
+| **XTTS-v2** | 4.74× | ~0.19× | ~0.28× | ~25× | ~17× | ✅ | ✅ |
+| **F5-TTS** | ~5× | ~0.13× | ~0.19× | ~38× | ~26× | ✅ | ✅ |
+| **Chatterbox** | 11.7× | ~0.25× | ~0.38× | ~47× | ~31× | ✅ | ✅ |
+| **Bark** | 20.3× | ~0.63× | ~0.94× | ~32× | ~22× | ✅ | **⚠️ marginal** |
+| **Parler-TTS** | 23.4× | ~0.31× | ~0.47× | ~75× | ~50× | ✅ | ✅ |
+| **Dia-1.6B** | ~55× | **~1.9×** | **~2.9×** | ~29× | ~19× | ❌ | ❌ |
 
-> **RTF < 1.0 = real-time capable.** Every model except Dia-1.6B becomes real-time on both cards.
-> Dia-1.6B remains above 1.0× even on GPU due to its 1.6B autoregressive architecture;
-> see Section 5 for explanation.
+> **RTF < 1.0 = real-time.** All models except Dia become real-time on both cards.
+> Bark on A1000 is ~0.94× — technically real-time but almost no margin; stutter risk on long utterances.
+> Bark on A2000 is ~0.63× — comfortable.
 
 ---
 
 ## 3. VRAM Fit Analysis
 
-All models use FP16 on GPU, halving their effective weight size vs CPU FP32.
+Models use FP16 on GPU — half the CPU FP32 weight size.
 
-| Engine | FP32 RAM (CPU) | FP16 VRAM est | Activations | Total VRAM | Fits A2000 6 GB? | Fits A1000 8 GB? |
+| Engine | FP32 RAM (CPU) | FP16 VRAM (weights) | + Activations | Total VRAM | A2000 6 GB (5.5 usable) | A1000 8 GB (7.5 usable) |
 |---|---|---|---|---|---|---|
 | **Piper** | 200 MB | ~100 MB | ~50 MB | ~150 MB | ✅ | ✅ |
 | **Kokoro** | 500 MB | ~250 MB | ~100 MB | ~350 MB | ✅ | ✅ |
 | **MeloTTS** | 1 200 MB | ~600 MB | ~200 MB | ~800 MB | ✅ | ✅ |
 | **StyleTTS 2** | 1 500 MB | ~750 MB | ~250 MB | ~1 000 MB | ✅ | ✅ |
 | **F5-TTS** | 2 000 MB | ~1 000 MB | ~300 MB | ~1 300 MB | ✅ | ✅ |
-| **Chatterbox** | 1 800 MB | ~900 MB | ~300 MB | ~1 200 MB | ✅ | ✅ |
 | **Bark** | 1 500 MB | ~750 MB | ~400 MB | ~1 150 MB | ✅ | ✅ |
+| **Chatterbox** | 1 800 MB | ~900 MB | ~300 MB | ~1 200 MB | ✅ | ✅ |
 | **Parler-TTS** | 1 500 MB | ~750 MB | ~350 MB | ~1 100 MB | ✅ | ✅ |
 | **XTTS-v2** | 3 200 MB | ~1 600 MB | ~400 MB | ~2 000 MB | ✅ | ✅ |
-| **Dia-1.6B** | 3 000+ MB | ~3 200 MB | ~600 MB | **~3 800 MB** | ✅⚠️ tight | ✅ comfortable |
-| **All small models** | ~9 GB | ~4 500 MB | ~1 700 MB | **~6 200 MB** | ❌ overflow | ✅ |
-| **All except Dia** | ~13 GB | ~6 500 MB | ~2 200 MB | **~8 700 MB** | ❌ overflow | ❌ tight |
+| **Dia-1.6B** | 3 000+ MB | ~3 200 MB | ~600 MB | ~3 800 MB | ✅ ⚠️ tight | ✅ comfortable |
+| **All 9 non-Dia** | — | ~6 200 MB | ~2 000 MB | ~8 200 MB | ❌ overflow | ⚠️ tight |
+| **8 small models** | — | ~4 500 MB | ~1 500 MB | ~6 000 MB | ❌ overflow | ✅ |
+| **4 lightest models** | — | ~1 700 MB | ~600 MB | ~2 300 MB | ✅ | ✅ |
 
-### VRAM budget summary
-**A2000 6 GB** — available after OS/driver overhead (~500 MB): **~5.5 GB usable**
-- Can hold all 10 small-to-medium models simultaneously ← **no**, total is 6.2 GB
-- Can hold any 1 large model (Dia, XTTS) + all lightweight models ✅
-- Cannot hold Dia + XTTS simultaneously (3.8 + 2.0 = 5.8 GB — over budget)
-- Practical limit: **load on demand**, evict heavy model before loading another heavy one
+### VRAM strategy summary
 
-**A1000 8 GB** — usable: **~7.5 GB**
-- Can hold all 9 non-Dia models simultaneously (~6.0 GB) ✅
-- Can hold Dia alone comfortably (~3.8 GB) ✅
-- Cannot hold Dia + XTTS + others simultaneously (~5.8+ GB with overhead)
-- Practical: **persistent Piper/Kokoro/Melo/StyleTTS2/Bark/Parler/Chatterbox/F5 all loaded**, swap for Dia or XTTS when needed
+**A2000 6 GB (5.5 GB usable after driver/OS overhead):**
+- Persistent: Piper + Kokoro + MeloTTS + StyleTTS2 → ~2.3 GB ✅
+- + Chatterbox or Bark or Parler or F5 → ~3.4–3.5 GB ✅
+- + XTTS-v2 → ~4.3 GB ✅
+- + Dia-1.6B → ~6.1 GB ❌ over budget (must evict everything else first)
+- **Load Dia alone on demand** — evict all others before loading
 
----
-
-## 4. Per-Model GPU Detail
-
-### Piper TTS — 0.008× RTF on A2000 / 0.006× on A1000
-Piper is already real-time at 0.08× on CPU. On GPU it becomes essentially instant.
-A 12-second sentence synthesises in ~100 ms on A2000. No meaningful difference between cards.
-**Verdict:** Overkill — CPU is fine for Piper. GPU unlocks everything else.
-
-### Kokoro-82M — 0.075× RTF on A2000 / 0.055× on A1000
-From too-slow (3.07×) to ultra-fast. All 54 voices available instantly.
-FP16 ONNX on GPU works out of the box via CUDA execution provider in OnnxRuntime.
-**Code change needed:** add `providers=["CUDAExecutionProvider"]` to `SessionOptions`.
-**Verdict:** Becomes primary production candidate — light, 54 voices, near-zero latency.
-
-### MeloTTS — 0.045× on A2000 / 0.032× on A1000
-From borderline-real-time (1.08×) to 24-34× faster.
-RAM pressure degradation disappears — GPU VRAM is isolated from CPU RAM.
-**Verdict:** Completely solves the MeloTTS RAM pressure problem.
-
-### StyleTTS 2 — 0.050× on A2000 / 0.036× on A1000
-From evaluation-only (1.67×) to real-time production candidate.
-Diffusion models benefit enormously from GPU: all diffusion steps parallelise.
-Reference WAV style transfer becomes practical in a live call.
-**Verdict:** Most impactful upgrade — suddenly one of the fastest AND highest quality options.
-
-### XTTS-v2 — 0.24× on A2000 / 0.17× on A1000
-From 4.74× (4.7× too slow) to well under real-time. 17 languages, 58 speakers, voice cloning.
-Load time drops from 26s to ~8s (still limited by PCIe model transfer: 1.6 GB via PCIe 4×8 ~3s + warmup).
-**Verdict:** Becomes the best production option when voice cloning or multi-language is needed.
-
-### F5-TTS — 0.16× on A2000 / 0.11× on A1000
-From too-slow (~5×) to very fast. Best zero-shot voice cloning quality.
-Flow matching models parallelise well on GPU (similar to diffusion).
-**Verdict:** Practical for live calls — upload a reference WAV once, use indefinitely.
-
-### Chatterbox — 0.32× on A2000 / 0.22× on A1000
-From 11.7× (very slow) to real-time with headroom. Exaggeration slider still works.
-The confused elderly hesitation effect is preserved; latency is no longer a concern.
-**Verdict:** Becomes the best production choice for the confused Arthur persona.
-
-### Bark — 0.80× on A2000 / 0.58× on A1000
-From 20.3× to just under real-time. Emotion tokens (`[laughs]`, `[sighs]`) become practical.
-A2000: 0.80× is cutting it close; short pauses in text could cause buffer underrun in real calls.
-A1000: 0.58× is comfortable margin.
-**Verdict:** A1000 makes Bark production-ready. A2000 is marginal — risky for live calls.
-Bark runs 3 serial autoregressive models (text → coarse → fine); hence slower than single-model AR.
-
-### Parler-TTS — 0.40× on A2000 / 0.29× on A1000
-From worst (23.4×) to comfortably real-time. Natural language description still controls voice.
-T5+EnCodec architecture parallelises well.
-**Verdict:** Becomes a strong production candidate for maximum voice configurability.
-
-### Dia-1.6B — 2.4× on A2000 / 1.8× on A1000
-**Still not real-time on either card.** The model has 1.6B parameters generating ~86 audio frames/sec.
-Each frame requires a full forward pass through the 3.2 GB FP16 model.
-- A2000 (192 GB/s × 50% efficiency = ~96 GB/s): 96/3.2 = ~30 frames/sec → RTF = 86/30 = **~2.9×**
-- A1000 (224 GB/s × 55% efficiency = ~123 GB/s): 123/3.2 = ~38 frames/sec → RTF = 86/38 = **~2.3×**
-KV-cache helps for subsequent tokens but DAC token count per second is very high.
-For non-real-time dialogue generation (pre-generate then play): both cards are **31-48× faster than CPU**.
-**Verdict:** Still not for live calls. Use for scripted dialogue generation offline.
+**A1000 8 GB (7.5 GB usable):**
+- Persistent: Piper + Kokoro + MeloTTS + StyleTTS2 → ~2.3 GB ✅
+- All 9 non-Dia models → ~8.2 GB ❌ slightly over
+- 8 smallest models simultaneously → ~6.0 GB ✅
+- Dia alone → ~3.8 GB ✅
+- Dia + persistent 4 lightweight → ~6.1 GB ✅
+- **Dia can coexist with the 4 lightweight models** — A1000 exclusive advantage
 
 ---
 
-## 5. Why Dia-1.6B Cannot Be Real-Time on These Cards
-
-The bottleneck is the DAC (Discrete Audio Codec) frame rate, not compute per se.
+## 4. Dia-1.6B — Why It's Still Not Real-Time
 
 ```
-DAC codec @ 44 100 Hz / 512 = 86 audio frames per second
-Dia generates all 9 codebook levels per frame
-Effective forward passes per second of audio = ~86
+DAC codec @ 44 100 Hz with 512 samples/frame = 86 audio frames per second
+Dia model (FP16): 1.6B params × 2 bytes = 3.2 GB
 
-Model size (FP16): 1.6B params × 2 bytes = 3.2 GB
-A1000 memory bandwidth: 224 GB/s × 55% efficiency = ~123 GB/s effective
-Forward passes achievable: 123 GB/s ÷ 3.2 GB = ~38 per second
+Effective GPU bandwidth (50% practical efficiency):
+  A2000: 288 GB/s × 0.50 = 144 GB/s
+  A1000: 192 GB/s × 0.50 = 96 GB/s
 
-RTF = 86 frames needed / 38 frames achievable = 2.3× (too slow)
+Forward passes achievable per second:
+  A2000: 144 / 3.2 = 45 passes/sec  →  RTF = 86 / 45 = 1.9×  (too slow)
+  A1000: 192 / 3.2 = 30 passes/sec  →  RTF = 86 / 30 = 2.9×  (too slow)
 
-To reach RTF 1.0 you need: 86 × 3.2 GB = 275 GB/s effective bandwidth
-That requires a GPU with ~500 GB/s theoretical bandwidth:
-  RTX 3090: 936 GB/s → Dia RTF ≈ 0.6×  ✅
-  RTX 4090: 1 008 GB/s → Dia RTF ≈ 0.5× ✅
-  A6000: 768 GB/s → Dia RTF ≈ 0.75× ✅
+Minimum bandwidth needed for RTF = 1.0:
+  86 frames × 3.2 GB × (1/0.50) = 550 GB/s theoretical needed
+
+Cards that can achieve RTF < 1.0 for Dia:
+  RTX 3090:  936 GB/s  → ~0.6× RTF  ✅
+  RTX 4080:  736 GB/s  → ~0.8× RTF  ✅
+  RTX 4090: 1 008 GB/s → ~0.5× RTF  ✅
+  RTX A6000:  768 GB/s → ~0.7× RTF  ✅
 ```
+
+Dia is only for offline dialogue generation on these cards — not live phone calls.
 
 ---
 
-## 6. Recommended GPU Loading Strategy (Both Cards)
+## 5. Bark on A1000 — Marginal Case
 
-### At service startup (auto-loaded, always resident)
-These fit in either card and are used most often:
 ```
-Piper       ~150 MB  — production fallback, instant
-Kokoro      ~350 MB  — 54 voices, near-instant
-MeloTTS     ~800 MB  — British accent, near-instant
-StyleTTS2   ~1000 MB — reference-WAV style, real-time
-```
-Total: ~2.3 GB — always loaded, never evicted.
+Bark runs 3 serial autoregressive stages:
+  text encoder → coarse codec AR → fine codec AR → EnCodec decoder
 
-### On-demand heavy models (load when requested, evict when done)
-```
-Chatterbox  ~1 200 MB  — best Arthur persona
-F5-TTS      ~1 300 MB  — voice cloning
-Bark        ~1 150 MB  — emotion tokens
-Parler      ~1 100 MB  — description-driven
-XTTS-v2     ~2 000 MB  — multi-language / voice clone
-Dia-1.6B    ~3 800 MB  — dialogue generation only
+Combined model size (FP16 small models): ~750 MB
+Effective bandwidth: 192 × 0.50 = 96 GB/s
+Passes per second: 96 / 0.75 = 128 passes/sec
+
+EnCodec audio token rate (24 kHz / 320): ~75 tokens/sec × 3 stages = ~225 effective
+RTF ≈ 225 / 128 = ~1.75× per stage... but stages run serially
+
+Community benchmarks suggest Bark on RTX 3060 = ~0.5× RTF.
+A1000 estimate: 0.5 × (360/192) = ~0.94×  ← within 6% of real-time.
+
+In practice this means:
+  - Short phrases (<5s): fine, GPU completes before buffer runs out
+  - Long phrases (>8s): risk of audio stutter or slight delay
+  - With Bark's natural pauses in text, actual heard delay may be acceptable
 ```
 
-### A2000 6 GB budget (5.5 GB usable)
-- Always-on: 2.3 GB
-- Remaining: 3.2 GB — fits any single heavy model EXCEPT Dia (3.8 GB, over budget)
-- **Dia cannot be loaded at the same time as anything else on A2000**
-
-### A1000 8 GB budget (7.5 GB usable)
-- Always-on: 2.3 GB
-- Remaining: 5.2 GB — fits Chatterbox + F5 + Bark + Parler simultaneously (4.75 GB) ✅
-- Or: XTTS-v2 + all lightweight (4.3 GB) ✅
-- Or: Dia alone + always-on (6.1 GB) — tight but possible ✅
+For live phone calls with Bark on A1000: **generate in short sentences ≤ 5s each** to stay safe.
 
 ---
 
-## 7. Hyper-V DDA (GPU Passthrough) Setup
+## 6. Side-by-Side Decision Matrix
 
-Both cards support Hyper-V Discrete Device Assignment (DDA) on Windows Server / Hyper-V.
+| Criterion | **RTX A2000 6 GB** | **RTX A1000 8 GB** | Winner |
+|---|---|---|---|
+| **Street price (2025)** | ~$280–380 | ~$350–480 | A2000 |
+| **Aggregate benchmark** | 32.12 **(+24.6%)** | 25.78 | **A2000** |
+| **Memory bandwidth** | **288 GB/s** | 192 GB/s | **A2000** |
+| **FP32 throughput** | **7.99 TFLOPS** | 6.74 TFLOPS | **A2000** |
+| **Tensor Cores** | **104** | 72 | **A2000** |
+| **VRAM** | 6 GB | **8 GB** | A1000 |
+| **Power draw** | 70 W | **50 W** | A1000 |
+| **Form factor** | Dual slot | **Single slot** | A1000 |
+| **Bark RTF** | ~0.63× ✅ safe | ~0.94× ⚠️ marginal | **A2000** |
+| **Dia-1.6B RTF** | ~1.9× ❌ | ~2.9× ❌ | **A2000** (less bad) |
+| **All other RTF** | ✅ all real-time | ✅ all real-time | A2000 faster |
+| **Dia + small models resident** | ❌ won't fit | ✅ fits | A1000 |
+| **All 9 models resident** | ❌ won't fit | ❌ barely over | Tie |
+| **Architecture** | Ampere GA106 | Ampere GA107 | Same generation |
+
+### Recommendations by use case
+
+**Buy A2000 6GB if:**
+- Performance is the priority (25% faster inference across all models)
+- You have dual-slot PCIe space available in the Hyper-V host
+- 70W TDP is acceptable
+- You won't need Dia and multiple other models resident simultaneously
+
+**Buy A1000 8GB if:**
+- Physical space is critical (single-slot server chassis)
+- Power budget is tight (50W vs 70W)
+- You want Dia-1.6B loaded alongside other models without GPU eviction
+- You're willing to accept ~25% slower inference everywhere and marginal Bark performance
+
+**Bottom line:** For the Arthur scam-baiter use case, **A2000 is the better TTS card** —
+faster inference on all models, Bark becomes genuinely safe for live calls,
+and 6 GB is enough VRAM since Dia is never used in live calls anyway.
+
+---
+
+## 7. Bandwidth-to-CPU Speedup Summary
+
+| GPU | Bandwidth | Vs CPU (25 GB/s) | Practical FP16 speedup over CPU |
+|---|---|---|---|
+| Xeon D-1528 (CPU, FP32) | ~25 GB/s | 1× | baseline |
+| **RTX A1000 8 GB** | 192 GB/s | 7.7× raw | ~15× (FP16 + parallelism) |
+| **RTX A2000 6 GB** | 288 GB/s | 11.5× raw | ~22× (FP16 + parallelism) |
+| RTX 3060 12 GB | 360 GB/s | 14.4× raw | ~28× |
+| RTX 3080 | 760 GB/s | 30.4× raw | ~60× |
+| RTX 4090 | 1 008 GB/s | 40.3× raw | ~80× |
+
+FP16 on GPU loads weights at half the bytes vs CPU FP32, effectively doubling
+the practical bandwidth advantage. Parallelism factor adds another 1.5× for
+feedforward models (Piper, Kokoro, StyleTTS2).
+
+---
+
+## 8. Hyper-V DDA (GPU Passthrough) Setup
+
+Both cards support Hyper-V Discrete Device Assignment (DDA).
 
 ```powershell
 # On Hyper-V HOST (Windows) — run as Administrator
 
-# 1. Find the GPU PCI address
-$gpu = Get-PnpDevice | Where-Object { $_.FriendlyName -like "*NVIDIA*" }
-$pci = (Get-PnpDeviceProperty -InstanceId $gpu.InstanceId -KeyName DEVPKEY_Device_LocationInfo).Data
+# 1. Find the GPU PCI location path
+$gpu = Get-PnpDevice | Where-Object { $_.FriendlyName -like "*NVIDIA*RTX*" }
+$pci = (Get-PnpDeviceProperty -InstanceId $gpu.InstanceId `
+    -KeyName DEVPKEY_Device_LocationInfo).Data
 
-# 2. Dismount GPU from host (makes it available for VM passthrough)
+# 2. Dismount from host (makes it assignable to VM)
 Dismount-VMHostAssignableDevice -LocationPath $pci -Force
 
-# 3. Assign to the arthur VM
+# 3. Assign to arthur VM
 Add-VMAssignableDevice -VMName "arthur" -LocationPath $pci
 
-# 4. (Optional) Set MMIO space for the GPU
+# 4. Set MMIO space (required for GPU passthrough)
 Set-VM -Name "arthur" -LowMemoryMappedIoSpace 3GB -HighMemoryMappedIoSpace 32GB
 
-# To revert (return GPU to host)
+# To revert
 Remove-VMAssignableDevice -VMName "arthur" -LocationPath $pci
 Mount-VMHostAssignableDevice -LocationPath $pci
 ```
 
 ```bash
-# On VM (Ubuntu) — install NVIDIA driver after DDA
+# On VM (Ubuntu 22.04) — after DDA assignment
+
+# Install NVIDIA driver
 sudo apt-get install -y linux-headers-$(uname -r)
-sudo apt-get install -y nvidia-driver-545       # or latest stable
+sudo apt-get install -y nvidia-driver-545
 sudo reboot
 
 # Verify
 nvidia-smi
-# Should show: RTX A1000 (or A2000)
+# Expect: RTX A2000 or RTX A1000 visible with VRAM shown
 
-# Install CUDA toolkit (for PyTorch CUDA ops)
-sudo apt-get install -y cuda-toolkit-12-4
-
-# Install PyTorch CUDA build (replace current CPU build)
+# Install PyTorch CUDA build (replace current CPU-only build)
 source /opt/arthur-bench-env/bin/activate
+pip uninstall torch torchaudio -y
 pip install torch==2.6.0+cu124 torchaudio==2.6.0+cu124 \
     --index-url https://download.pytorch.org/whl/cu124
 
-# Install OnnxRuntime with CUDA support (for Piper + Kokoro GPU)
+# Install OnnxRuntime GPU (for Piper + Kokoro)
+pip uninstall onnxruntime -y
 pip install onnxruntime-gpu==1.20.0
 
-# Verify GPU is visible to PyTorch
+# Verify GPU visible to PyTorch
 python3 -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# Expect: True  NVIDIA RTX A2000
 ```
 
-**Code changes in tts_lab.py after GPU install:**
+**Code changes needed in `tts_lab.py`:**
 ```python
-# Top of file — detect GPU
+# Add near top (after import torch)
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Piper / Kokoro OnnxRuntime
-opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL  # GPU prefers sequential
+# Piper + Kokoro OnnxRuntime — add CUDA provider
 providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-Kokoro(str(mp), str(vp), sess_options=opts, providers=providers)
+# pass providers= to Kokoro() constructor
 
-# PyTorch models — pass device="cuda" to .to(DEVICE)
-model.to(DEVICE)
+# All PyTorch models — add .to(DEVICE) after loading
+model = model.to(DEVICE)
 
-# torch.set_num_threads still useful for preprocessing on CPU
-torch.set_num_threads(12)
+# Chatterbox
+ChatterboxTTS.from_pretrained(device=DEVICE)
+
+# Bark
+os.environ["SUNO_OFFLOAD_CPU"] = "False"  # keep on GPU
+
+# XTTS
+# TTS() auto-detects GPU if CUDA is available — no code change needed
 ```
-
----
-
-## 8. Cost vs Performance Decision
-
-| Criterion | RTX A2000 6 GB | RTX A1000 8 GB | Winner |
-|---|---|---|---|
-| **Price (2025)** | ~$280–350 | ~$400–480 | A2000 |
-| **FP16 throughput** | 16 TFLOPS | 32.8 TFLOPS | **A1000** (2×) |
-| **Memory bandwidth** | 192 GB/s | 224 GB/s | A1000 |
-| **VRAM** | 6 GB | **8 GB** | **A1000** |
-| **Power draw** | 70 W | **50 W** | **A1000** |
-| **Form factor** | Dual slot | **Single slot** | **A1000** |
-| **Dia-1.6B RTF** | ~2.4× (no) | ~1.8× (no) | Neither |
-| **Bark RTF** | ~0.80× (marginal) | ~0.58× (safe) | **A1000** |
-| **All other models** | ✅ all real-time | ✅ all real-time | Tie |
-| **Hold all models in VRAM** | ❌ 5.5 GB limit | ✅ 7.5 GB fits most | **A1000** |
-| **Hyper-V DDA compat** | ✅ | ✅ | Tie |
-| **Architecture generation** | Ampere (2021) | Ada Lovelace (2023) | **A1000** |
-
-### Recommendation: **RTX A1000 8 GB**
-
-The A1000 wins on every technical axis that matters for this workload:
-- 2× FP16 Tensor Core throughput
-- Bark becomes comfortably real-time (0.58× vs marginal 0.80×)
-- 8 GB fits all models except Dia simultaneously; 6 GB requires constant eviction
-- 50W TDP — Hyper-V host stays cool, no power budget issues
-- Single slot — physically fits better in the server chassis
-
-The A2000 costs ~$120 less but:
-- Bark is marginal (0.80× can cause audio stutter in live calls)
-- 6 GB VRAM forces eviction even for Chatterbox + XTTS simultaneously
-- Ampere architecture is 2 generations behind
-
-**If budget is the constraint:** A2000 6 GB still makes ALL models except Bark and Dia production-viable. Bark must be pre-generated offline. Total cost saving ~$120.
 
 ---
 
 ## 9. Estimation Methodology
 
 ```
-Reference GPU: NVIDIA RTX 3060 12GB (Ampere, 360 GB/s, ~11 TFLOPS FP32)
+Reference GPU: NVIDIA RTX 3060 12GB (Ampere, 360 GB/s, ~12 TFLOPS FP32)
 Source: Community benchmarks for XTTS, Bark, Parler, Chatterbox on RTX 3060.
 
-RTX 3060 baseline RTF estimates (community):
-  XTTS-v2:    0.15× | Bark:      0.50× | Parler:    0.25×
-  Chatterbox: 0.20× | F5-TTS:    0.10× | Piper:     0.005×
-  Kokoro:     0.05× | MeloTTS:   0.03× | StyleTTS2: 0.03×
-  Dia-1.6B:   1.50× (calculated from bandwidth model)
+RTX 3060 baseline RTF (community benchmarks):
+  XTTS-v2:    0.15×  Bark:      0.50×  Parler:    0.25×
+  Chatterbox: 0.20×  F5-TTS:    0.10×  Piper:     0.005×
+  Kokoro:     0.05×  MeloTTS:   0.03×  StyleTTS2: 0.03×
+  Dia-1.6B:   1.50×  (calculated from bandwidth model)
 
-Scale factors applied:
-  RTX A2000:  bandwidth ratio = 192/360 = 0.533
-              architecture factor = 0.95 (Ampere same gen as RTX 3060)
-              combined = RTX3060_RTF × (360/192) × 0.95 = RTX3060_RTF × 1.78 → ~1.6 (rounded)
+Scale factors — both A2000 and A1000 are Ampere (same architecture as RTX 3060):
+  RTX A2000:  RTF = RTX3060_RTF × (360/288) = × 1.25
+  RTX A1000:  RTF = RTX3060_RTF × (360/192) = × 1.875
 
-  RTX A1000:  bandwidth ratio = 224/360 = 0.622
-              architecture factor = 0.80 (Ada Lovelace 4th-gen Tensor Cores ~20% better)
-              combined = RTX3060_RTF × (360/224) × 0.80 = RTX3060_RTF × 1.29 → ~1.15 (rounded)
+GPU specs sourced from: https://technical.city/en/video/RTX-A2000-vs-RTX-A1000
+  A2000: 288 GB/s, 7.99 TFLOPS FP32, 104 Tensor Cores, GA106, 8 nm
+  A1000: 192 GB/s, 6.74 TFLOPS FP32,  72 Tensor Cores, GA107, 8 nm
 
-Dia-1.6B calculated directly from first-principles:
-  DAC frame rate × model memory / GPU effective bandwidth
-  = 86 frames/s × 3.2 GB / (bandwidth × 0.55 efficiency)
-
-Uncertainty: ±30%. Actual performance depends on CUDA driver version,
-PyTorch version, batch size variations, and CPU↔GPU data transfer overhead.
-Real numbers will only come from running the bench_warm.py benchmark on the VM
-after GPU installation.
+Uncertainty: ±25%. Actual numbers: run bench_warm.py after GPU install.
 ```
 
 ---
 
-## 10. After GPU Install — Benchmark Commands
+## 10. After GPU Install — Verify & Benchmark
 
 ```bash
-# Verify GPU is visible
+# GPU health check
 nvidia-smi
-python3 -c "import torch; print(torch.cuda.get_device_name(0))"
+python3 -c "import torch; print(torch.cuda.get_device_name(0), torch.cuda.get_device_properties(0).total_memory//1024//1024, 'MB')"
 
-# Quick RTF spot-check for each model
+# Quick per-model RTF check (replace 'chatterbox' with each model name)
 curl -X POST http://localhost:8001/synthesize/chatterbox \
   -H "Content-Type: application/json" \
   -d '{"text":"Oh my goodness, just a moment dear, let me find my glasses.","params":{"exaggeration":0.6}}' \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print('RTF='+str(d['rtf']))"
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print('RTF='+str(round(d['rtf'],3)))"
 
-# Full benchmark (all models)
+# Full warm benchmark (all models)
 /opt/arthur-bench-env/bin/python3 /opt/arthur/bench_warm.py
 
-# Check GPU memory usage after loading all models
-nvidia-smi --query-gpu=memory.used,memory.free --format=csv
+# VRAM usage after loading all models
+nvidia-smi --query-gpu=memory.used,memory.free,memory.total --format=csv,noheader
 ```
