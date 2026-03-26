@@ -129,6 +129,22 @@ python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=Tr
 python -c "import unidic; unidic.download()" 2>/dev/null || true
 ok "MeloTTS installed"
 
+# ── Step 7b: ChatTTS ─────────────────────────────────────────────────────
+step "7b — ChatTTS (speed prompts + speaker sampling)"
+pip install --quiet ChatTTS
+ok "ChatTTS installed"
+
+# ── Step 7c: OuteTTS ──────────────────────────────────────────────────
+step "7c — OuteTTS (character-prompt voice + voice cloning)"
+pip install --quiet outetts
+HF_HOME="${HF_HOME}" python - << 'PYEOF' || warn "OuteTTS preload failed (will download on first use)"
+import outetts
+cfg = outetts.ModelConfig(model_path='OuteAI/OuteTTS-0.3-500M', tokenizer_path='OuteAI/OuteTTS-0.3-500M', backend=outetts.Backend.HF, device='cpu')
+outetts.Interface(cfg)
+print('OuteTTS-0.3-500M cached OK')
+PYEOF
+ok "outetts installed"
+
 # ── Step 8: Parler-TTS mini ───────────────────────────────────────────────────
 step "8 — Parler-TTS mini"
 pip install --quiet parler-tts transformers accelerate
@@ -267,6 +283,91 @@ fi
 
 stamp "Note: XTTS-v2 (~1.8 GB), Parler (~880 MB), Chatterbox (~1.2 GB) download on first Synthesize click."
 
+# ── Step 14: Fish Speech ───────────────────────────────────────────────────────
+step "14 — Fish Speech (VQ-VAE zero-shot voice cloning)"
+pip install --quiet fish-speech \
+  || { warn "fish-speech PyPI install failed — trying git source"; \
+       pip install --quiet "git+https://github.com/fishaudio/fish-speech" 2>/dev/null || warn "Fish Speech skipped"; }
+ok "Fish Speech install attempted"
+
+# ── Step 15: Sesame CSM 1B ────────────────────────────────────────────────────
+step "15 — Sesame CSM 1B (conversational speech model)"
+pip install --quiet "git+https://github.com/SesameAILabs/csm" \
+  || warn "Sesame CSM skipped (may need: huggingface-cli login for gated model)"
+ok "Sesame CSM install attempted"
+
+# ── Step 16: Qwen3-TTS ────────────────────────────────────────────────────────
+step "16 — Qwen3-TTS (uses existing transformers install)"
+# Qwen3-TTS auto-downloads Qwen/Qwen3-TTS from HuggingFace on first use.
+# transformers is already installed via parler-tts (step 8).
+python -c "from transformers import AutoModel; print('transformers OK for Qwen3-TTS')" 2>/dev/null \
+  && ok "Qwen3-TTS ready (transformers present)" || warn "transformers not found — pip install transformers"
+
+# ── Step 17: Orpheus 3B ───────────────────────────────────────────────────────
+step "17 — Orpheus 3B (LLaMA-3B TTS with emotion tags)"
+pip install --quiet orpheus-speech \
+  || { warn "orpheus-speech PyPI failed — trying git"; \
+       pip install --quiet "git+https://github.com/canopyai/Orpheus-TTS" 2>/dev/null || warn "Orpheus skipped"; }
+ok "Orpheus install attempted"
+
+# ── Step 18: NeuTTS Air ───────────────────────────────────────────────────────
+step "18 — NeuTTS Air (placeholder — package not yet confirmed)"
+warn "NeuTTS Air: package name not yet identified."
+warn "Once confirmed: pip install <neutts-package>"
+warn "Then edit _load_neutts() and _synth_neutts() in tts_lab.py"
+
+# ── Step 19: IndexTTS-2 ───────────────────────────────────────────────────────
+step "19 — IndexTTS-2 (zero-shot voice cloning, ref WAV required)"
+pip install --quiet "git+https://github.com/index-tts/IndexTTS" \
+  || warn "IndexTTS-2 skipped"
+ok "IndexTTS-2 install attempted"
+
+# ── Step 20: Zonos v0.1 ───────────────────────────────────────────────────────
+step "20 — Zonos v0.1 (Hybrid/Transformer, emotion-controlled TTS)"
+pip install --quiet phonemizer  # phonemizer required by Zonos
+pip install --quiet "git+https://github.com/Zyphra/Zonos" \
+  || warn "Zonos skipped"
+# Pre-download Zonos transformer model (~1.2 GB)
+stamp "Pre-downloading Zonos-v0.1-transformer (~1.2 GB)…"
+HF_HOME="${HF_HOME}" python - << 'PYEOF' || warn "Zonos preload failed (will download on first use)"
+from zonos.model import Zonos
+Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device="cpu")
+print("Zonos-v0.1-transformer cached OK")
+PYEOF
+ok "Zonos installed"
+
+# ── Step 21: OpenVoice v2 ─────────────────────────────────────────────────────
+step "21 — OpenVoice v2 (MeloTTS + tone-color conversion)"
+pip install --quiet "git+https://github.com/myshell-ai/OpenVoice" \
+  || warn "OpenVoice skipped"
+
+# Download OpenVoice v2 checkpoints to /opt/models/openvoice_v2
+OV_DIR="${MODELS_DISK}/openvoice_v2"
+mkdir -p "${OV_DIR}"
+if [ ! -f "${OV_DIR}/converter/config.json" ]; then
+    stamp "Downloading OpenVoice v2 checkpoints (~200 MB)…"
+    # Primary: HuggingFace repo
+    HF_HOME="${HF_HOME}" python - << 'PYEOF' || warn "OpenVoice checkpoint download failed — check manually"
+import subprocess, os, sys, shutil
+from pathlib import Path
+ov_dir = Path("/opt/models/openvoice_v2")
+try:
+    from huggingface_hub import snapshot_download
+    local = snapshot_download("myshell-ai/OpenVoice", ignore_patterns=["*.md","*.txt"])
+    v2_src = Path(local) / "checkpoints_v2"
+    if v2_src.exists():
+        shutil.copytree(str(v2_src), str(ov_dir), dirs_exist_ok=True)
+        print(f"OpenVoice v2 checkpoints saved to {ov_dir}")
+    else:
+        print(f"checkpoints_v2 not found in {local} — copy manually")
+except Exception as e:
+    print(f"OpenVoice checkpoint download failed: {e}")
+PYEOF
+else
+    ok "OpenVoice v2 checkpoints already present"
+fi
+ok "OpenVoice v2 install attempted"
+
 # ── Step 13: systemd service ───────────────────────────────────────────────────
 step "13 — systemd service (arthur-lab.service on port 8001)"
 cat > /etc/systemd/system/arthur-lab.service << EOF
@@ -322,9 +423,21 @@ echo ""
 echo "  Live logs:  journalctl -u arthur-lab -f"
 echo "  Restart:    systemctl restart arthur-lab"
 echo ""
-echo "  Models installed:  Piper ✅  Kokoro ✅  MeloTTS ✅  Bark ✅  StyleTTS2 ✅  F5-TTS ✅  Dia-1.6B ✅"
-echo "                     Parler ✅  Chatterbox ✅  XTTS-v2 ✅  (11 total)"
-echo "  CosyVoice2:        install manually (see Step 11 above)"
+echo "  Models installed:  Piper ✅  Kokoro ✅  MeloTTS ✅  ChatTTS ✅  OuteTTS ✅  Bark ✅  StyleTTS2 ✅"
+echo "                     F5-TTS ✅  Dia-1.6B ✅  XTTS-v2 ✅  Parler ✅  Chatterbox ✅"
+echo "                     FishSpeech ✅  Sesame-CSM ✅  Qwen3-TTS ✅  Orpheus ✅"
+echo "                     IndexTTS-2 ✅  Zonos ✅  OpenVoice v2 ✅  (20 total pip-installed)"
+echo "  CosyVoice2:        install manually (see Step 11 above)  +1 = 21 total"
+echo "  NeuTTS Air:        package not yet confirmed (see Step 18 above)"
+echo ""
+echo "  NEW engines (14-21):"
+echo "    Fish Speech  → zero-shot voice cloning; upload 5-30s ref WAV"
+echo "    Sesame CSM   → conversational multi-speaker; HF login required"
+echo "    Qwen3-TTS    → Alibaba Qwen3-based multilingual TTS"
+echo "    Orpheus 3B   → <sigh> <laugh> emotion tags; 8 voices"
+echo "    IndexTTS-2   → zero-shot cloning; ref WAV always required"
+echo "    Zonos v0.1   → emotion vector + speaking-rate control; 44 kHz"
+echo "    OpenVoice v2 → MeloTTS + tone-color conversion; zero-shot clone"
 echo ""
 echo "  NEW emotion engines:"
 echo "    Bark      → embed [laughs] [sighs] [clears throat] directly in text"

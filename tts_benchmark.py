@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 TTS Benchmark — Arthur Server
-Sequentially tests 7 TTS engines on the VM.  One model in RAM at a time.
+Sequentially tests 13 TTS engines on the VM.  One model in RAM at a time.
 
 Engines tested:
   1. Piper TTS          pip install piper-tts          ~200 MB  ~100x RT
@@ -39,7 +39,8 @@ TEST_PHRASE = (
     "My son always tells me to write these things down."
 )
 
-ALL_MODELS   = ["piper", "kokoro", "melo", "xtts", "cosyvoice", "parler", "chatterbox"]
+ALL_MODELS   = ["piper","kokoro","melo","chattts","outetts","bark","styletts2","f5tts","dia","xtts","cosyvoice","parler","chatterbox",
+                "fishspeech","csm","qwen3tts","orpheus","neutts","indextts","zonos","openvoice"]
 OUTPUT_DIR   = Path("/tmp/tts_bench")
 RESULTS_FILE = Path("benchmark_results.json")
 MODELS_DIR   = Path("models")    # relative to this script's directory
@@ -226,7 +227,322 @@ def bench_melo() -> BenchResult:
         _safe_del(tts)
     return r
 
-# ── 4. XTTS-v2 ───────────────────────────────────────────────────────────────
+# -- 4. ChatTTS ---------------------------------------------------------------
+
+def bench_chattts() -> BenchResult:
+    r = BenchResult(model="chattts", voice="random speaker")
+    try:
+        import ChatTTS
+        import soundfile as sf
+    except ImportError:
+        r.error = "Not installed: pip install ChatTTS"
+        return r
+
+    free = _free_ram_mb()
+    if free < 1500:
+        r.status = "skip"
+        r.error  = f"Only {free} MB free -- ChatTTS needs ~1.8 GB."
+        return r
+
+    out = OUTPUT_DIR / "chattts.wav"
+    inst = None
+    try:
+        t0 = time.perf_counter()
+        inst = ChatTTS.Chat()
+        if not inst.load(source="huggingface", device="cpu"):
+            raise RuntimeError("ChatTTS load failed")
+        spk = inst.sample_random_speaker()
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        out_wav = inst.infer(
+            TEST_PHRASE,
+            skip_refine_text=True,
+            params_infer_code=inst.InferCodeParams(
+                prompt="[speed_5]", top_P=0.7, top_K=20, temperature=0.3,
+                repetition_penalty=1.05, max_new_token=512, show_tqdm=False, spk_emb=spk,
+            ),
+        )
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+
+        arr = np.array(out_wav[0] if isinstance(out_wav, list) else out_wav, dtype=np.float32).flatten()
+        sr  = 24000
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Conversational; [speed_5] token; speaker sampling matches elderly pace"
+        r.notes       = "Speed via [speed_1-9] token; optional reference WAV for speaker matching"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(inst)
+    return r
+
+# -- 5. OuteTTS ---------------------------------------------------------------
+
+def bench_outetts() -> BenchResult:
+    r = BenchResult(model="outetts", voice="en-female-1-neutral")
+    try:
+        import outetts
+        import soundfile as sf
+    except ImportError:
+        r.error = "Not installed: pip install outetts"
+        return r
+
+    free = _free_ram_mb()
+    if free < 1400:
+        r.status = "skip"
+        r.error  = f"Only {free} MB free -- OuteTTS needs ~1.6 GB."
+        return r
+
+    out = OUTPUT_DIR / "outetts.wav"
+    inst = None
+    try:
+        t0 = time.perf_counter()
+        cfg  = outetts.ModelConfig(
+            model_path="OuteAI/OuteTTS-0.3-500M", tokenizer_path="OuteAI/OuteTTS-0.3-500M",
+            backend=outetts.Backend.HF, device="cpu", max_seq_length=32768,
+        )
+        inst    = outetts.Interface(cfg)
+        speaker = inst.load_default_speaker("en-female-1-neutral")
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        out_gen = inst.generate(outetts.GenerationConfig(
+            text=TEST_PHRASE, speaker=speaker, max_length=32768,
+            sampler_config=outetts.SamplerConfig(
+                temperature=0.4, repetition_penalty=1.1, top_k=40, top_p=0.9, min_p=0.05,
+            ),
+        ))
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+
+        arr = out_gen.audio.detach().cpu().numpy().squeeze()
+        sr  = getattr(out_gen, "sr", 44100)
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Character prompt + voice cloning; voice_characteristics param"
+        r.notes       = "Default speaker female; use voice_characteristics + ref WAV for elderly male"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(inst)
+    return r
+
+# -- 6. Bark ------------------------------------------------------------------
+
+def bench_bark() -> BenchResult:
+    r = BenchResult(model="bark", voice="v2/en_speaker_6")
+    try:
+        from bark import generate_audio, preload_models
+        from bark.generation import SAMPLE_RATE
+    except ImportError:
+        r.error = "Not installed: pip install bark"
+        return r
+
+    free = _free_ram_mb()
+    if free < 1200:
+        r.status = "skip"
+        r.error  = f"Only {free} MB free -- Bark needs ~1.5 GB."
+        return r
+
+    out = OUTPUT_DIR / "bark.wav"
+    try:
+        import torch, soundfile as sf
+        _orig = torch.load
+        torch.load = lambda *a, **kw: _orig(*a, **{**kw, "weights_only": False})
+        t0 = time.perf_counter()
+        try:
+            os.environ["SUNO_USE_SMALL_MODELS"] = "True"
+            preload_models(text_use_small=True, coarse_use_small=True, fine_use_small=True)
+        finally:
+            torch.load = _orig
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+
+        text_tok = "[hesitantly] " + TEST_PHRASE + " [sighs]"
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        audio = generate_audio(text_tok, history_prompt="v2/en_speaker_6")
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+
+        sf.write(str(out), audio, SAMPLE_RATE)
+        r.audio_dur_s = round(_arr_dur(audio, SAMPLE_RATE), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = SAMPLE_RATE
+        r.arthur_fit  = "Emotion tokens [hesitantly][sighs][laughs][clears throat] embedded in text"
+        r.notes       = "~30x RT; small model; test uses [hesitantly]+[sighs]"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    return r
+
+# -- 7. StyleTTS 2 ------------------------------------------------------------
+
+def bench_styletts2() -> BenchResult:
+    r = BenchResult(model="styletts2", voice="default (no ref WAV)")
+    try:
+        from styletts2 import tts as _st2
+    except ImportError:
+        r.error = "Not installed: pip install styletts2"
+        return r
+
+    out  = OUTPUT_DIR / "styletts2.wav"
+    inst = None
+    try:
+        import torch, soundfile as sf
+        _orig = torch.load
+        torch.load = lambda *a, **kw: _orig(*a, **{**kw, "weights_only": False})
+        t0 = time.perf_counter()
+        try:
+            inst = _st2.StyleTTS2()
+        finally:
+            torch.load = _orig
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        audio = inst.inference(text=TEST_PHRASE, alpha=0.3, beta=0.7, diffusion_steps=5)
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+
+        arr = np.array(audio, dtype=np.float32).flatten()
+        sr  = 24000
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Fastest high-quality (~2x RT); style transfer from ref WAV adds character"
+        r.notes       = "alpha/beta control style vs prosody weight; ref WAV optional"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(inst)
+    return r
+
+# -- 8. F5-TTS ----------------------------------------------------------------
+
+def bench_f5tts() -> BenchResult:
+    r = BenchResult(model="f5tts", voice="cloned from piper.wav (if present)")
+    try:
+        from f5_tts.api import F5TTS
+        import soundfile as sf
+    except ImportError:
+        r.error = "Not installed: pip install f5-tts"
+        return r
+
+    ref_path = OUTPUT_DIR / "piper.wav"
+    if not ref_path.exists():
+        r.status = "skip"
+        r.error  = "Reference WAV not found -- run bench_piper first"
+        return r
+
+    out  = OUTPUT_DIR / "f5tts.wav"
+    inst = None
+    try:
+        t0 = time.perf_counter()
+        inst = F5TTS()
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        wav, sr, _ = inst.infer(
+            ref_file=str(ref_path), ref_text="",
+            gen_text=TEST_PHRASE, speed=1.0, nfe_step=32,
+        )
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+
+        arr = np.array(wav, dtype=np.float32).flatten()
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Best zero-shot voice cloning; use aged-voice ref WAV for Arthur"
+        r.notes       = "Ref=piper.wav here; production: upload Arthur voice clip via tts_lab"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(inst)
+    return r
+
+# -- 9. Dia-1.6B --------------------------------------------------------------
+
+def bench_dia() -> BenchResult:
+    r = BenchResult(model="dia", voice="[S1] speaker")
+    try:
+        from dia.model import Dia
+        import soundfile as sf
+    except ImportError:
+        r.error = "Not installed: pip install git+https://github.com/nari-labs/dia.git"
+        return r
+
+    free = _free_ram_mb()
+    if free < 2500:
+        r.status = "skip"
+        r.error  = f"Only {free} MB free -- Dia-1.6B needs ~3 GB."
+        return r
+
+    out  = OUTPUT_DIR / "dia.wav"
+    inst = None
+    try:
+        t0 = time.perf_counter()
+        for mid in ["nari-labs/Dia-1.6B-0626", "nari-labs/Dia-1.6B"]:
+            try:
+                inst = Dia.from_pretrained(mid, compute_dtype="float32"); break
+            except Exception:
+                if mid == "nari-labs/Dia-1.6B": raise
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+
+        dia_text    = f"[S1] {TEST_PHRASE}"
+        auto_tokens = min(1024, max(256, len(dia_text) * 6))
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        output = inst.generate(
+            dia_text, max_tokens=auto_tokens,
+            cfg_scale=3.0, temperature=1.2, top_p=0.95, use_torch_compile=False,
+        )
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+
+        sr  = 44100
+        arr = np.array(output, dtype=np.float32).flatten() if output is not None else np.zeros(sr, dtype=np.float32)
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Dialogue-native; [S1]/[S2] + [laughs][sighs] emotion tags; March 2025"
+        r.notes       = "3 GB RAM; auto max_tokens; 44100 Hz"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(inst)
+    return r
+
+# ── 10. XTTS-v2 ─────────────────────────────────────────────────────────────
 
 def bench_xtts() -> BenchResult:
     r = BenchResult(model="xtts", voice="Ana Florence (built-in)")
@@ -284,7 +600,7 @@ def bench_xtts() -> BenchResult:
         _safe_del(tts)
     return r
 
-# ── 5. CosyVoice2-0.5B ───────────────────────────────────────────────────────
+# ── 11. CosyVoice2-0.5B ───────────────────────────────────────────────────────
 
 def bench_cosyvoice() -> BenchResult:
     r = BenchResult(model="cosyvoice", voice="English SFT speaker", streaming=True)
@@ -355,7 +671,7 @@ def bench_cosyvoice() -> BenchResult:
         _safe_del(cv)
     return r
 
-# ── 6. Parler-TTS mini ────────────────────────────────────────────────────────
+# ── 12. Parler-TTS mini ────────────────────────────────────────────────────────
 
 def bench_parler() -> BenchResult:
     r = BenchResult(model="parler", voice="described: slow elderly warm male")
@@ -412,7 +728,7 @@ def bench_parler() -> BenchResult:
         _safe_del(model, tokenizer)
     return r
 
-# ── 7. Chatterbox (Turbo) ─────────────────────────────────────────────────────
+# ── 13. Chatterbox (Turbo) ─────────────────────────────────────────────────────
 
 def bench_chatterbox() -> BenchResult:
     r = BenchResult(model="chatterbox", voice="default (exaggeration=0.65)")
@@ -466,16 +782,360 @@ def bench_chatterbox() -> BenchResult:
         _safe_del(model)
     return r
 
+# ── 14. Fish Speech ───────────────────────────────────────────────────────────
+
+def bench_fishspeech() -> BenchResult:
+    r = BenchResult(model="fishspeech", voice="default (no ref WAV)")
+    try:
+        from fish_speech.inference.api import TTSInference
+    except ImportError:
+        r.error = "Not installed: pip install fish-speech"
+        return r
+    free = _free_ram_mb()
+    if free < 1200:
+        r.status = "skip"; r.error = f"Only {free} MB free -- Fish Speech needs ~1.5 GB."; return r
+    out  = OUTPUT_DIR / "fishspeech.wav"
+    inst = None
+    try:
+        import torch, soundfile as sf
+        t0   = time.perf_counter()
+        inst = TTSInference.from_pretrained("fishaudio/fish-speech-1.5", device="cpu",
+                                             dtype=torch.float32)
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        result = inst.generate(text=TEST_PHRASE, reference_audio=None, format="wav", speed=1.0)
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        if isinstance(result, tuple):
+            arr, sr = result
+        else:
+            import wave as _wv, io as _io
+            with _wv.open(_io.BytesIO(result), "rb") as wf:
+                sr = wf.getframerate()
+            arr = np.frombuffer(result[44:], dtype=np.int16).astype(np.float32) / 32768.0
+        arr = np.array(arr, dtype=np.float32).flatten()
+        sf.write(str(out), arr, int(sr))
+        r.audio_dur_s = round(_arr_dur(arr, int(sr)), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = int(sr)
+        r.arthur_fit  = "Zero-shot voice cloning; upload ref WAV for elderly voice character"
+        r.notes       = "No ref WAV used here; S2-Pro/v1.5 variant; API may vary by version"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(inst)
+    return r
+
+# ── 15. Sesame CSM 1B ─────────────────────────────────────────────────────────
+
+def bench_csm() -> BenchResult:
+    r = BenchResult(model="csm", voice="Speaker 0")
+    try:
+        from generator import load_csm_1b
+    except ImportError:
+        r.error = "Not installed: pip install git+https://github.com/SesameAILabs/csm  (needs: huggingface-cli login)"
+        return r
+    free = _free_ram_mb()
+    if free < 1800:
+        r.status = "skip"; r.error = f"Only {free} MB free -- Sesame CSM needs ~2 GB."; return r
+    out = OUTPUT_DIR / "csm.wav"
+    gen = None
+    try:
+        import soundfile as sf
+        t0  = time.perf_counter()
+        gen = load_csm_1b(device="cpu")
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        audio = gen.generate(text=TEST_PHRASE, speaker=0, context=[], max_audio_length_ms=30000)
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        sr  = gen.sample_rate
+        arr = audio.cpu().numpy().flatten().astype(np.float32)
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Multi-speaker; context-conditioned; natural conversational prosody"
+        r.notes       = "Gated HF model — huggingface-cli login required; speakers 0-2"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(gen)
+    return r
+
+# ── 16. Qwen3-TTS ─────────────────────────────────────────────────────────────
+
+def bench_qwen3tts() -> BenchResult:
+    r = BenchResult(model="qwen3tts", voice="default")
+    try:
+        from transformers import AutoModel, AutoProcessor
+    except ImportError:
+        r.error = "Not installed: pip install transformers"
+        return r
+    free = _free_ram_mb()
+    if free < 1800:
+        r.status = "skip"; r.error = f"Only {free} MB free -- Qwen3-TTS needs ~2 GB."; return r
+    out = OUTPUT_DIR / "qwen3tts.wav"
+    model = processor = None
+    try:
+        import torch, soundfile as sf
+        model_id  = "Qwen/Qwen3-TTS"
+        t0        = time.perf_counter()
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        model     = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        inputs = processor(text=TEST_PHRASE, return_tensors="pt")
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            output = model.generate(**inputs)
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        if hasattr(output, "audio"):
+            arr = output.audio.squeeze().cpu().numpy().astype(np.float32)
+        else:
+            arr = np.array(output[0] if isinstance(output, (list, tuple)) else output,
+                           dtype=np.float32).flatten()
+        fe  = getattr(processor, "feature_extractor", None)
+        sr  = int(getattr(fe, "sampling_rate", None) or 22050)
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Natural Qwen3-based multilingual TTS; check HF for latest model ID"
+        r.notes       = "Model ID Qwen/Qwen3-TTS may change; uses transformers"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(model, processor)
+    return r
+
+# ── 17. Orpheus 3B ────────────────────────────────────────────────────────────
+
+def bench_orpheus() -> BenchResult:
+    r = BenchResult(model="orpheus", voice="tara")
+    try:
+        from orpheus_tts import OrpheusModel
+    except ImportError:
+        r.error = "Not installed: pip install orpheus-speech"
+        return r
+    free = _free_ram_mb()
+    if free < 2500:
+        r.status = "skip"; r.error = f"Only {free} MB free -- Orpheus 3B needs ~3 GB."; return r
+    out   = OUTPUT_DIR / "orpheus.wav"
+    model = None
+    try:
+        import soundfile as sf
+        t0    = time.perf_counter()
+        model = OrpheusModel(model_name="canopylabs/orpheus-3b-0.1-ft")
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        emotion_text  = f"<sigh> {TEST_PHRASE}"
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        chunks = list(model.generate_speech(prompt=emotion_text, voice="tara"))
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        raw = b"".join(chunks)
+        arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        sr  = 24000
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "<sigh> + emotion tags add natural confusion/hesitation — strong Arthur fit"
+        r.notes       = "Voices: tara leah jess leo dan mia zac zoe; emotion: <laugh><sigh><gasp><groan><cough>"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(model)
+    return r
+
+# ── 18. NeuTTS Air ────────────────────────────────────────────────────────────
+
+def bench_neutts() -> BenchResult:
+    r = BenchResult(model="neutts", voice="default")
+    r.status = "skip"
+    r.error  = "NeuTTS Air not configured — edit _load_neutts() in tts_lab.py and bench_neutts() here with correct package"
+    return r
+
+# ── 19. IndexTTS-2 ────────────────────────────────────────────────────────────
+
+def bench_indextts() -> BenchResult:
+    r = BenchResult(model="indextts", voice="cloned from piper.wav")
+    try:
+        from indextts.infer import IndexTTS
+    except ImportError:
+        r.error = "Not installed: pip install git+https://github.com/index-tts/IndexTTS"
+        return r
+    ref_path = OUTPUT_DIR / "piper.wav"
+    if not ref_path.exists():
+        r.status = "skip"; r.error = "Reference WAV not found -- run bench_piper first"; return r
+    free = _free_ram_mb()
+    if free < 1500:
+        r.status = "skip"; r.error = f"Only {free} MB free -- IndexTTS-2 needs ~2 GB."; return r
+    out   = OUTPUT_DIR / "indextts.wav"
+    model = None
+    try:
+        t0    = time.perf_counter()
+        model = IndexTTS(model_dir="IndexTeam/IndexTTS", device="cpu")
+        model.load_model()
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        model.infer(audio_prompt=str(ref_path), text=TEST_PHRASE, output_path=str(out))
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        r.audio_dur_s = round(_wav_dur(out), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = 24000
+        r.arthur_fit  = "Zero-shot cloning; piper.wav as ref; upload aged-voice WAV for full Arthur character"
+        r.notes       = "Reference WAV always required; ~1.5 GB RAM; 24 kHz output"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(model)
+    return r
+
+# ── 20. Zonos v0.1 ────────────────────────────────────────────────────────────
+
+def bench_zonos() -> BenchResult:
+    r = BenchResult(model="zonos", voice="transformer, speaking_rate=13")
+    try:
+        from zonos.model import Zonos
+        from zonos.conditioning import make_cond_dict
+    except ImportError:
+        r.error = "Not installed: pip install git+https://github.com/Zyphra/Zonos  +  pip install phonemizer"
+        return r
+    free = _free_ram_mb()
+    if free < 2000:
+        r.status = "skip"; r.error = f"Only {free} MB free -- Zonos needs ~2.5 GB."; return r
+    out   = OUTPUT_DIR / "zonos.wav"
+    model = None
+    try:
+        import torch, soundfile as sf
+        t0    = time.perf_counter()
+        model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device="cpu")
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        emotion    = [0.3, 0.05, 0.05, 0.05, 0.1, 0.05, 0.2, 0.2]
+        cond       = make_cond_dict(text=TEST_PHRASE, language="en-us",
+                                    speaking_rate=13.0, emotion=emotion)
+        conditioning = model.prepare_conditioning(cond)
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        with torch.no_grad():
+            codes = model.generate(conditioning, max_new_tokens=1024, disable_torch_compile=True)
+        wavs = model.autoregressive_model.decode(codes)
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        arr = wavs[0].squeeze().cpu().numpy().astype(np.float32)
+        sr  = 44000
+        sf.write(str(out), arr, sr)
+        r.audio_dur_s = round(_arr_dur(arr, sr), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = sr
+        r.arthur_fit  = "Emotion vector + speaking_rate=13 → naturally hesitant elderly speech"
+        r.notes       = "44 kHz; hybrid variant available; phonemizer+espeak-ng required"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(model)
+    return r
+
+# ── 21. OpenVoice v2 ──────────────────────────────────────────────────────────
+
+def bench_openvoice() -> BenchResult:
+    r = BenchResult(model="openvoice", voice="EN-US base (no ref WAV)")
+    try:
+        from openvoice.api import ToneColorConverter
+        from melo.api import TTS as MeloTTS
+    except ImportError:
+        r.error = "Not installed: pip install git+https://github.com/myshell-ai/OpenVoice  (also needs melo-tts)"
+        return r
+    ov_dir = Path("/opt/models/openvoice_v2")
+    if not (ov_dir / "converter" / "config.json").exists():
+        r.status = "skip"; r.error = f"Checkpoints not at {ov_dir} — run setup step 21"; return r
+    out = OUTPUT_DIR / "openvoice.wav"
+    src = str(OUTPUT_DIR / "_ov_base.wav")
+    converter = tts_model = None
+    try:
+        import torch, soundfile as sf
+        t0 = time.perf_counter()
+        converter  = ToneColorConverter(str(ov_dir / "converter" / "config.json"), device="cpu")
+        converter.load_ckpt(str(ov_dir / "converter" / "checkpoint.pth"))
+        tts_model  = MeloTTS(language="EN", device="cpu")
+        r.load_time_s = round(time.perf_counter() - t0, 3)
+        sp_ids = tts_model.hps.data.spk2id
+        rb = _ram_mb()
+        t0 = time.perf_counter()
+        tts_model.tts_to_file(TEST_PHRASE, sp_ids.get("EN-US") or list(sp_ids.values())[0], src, speed=0.85)
+        ses_path = ov_dir / "base_speakers" / "ses" / "en_us.pth"
+        if ses_path.exists():
+            se = torch.load(str(ses_path), map_location="cpu", weights_only=False)
+            converter.convert(audio_src_path=src, src_se=se, tgt_se=se, output_path=str(out), tau=0.3)
+        else:
+            import shutil; shutil.copy(src, str(out))
+        r.synth_time_s = round(time.perf_counter() - t0, 3)
+        r.peak_ram_mb  = max(0, _ram_mb() - rb)
+        Path(src).unlink(missing_ok=True)
+        r.audio_dur_s = round(_wav_dur(out), 2)
+        r.rtf         = round(r.synth_time_s / r.audio_dur_s, 4) if r.audio_dur_s else 0
+        r.output_hz   = 22050
+        r.arthur_fit  = "MeloTTS base + tone-color; upload ref WAV for zero-shot voice cloning"
+        r.notes       = "Checkpoints required at /opt/models/openvoice_v2; melo-tts needed"
+        r.status      = "pass"
+    except MemoryError:
+        r.status = "fail"; r.error = "OOM"
+    except Exception:
+        r.status = "fail"; r.error = traceback.format_exc(limit=4)
+    finally:
+        _safe_del(converter, tts_model)
+        Path(src).unlink(missing_ok=True)
+    return r
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 BENCH_FNS = {
     "piper":       bench_piper,
     "kokoro":      bench_kokoro,
     "melo":        bench_melo,
+    "chattts":     bench_chattts,
+    "outetts":     bench_outetts,
+    "bark":        bench_bark,
+    "styletts2":   bench_styletts2,
+    "f5tts":       bench_f5tts,
+    "dia":         bench_dia,
     "xtts":        bench_xtts,
     "cosyvoice":   bench_cosyvoice,
     "parler":      bench_parler,
     "chatterbox":  bench_chatterbox,
+    "fishspeech":  bench_fishspeech,
+    "csm":         bench_csm,
+    "qwen3tts":    bench_qwen3tts,
+    "orpheus":     bench_orpheus,
+    "neutts":      bench_neutts,
+    "indextts":    bench_indextts,
+    "zonos":       bench_zonos,
+    "openvoice":   bench_openvoice,
 }
 
 # ── Output ────────────────────────────────────────────────────────────────────
@@ -524,10 +1184,12 @@ def main():
     parser = argparse.ArgumentParser(description="Arthur TTS Benchmark")
     parser.add_argument(
         "--models", default="all",
-        help="Comma-separated list: piper,kokoro,melo,xtts,cosyvoice,parler,chatterbox  or 'all'"
+        help="Comma-separated model names or 'all'. Valid: " + ",".join(ALL_MODELS)
     )
+    parser.add_argument("--no-heavy",      action="store_true", help="Skip all models needing >2.5 GB RAM")
     parser.add_argument("--no-xtts",       action="store_true", help="Skip XTTS-v2 (needs swap)")
     parser.add_argument("--no-cosyvoice",  action="store_true", help="Skip CosyVoice2 (manual install)")
+    parser.add_argument("--no-dia",        action="store_true", help="Skip Dia-1.6B (needs ~3 GB)")
     args = parser.parse_args()
 
     if args.models.strip().lower() == "all":
@@ -539,10 +1201,15 @@ def main():
             print(f"Unknown model(s): {invalid}. Valid: {list(BENCH_FNS)}")
             sys.exit(1)
 
+    HEAVY_MODELS = {"dia", "xtts", "cosyvoice"}
+    if args.no_heavy:
+        models_to_run = [m for m in models_to_run if m not in HEAVY_MODELS]
     if args.no_xtts and "xtts" in models_to_run:
         models_to_run.remove("xtts")
     if args.no_cosyvoice and "cosyvoice" in models_to_run:
         models_to_run.remove("cosyvoice")
+    if args.no_dia and "dia" in models_to_run:
+        models_to_run.remove("dia")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -11,9 +11,16 @@ MODELS = [
     ("piper",      LONG, {"voice": "en_US-ryan-high"},       False),
     ("kokoro",     LONG, {"voice": "bm_lewis", "speed": "0.85"}, False),
     ("melo",       LONG, {"speaker": "EN-US", "speed": "0.85"},  False),
+    ("chattts",    LONG, {"prompt": "[speed_5]", "temperature": "0.3", "seed": "0"}, True),
+    ("outetts",    LONG, {"model_path": "OuteAI/OuteTTS-0.3-500M", "temperature": "0.4"}, True),
     ("parler",     LONG, {"description": "An elderly man with a slow warm slightly confused voice."}, True),
     ("chatterbox", LONG, {"exaggeration": "0.65", "cfg_weight": "0.5"}, True),
     ("xtts",       LONG, {"speaker": "Torcull Diarmuid", "language": "en"}, True),
+    # -- New engines (warm-test subset) --
+    ("fishspeech", LONG, {"speed": "1.0"},                        True),
+    ("orpheus",    LONG, {"voice": "tara"},                        True),
+    ("zonos",      LONG, {"variant": "transformer", "speaking_rate": "13.0"}, True),
+    ("openvoice",  LONG, {"speaker": "EN-US", "speed": "0.85"},   True),
 ]
 
 BASE = "http://localhost:8001"

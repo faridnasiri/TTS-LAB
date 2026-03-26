@@ -1,7 +1,104 @@
+# ── Core server ───────────────────────────────────────────────────────────────
 fastapi>=0.111.0
 uvicorn[standard]>=0.29.0
 websockets>=12.0
+pydantic>=2.0.0
+psutil>=5.9.0
+
+# ── ASR (arthur_server.py) ────────────────────────────────────────────────────
 faster-whisper>=1.0.1
 soundfile>=0.12.1
+
+# ── Shared / utilities ────────────────────────────────────────────────────────
 numpy>=1.26.0
 httpx>=0.27.0
+onnxruntime>=1.18.0
+
+# ── PyTorch (CPU-only) — install via pip before this file ────────────────────
+# pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+# (not listed here; torch is a dep of most TTS engines below)
+
+# ── 1. Piper TTS ──────────────────────────────────────────────────────────────
+piper-tts>=1.2.0
+
+# ── 2. Kokoro-82M ─────────────────────────────────────────────────────────────
+kokoro-onnx>=0.4.0
+
+# ── 3. MeloTTS ────────────────────────────────────────────────────────────────
+# MeloTTS install: pip install git+https://github.com/myshell-ai/MeloTTS.git
+# Also needs: python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"
+#             python -c "import unidic; unidic.download()"
+
+# ── 4. ChatTTS ────────────────────────────────────────────────────────────────
+ChatTTS>=0.2.1
+
+# ── 5. OuteTTS ────────────────────────────────────────────────────────────────
+outetts>=0.3.0
+
+# ── 6. Bark ───────────────────────────────────────────────────────────────────
+bark>=1.0.0
+
+# ── 7. StyleTTS 2 ─────────────────────────────────────────────────────────────
+styletts2>=0.0.4
+
+# ── 8. F5-TTS ─────────────────────────────────────────────────────────────────
+f5-tts>=0.3.4
+
+# ── 9. Dia-1.6B ───────────────────────────────────────────────────────────────
+# pip install git+https://github.com/nari-labs/dia.git
+
+# ── 10. XTTS-v2 (Coqui) ──────────────────────────────────────────────────────
+# coqui-tts (community fork, maintained)
+# pip install coqui-tts
+# Falls back to: pip install TTS
+
+# ── 11. CosyVoice2 ────────────────────────────────────────────────────────────
+# Manual install only (git clone FunAudioLLM/CosyVoice /opt/CosyVoice)
+
+# ── 12. Parler-TTS ────────────────────────────────────────────────────────────
+parler-tts>=1.0.0
+transformers>=4.41.0
+accelerate>=0.30.0
+
+# ── 13. Chatterbox ────────────────────────────────────────────────────────────
+chatterbox-tts>=0.1.0
+perth>=1.0.0
+torchaudio>=2.3.0
+
+# ── 14. Fish Speech ───────────────────────────────────────────────────────────
+# pip install fish-speech
+# or: pip install "fish-speech[all]"  (all optional deps)
+
+# ── 15. Sesame CSM 1B ─────────────────────────────────────────────────────────
+# pip install git+https://github.com/SesameAILabs/csm
+# Note: gated HuggingFace model — run: huggingface-cli login
+
+# ── 16. Qwen3-TTS ─────────────────────────────────────────────────────────────
+# Uses transformers (already installed via parler-tts)
+# Model auto-downloads from HuggingFace: Qwen/Qwen3-TTS
+
+# ── 17. Orpheus 3B ────────────────────────────────────────────────────────────
+orpheus-speech>=0.1.0
+# or: pip install git+https://github.com/canopyai/Orpheus-TTS
+# IMPORTANT (CPU-only VMs): after install, patch snac_device="cuda"→"cpu" in orpheus_tts/decoder.py
+# The _remote_install_new_engines.sh script does this automatically.
+
+# ── 18. NeuTTS Air ────────────────────────────────────────────────────────────
+# Package not yet confirmed — fill in and edit _load_neutts() in tts_lab.py once identified
+
+# ── 19. IndexTTS-2 ────────────────────────────────────────────────────────────
+# pip install git+https://github.com/index-tts/IndexTTS  (GitHub URL may vary)
+
+# ── 20. Zonos v0.1 ────────────────────────────────────────────────────────────
+# git clone https://github.com/Zyphra/Zonos /opt/Zonos
+# pip install -e /opt/Zonos
+# Note: PyPI zonos 0.1.0 is INCOMPLETE (missing backbone/). Use git clone.
+phonemizer>=3.2.1
+# System dep: sudo apt install espeak-ng  (already in setup_tts_lab.sh step 1)
+
+# ── 21. OpenVoice v2 ─────────────────────────────────────────────────────────
+# pip install git+https://github.com/myshell-ai/OpenVoice
+# Checkpoints (v1 or v2 layout auto-detected):
+#   sudo ln -sfn /opt/models/huggingface/hub/models--myshell-ai--OpenVoice/snapshots/<hash>/checkpoints \
+#                /opt/models/openvoice_v2
+# setup_tts_lab.sh step 21 does this automatically.

@@ -1,52 +1,88 @@
-# ── Arthur TTS Lab — dependencies (11 engines) ────────────────────────────────
+# Arthur TTS Lab -- dependencies (13 engines)
 #
 # Install in the bench venv:
 #   source /opt/arthur-bench-env/bin/activate
+#   pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 #   pip install -r requirements_benchmark.txt
-#
-# ─────────────────────────────────────────────────────────────────────────────
 
 # Utilities
 psutil>=5.9.0
 numpy>=1.26.0
 soundfile>=0.12.1
 
-# ── 1. Piper TTS ──────────────────────────────────────────────────────────────
+# 1. Piper TTS
 piper-tts>=1.2.0
 onnxruntime>=1.18.0
 
-# ── 2. Kokoro-82M ─────────────────────────────────────────────────────────────
+# 2. Kokoro-82M
 kokoro-onnx>=0.4.0
 
-# ── 3. MeloTTS ────────────────────────────────────────────────────────────────
+# 3. MeloTTS  (git install required)
 # pip install git+https://github.com/myshell-ai/MeloTTS.git
+# python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng')"
 
-# ── 4. Bark (emotion tokens) ──────────────────────────────────────────────────
+# 4. ChatTTS
+ChatTTS>=0.2.1
+
+# 5. OuteTTS
+outetts>=0.3.0
+
+# 6. Bark (emotion tokens)
 bark>=0.1.5
 
-# ── 5. StyleTTS 2 ─────────────────────────────────────────────────────────────
+# 7. StyleTTS 2
 styletts2>=0.1.6
 
-# ── 6. F5-TTS (zero-shot cloning) ─────────────────────────────────────────────
+# 8. F5-TTS (zero-shot cloning)
 f5-tts>=1.1.0
 
-# ── 7. Dia-1.6B (dialogue + emotion tags) ─────────────────────────────────────
+# 9. Dia-1.6B (git install required)
 # pip install git+https://github.com/nari-labs/dia.git
 
-# ── 8. XTTS-v2 (Coqui TTS) ───────────────────────────────────────────────────
+# 10. XTTS-v2 (Coqui TTS)
 coqui-tts>=0.27.0
 
-# ── 9. CosyVoice2-0.5B ───────────────────────────────────────────────────────
-# NOT on PyPI — see setup_tts_lab.sh Step 11 for manual git clone install.
+# 11. CosyVoice2-0.5B
+# NOT on PyPI -- see setup_tts_lab.sh Step 11 for manual git clone install.
 
-# ── 10. Parler-TTS mini ───────────────────────────────────────────────────────
+# 12. Parler-TTS mini
 parler-tts>=1.0.0
 transformers==4.46.1
 
-# ── 11. Chatterbox ───────────────────────────────────────────────────────────
+# 13. Chatterbox
 chatterbox-tts>=0.1.0
+perth>=1.0.0
 
-# PyTorch (CPU-only — must be installed first via index-url)
+# 14. Fish Speech
+# pip install fish-speech
+# or: pip install "fish-speech[all]"
+
+# 15. Sesame CSM 1B
+# pip install git+https://github.com/SesameAILabs/csm
+# Note: gated HF model — huggingface-cli login required
+
+# 16. Qwen3-TTS
+# Uses transformers (already installed); model Qwen/Qwen3-TTS auto-downloads from HF
+
+# 17. Orpheus 3B
+orpheus-speech>=0.1.0
+# or: pip install git+https://github.com/canopyai/Orpheus-TTS
+
+# 18. NeuTTS Air
+# Package not yet identified — fill in once confirmed
+
+# 19. IndexTTS-2
+# pip install git+https://github.com/index-tts/IndexTTS
+
+# 20. Zonos v0.1
+# pip install git+https://github.com/Zyphra/Zonos
+phonemizer>=3.2.1
+
+# 21. OpenVoice v2
+# pip install git+https://github.com/myshell-ai/OpenVoice
+# Checkpoints required at /opt/models/openvoice_v2 (see setup_tts_lab.sh step 21)
+
+# PyTorch (CPU-only -- must be installed first via index-url)
 # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
 torch>=2.2.0
 torchaudio>=2.2.0

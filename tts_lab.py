@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-Arthur TTS Lab -- 11-Engine Edition
-Piper  Kokoro  MeloTTS  Bark  StyleTTS2  F5-TTS  Dia-1.6B
-XTTS-v2  CosyVoice2  Parler-TTS  Chatterbox
+Arthur TTS Lab -- 21-Engine Edition
+Piper  Kokoro  MeloTTS  ChatTTS  OuteTTS  Bark  StyleTTS2
+F5-TTS  Dia-1.6B  XTTS-v2  CosyVoice2  Parler-TTS  Chatterbox
+FishSpeech  Sesame-CSM  Qwen3-TTS  Orpheus  NeuTTS-Air  IndexTTS  Zonos  OpenVoice
 
 Port  : 8001
 Open  : http://192.168.0.87:8001
@@ -97,22 +98,54 @@ BARK_PRESETS = [
     ("v2/en_speaker_8", "en_speaker_8 — female, soft"),
 ]
 
+CHATTTS_SPEEDS = [(f"[speed_{i}]", f"speed_{i}") for i in range(1, 10)]
+OUTETTS_MODELS = [
+    ("OuteAI/OuteTTS-0.3-500M", "OuteTTS 0.3 500M (default)"),
+    ("OuteAI/OuteTTS-1.0-0.6B", "OuteTTS 1.0 0.6B"),
+    ("OuteAI/Llama-OuteTTS-1.0-1B", "OuteTTS 1.0 1B"),
+]
+OUTETTS_SPEAKERS = [("en-female-1-neutral", "en-female-1-neutral")]
+PARLER_MODELS = [
+    ("parler-tts/parler-tts-mini-v1", "Mini v1"),
+    ("parler-tts/parler-tts-mini-expresso", "Mini Expresso"),
+]
+
+ORPHEUS_VOICES       = [("tara","tara"),("leah","leah"),("jess","jess"),("leo","leo"),
+                        ("dan","dan"),("mia","mia"),("zac","zac"),("zoe","zoe")]
+ZONOS_VARIANTS       = [("transformer","Transformer (quality, ~1.2 GB)"),
+                        ("hybrid","Hybrid (faster, ~1.5 GB)")]
+CSM_SPEAKERS         = [(str(i), f"Speaker {i}") for i in range(3)]
+OPENVOICE_MODELS_DIR = Path("/opt/models/openvoice_v2")
+INDEXTTS_DIR         = Path("/opt/models/indextts")
+
 # -- Model registry --
 MODEL_INFO = {
     "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"~100x RT","ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only. Real-time. Best for production.","arthur_fit":2},
     "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"~35x RT", "ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice.","arthur_fit":5},
     "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"~15x RT", "ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older.","arthur_fit":3},
+    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"TBD",      "ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts, speaker sampling, and optional reference-speaker extraction.","arthur_fit":4},
+    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"TBD",      "ram_est_mb":1600, "heavy":True, "notes":"Prompt-controlled character voice with default speaker or uploaded reference-speaker creation.","arthur_fit":4},
     "bark":      {"label":"Bark",         "size":"1.3 GB",   "rtf_est":"~30x RT", "ram_est_mb":1500, "heavy":True, "notes":"Unique emotion tokens: [laughs] [sighs] [clears throat] [hesitantly] in text.","arthur_fit":5},
     "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"~2x RT",  "ram_est_mb":1500, "heavy":True, "notes":"Fastest high-quality neural TTS. Style transfer from reference WAV. Alpha/beta control.","arthur_fit":4},
     "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"~4x RT",  "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Flow matching. Upload 5-15s reference WAV.","arthur_fit":4},
     "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"~20x RT", "ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. March 2025.","arthur_fit":5},
     "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"~3x RT",  "ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. Best multi-speaker quality.","arthur_fit":5},
     "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"~5x RT",  "ram_est_mb":2500, "heavy":True, "notes":"Chinese-first with English zero-shot support.","arthur_fit":3},
-    "parler":    {"label":"Parler-TTS",   "size":"3.3 GB",   "rtf_est":"~20x RT", "ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description.","arthur_fit":4},
-    "chatterbox":{"label":"Chatterbox",   "size":"3.0 GB",   "rtf_est":"~12x RT", "ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion.","arthur_fit":5},
+    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"~20x RT", "ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description. Includes Mini Expresso option.","arthur_fit":4},
+    "chatterbox": {"label":"Chatterbox",   "size":"3.0 GB",   "rtf_est":"~12x RT", "ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion.","arthur_fit":5},
+    # -- New engines (14-21) --
+    "fishspeech": {"label":"Fish Speech",   "size":"~1.1 GB",  "rtf_est":"~5x RT",  "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning (VQ-VAE codec). Upload 5-30s reference WAV.","arthur_fit":4},
+    "csm":        {"label":"Sesame CSM 1B", "size":"~2 GB",    "rtf_est":"~8x RT",  "ram_est_mb":2000, "heavy":True, "notes":"Conversational Speech Model 1B. Multi-speaker. Context-conditioned. HF login required.","arthur_fit":4},
+    "qwen3tts":   {"label":"Qwen3-TTS",     "size":"~1-3 GB",  "rtf_est":"TBD",     "ram_est_mb":2000, "heavy":True, "notes":"Alibaba Qwen3-based TTS. Natural multilingual speech. Auto-downloads via transformers.","arthur_fit":3},
+    "orpheus":    {"label":"Orpheus 3B",    "size":"~3 GB",    "rtf_est":"~10x RT", "ram_est_mb":3000, "heavy":True, "notes":"LLaMA-3B-based TTS. Emotion tags: <laugh> <sigh> <chuckle> <gasp>. 8 built-in voices.","arthur_fit":5},
+    "neutts":     {"label":"NeuTTS Air",    "size":"TBD",      "rtf_est":"TBD",     "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
+    "indextts":   {"label":"IndexTTS-2",    "size":"~1.5 GB",  "rtf_est":"~6x RT",  "ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning from IndexTeam. Reference WAV required for synthesis.","arthur_fit":4},
+    "zonos":      {"label":"Zonos v0.1",    "size":"~1.2 GB",  "rtf_est":"~8x RT",  "ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate control. 44 kHz output.","arthur_fit":4},
+    "openvoice":  {"label":"OpenVoice v2",  "size":"~600 MB",  "rtf_est":"~10x RT", "ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Zero-shot voice cloning. MyShell AI.","arthur_fit":3},
 }
 
-MODEL_ORDER = ["piper","kokoro","melo","bark","styletts2","f5tts","dia","xtts","cosyvoice","parler","chatterbox"]
+MODEL_ORDER = ["piper","kokoro","melo","chattts","outetts","bark","styletts2","f5tts","dia","xtts","cosyvoice","parler","chatterbox",
+               "fishspeech","csm","qwen3tts","orpheus","neutts","indextts","zonos","openvoice"]
 
 ARTHUR_PRESETS = [
     ("Greeting",   "Hello? Oh my goodness, who is this? I almost didn't hear the phone. Let me turn the TV down a moment."),
@@ -135,7 +168,7 @@ HEAVY = {n for n, i in MODEL_INFO.items() if i["heavy"]}
 
 _state = {
     n: {"instance":None,"status":"unloaded","lock":threading.Lock(),
-        "error":"","load_time_s":0.0,"loaded_voice":None}
+        "error":"","load_time_s":0.0,"loaded_voice":None,"loaded_model":None}
     for n in MODEL_ORDER
 }
 
@@ -176,6 +209,20 @@ def _evict_heavy(keep):
 
 def _piper_voices():
     return sorted(p.stem for p in MODELS_DIR.glob("*.onnx") if "kokoro" not in p.name)
+
+def _read_wav_mono_f32(path: Path):
+    with wave.open(str(path), "rb") as wf:
+        n_channels = wf.getnchannels()
+        sampwidth  = wf.getsampwidth()
+        fr         = wf.getframerate()
+        frames     = wf.readframes(wf.getnframes())
+    if sampwidth != 2:
+        raise RuntimeError("Reference WAV must be 16-bit PCM.")
+    arr = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    if n_channels > 1:
+        arr = arr.reshape(-1, n_channels).mean(axis=1)
+    return arr, fr
+
 
 # ============================================================
 # LOADERS + SYNTH FUNCTIONS
@@ -238,7 +285,86 @@ def _synth_melo(inst, text, params):
     with wave.open(io.BytesIO(wav),"rb") as wf: sr = wf.getframerate()
     return wav, sr
 
-# -- 4. Bark --
+# -- 4. ChatTTS --
+def _load_chattts():
+    import ChatTTS
+    inst = ChatTTS.Chat()
+    if not inst.load(source="huggingface", device="cpu"):
+        raise RuntimeError("ChatTTS load failed")
+    try:
+        inst._arthur_spk = inst.sample_random_speaker()
+    except Exception:
+        inst._arthur_spk = None
+    return inst
+
+def _synth_chattts(inst, text, params):
+    spk_emb = getattr(inst, "_arthur_spk", None)
+    prompt_id = params.get("audio_prompt_id", "")
+    if prompt_id:
+        prompt_path = UPLOAD_DIR / f"{prompt_id}.wav"
+        if prompt_path.exists():
+            prompt_wav, _ = _read_wav_mono_f32(prompt_path)
+            spk_emb = inst.sample_audio_speaker(prompt_wav)
+    seed = int(float(params.get("seed", 0)))
+    infer_kw = dict(
+        prompt=params.get("prompt", "[speed_5]"),
+        top_P=float(params.get("top_p", 0.7)),
+        top_K=int(float(params.get("top_k", 20))),
+        temperature=float(params.get("temperature", 0.3)),
+        repetition_penalty=float(params.get("repetition_penalty", 1.05)),
+        max_new_token=int(float(params.get("max_new_token", 512))),
+        show_tqdm=False,
+        spk_emb=spk_emb,
+    )
+    if seed:
+        infer_kw["manual_seed"] = seed
+    out = inst.infer(
+        text,
+        skip_refine_text=str(params.get("skip_refine_text", "true")).lower() in ("1", "true", "yes", "on"),
+        params_infer_code=inst.InferCodeParams(**infer_kw),
+    )
+    arr = np.array(out[0] if isinstance(out, list) else out, dtype=np.float32)
+    return _to_wav(arr, 24000), 24000
+
+# -- 5. OuteTTS --
+def _load_outetts(model_path="OuteAI/OuteTTS-0.3-500M"):
+    import outetts
+    cfg = outetts.ModelConfig(
+        model_path=model_path,
+        tokenizer_path=model_path,
+        backend=outetts.Backend.HF,
+        device="cpu",
+        max_seq_length=32768,
+    )
+    return outetts.Interface(cfg)
+
+def _synth_outetts(inst, text, params):
+    import outetts
+    speaker = None
+    prompt_id = params.get("audio_prompt_id", "")
+    if prompt_id:
+        prompt_path = UPLOAD_DIR / f"{prompt_id}.wav"
+        if prompt_path.exists():
+            speaker = inst.create_speaker(str(prompt_path), transcript=params.get("transcript", "") or None)
+    if speaker is None:
+        speaker = inst.load_default_speaker(params.get("speaker", "en-female-1-neutral"))
+    out = inst.generate(outetts.GenerationConfig(
+        text=text,
+        voice_characteristics=params.get("voice_characteristics") or None,
+        speaker=speaker,
+        max_length=int(float(params.get("max_length", 32768))),
+        sampler_config=outetts.SamplerConfig(
+            temperature=float(params.get("temperature", 0.4)),
+            repetition_penalty=float(params.get("repetition_penalty", 1.1)),
+            top_k=int(float(params.get("top_k", 40))),
+            top_p=float(params.get("top_p", 0.9)),
+            min_p=float(params.get("min_p", 0.05)),
+        ),
+    ))
+    arr = out.audio.detach().cpu().numpy().squeeze()
+    return _to_wav(arr, getattr(out, "sr", 44100)), getattr(out, "sr", 44100)
+
+# -- 6. Bark --
 def _load_bark():
     import torch
     # Bark checkpoints contain numpy scalars not whitelisted in PyTorch 2.6+ weights_only mode.
@@ -262,7 +388,7 @@ def _synth_bark(inst, text, params):
     audio = generate_audio(text, history_prompt=history)
     return _to_wav(audio.astype(np.float32), SAMPLE_RATE), SAMPLE_RATE
 
-# -- 5. StyleTTS 2 --
+# -- 7. StyleTTS 2 --
 def _load_styletts2():
     import torch
     # StyleTTS2 checkpoints use builtins.getattr not whitelisted in PyTorch 2.6+.
@@ -289,7 +415,7 @@ def _synth_styletts2(inst, text, params):
     )
     return _to_wav(np.array(out, dtype=np.float32), 24000), 24000
 
-# -- 6. F5-TTS --
+# -- 8. F5-TTS --
 def _load_f5tts():
     from f5_tts.api import F5TTS
     return F5TTS()
@@ -308,7 +434,7 @@ def _synth_f5tts(inst, text, params):
     )
     return _to_wav(np.array(wav, dtype=np.float32).flatten(), sr), sr
 
-# -- 7. Dia-1.6B --
+# -- 9. Dia-1.6B --
 def _load_dia():
     from dia.model import Dia
     # Dia-1.6B-0626 has updated config schema matching current package;
@@ -345,7 +471,7 @@ def _synth_dia(inst, text, params):
     arr = np.array(output, dtype=np.float32).flatten() if output is not None else np.zeros(sr, dtype=np.float32)
     return _to_wav(arr, sr), sr
 
-# -- 8. XTTS-v2 --
+# -- 10. XTTS-v2 --
 def _patch_transformers_for_coqui():
     try:
         import transformers.utils.import_utils as iu
@@ -373,7 +499,7 @@ def _synth_xtts(inst, text, params):
     arr = inst.tts(**kw)
     return _to_wav(np.array(arr, dtype=np.float32), 24000), 24000
 
-# -- 9. CosyVoice2 --
+# -- 11. CosyVoice2 --
 def _load_cosyvoice():
     for p in [str(COSYVOICE_DIR), str(COSYVOICE_DIR/"third_party"/"Matcha-TTS")]:
         if p not in sys.path: sys.path.insert(0, p)
@@ -386,12 +512,11 @@ def _synth_cosyvoice(inst, text, params):
     sr = inst.sample_rate
     return _to_wav(np.concatenate(chunks) if chunks else np.zeros(sr,np.float32), sr), sr
 
-# -- 10. Parler-TTS --
-def _load_parler():
+# -- 12. Parler-TTS --
+def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
     from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
-    mid = "parler-tts/parler-tts-mini-v1"
-    return (ParlerTTSForConditionalGeneration.from_pretrained(mid), AutoTokenizer.from_pretrained(mid))
+    return (ParlerTTSForConditionalGeneration.from_pretrained(model_id), AutoTokenizer.from_pretrained(model_id))
 
 def _synth_parler(inst, text, params):
     import torch
@@ -405,7 +530,7 @@ def _synth_parler(inst, text, params):
     with torch.no_grad(): gen = model.generate(**kw)
     return _to_wav(gen.cpu().numpy().squeeze().astype(np.float32), model.config.sampling_rate), model.config.sampling_rate
 
-# -- 11. Chatterbox --
+# -- 13. Chatterbox --
 def _load_chatterbox():
     import perth
     # perth 1.0.0 ships PerthImplicitWatermarker=None (proprietary stub).
@@ -428,60 +553,382 @@ def _synth_chatterbox(inst, text, params):
     buf = io.BytesIO(); ta.save(buf, wav, inst.sr, format="wav"); buf.seek(0)
     return buf.read(), inst.sr
 
+# -- 14. Fish Speech --
+def _load_fishspeech(model_id="fishaudio/fish-speech-1.5"):
+    """Fish Speech — uses fish_speech.inference_engine.TTSInferenceEngine.
+    PyPI package provides the engine; full model-loading code lives in the GitHub repo.
+    Install (full): cd /tmp && git clone https://github.com/fishaudio/fish-speech
+                    pip install -e /tmp/fish-speech/
+    Weights auto-download from HuggingFace: fishaudio/fish-speech-1.5
+    """
+    import torch
+    try:
+        from fish_speech.inference_engine import TTSInferenceEngine  # noqa: F401
+        from fish_speech.utils.schema import ServeTTSRequest          # noqa: F401
+    except ImportError as e:
+        raise ImportError(f"pip install fish-speech (or git clone the full repo): {e}") from e
+    try:
+        from fish_speech.models.vqgan.inference import load_model as _load_codec
+        from fish_speech.models.text2semantic.inference import launch_thread_safe_queue as _llm
+    except ImportError:
+        raise ImportError(
+            "Fish Speech model-loading code missing.\n"
+            "The PyPI package only ships the inference engine framework.\n"
+            "Full install: cd /tmp && git clone https://github.com/fishaudio/fish-speech\n"
+            "              pip install -e /tmp/fish-speech/"
+        )
+    from huggingface_hub import snapshot_download as _dl
+    from pathlib import Path as _P
+    model_dir = _P(_dl(model_id, ignore_patterns=["*.md", "*.txt", "*.gitignore"]))
+    codec_pth = next((p for pat in ["firefly-gan*.pth", "*.pth"]
+                      for p in model_dir.glob(pat)), None)
+    if codec_pth is None:
+        raise FileNotFoundError(f"No .pth codec file in {model_dir}")
+    decoder  = _load_codec(config_name="firefly_gan_vq", checkpoint_path=str(codec_pth), device="cpu")
+    llama_q  = _llm(checkpoint_path=str(model_dir), device="cpu",
+                    precision=torch.float32, compile=False)
+    return TTSInferenceEngine(llama_queue=llama_q, decoder_model=decoder,
+                               precision=torch.float32, compile=False)
+
+def _synth_fishspeech(inst, text, params):
+    from fish_speech.utils.schema import ServeTTSRequest, ServeReferenceAudio
+    refs   = []
+    ref_id = params.get("audio_prompt_id", "")
+    if ref_id:
+        p = UPLOAD_DIR / f"{ref_id}.wav"
+        if p.exists():
+            refs = [ServeReferenceAudio(audio=p.read_bytes(), text="")]
+    req   = ServeTTSRequest(text=text, references=refs)
+    final = None
+    for result in inst.inference(req):
+        if result.code == "final":
+            final = result
+        elif result.code == "error" and result.error:
+            raise RuntimeError(f"Fish Speech error: {result.error}")
+    if final is None or final.audio is None:
+        raise RuntimeError("Fish Speech: no audio generated")
+    sr, audio_np = final.audio
+    return _to_wav(audio_np.astype(np.float32), int(sr)), int(sr)
+
+# -- 15. Sesame CSM 1B --
+def _load_csm():
+    """Sesame Conversational Speech Model (1B).
+    Install: pip install git+https://github.com/SesameAILabs/csm
+    NOTE: Model is gated on HuggingFace — run: huggingface-cli login
+    """
+    from generator import load_csm_1b
+    return load_csm_1b(device="cpu")
+
+def _synth_csm(inst, text, params):
+    speaker = int(float(params.get("speaker_id", 0)))
+    max_ms   = int(float(params.get("max_audio_length_ms", 30000)))
+    audio    = inst.generate(text=text, speaker=speaker, context=[], max_audio_length_ms=max_ms)
+    sr       = inst.sample_rate
+    arr      = audio.cpu().numpy().flatten().astype(np.float32)
+    return _to_wav(arr, sr), sr
+
+# -- 16. Qwen3-TTS --
+def _load_qwen3tts(model_id="Qwen/Qwen3-TTS"):
+    """Qwen3-TTS — Alibaba Qwen3-based TTS via transformers.
+    Install: transformers already installed (dep of parler-tts).
+    Model auto-downloads from HuggingFace on first load.
+    Check https://huggingface.co/Qwen for latest model ID.
+    """
+    import torch
+    from transformers import AutoProcessor, AutoModel
+    proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+    mdl  = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+    return (mdl, proc)
+
+def _synth_qwen3tts(inst, text, params):
+    import torch
+    model, proc = inst
+    inputs = proc(text=text, return_tensors="pt")
+    ref_id = params.get("audio_prompt_id", "")
+    if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists():
+        inputs["reference_audio"] = str(UPLOAD_DIR / f"{ref_id}.wav")
+    with torch.no_grad():
+        output = model.generate(**inputs)
+    if hasattr(output, "audio"):
+        arr = output.audio.squeeze().cpu().numpy().astype(np.float32)
+    elif isinstance(output, (list, tuple)):
+        arr = np.array(output[0], dtype=np.float32).flatten()
+    else:
+        arr = output.cpu().numpy().flatten().astype(np.float32)
+    fe  = getattr(proc, "feature_extractor", None)
+    sr  = getattr(fe, "sampling_rate", None) or 22050
+    return _to_wav(arr, sr), sr
+
+# -- 17. Orpheus 3B --
+def _load_orpheus(model_name="canopylabs/orpheus-3b-0.1-ft"):
+    """Orpheus TTS 3B — LLaMA-3B-based TTS with emotion tags.
+    Install: pip install orpheus-speech
+    Emotion tags (embed in text): <laugh> <sigh> <chuckle> <gasp> <cough> <sniffle> <groan> <yawn>
+    Voices: tara leah jess leo dan mia zac zoe
+    NOTE: orpheus_tts/decoder.py ships with snac_device=\"cuda\" hardcoded.
+          We patch it to \"cpu\" on install (see _remote_install_new_engines.sh).
+    """
+    from orpheus_tts import OrpheusModel
+    return OrpheusModel(model_name=model_name)
+
+def _synth_orpheus(inst, text, params):
+    voice  = params.get("voice", "tara")
+    chunks = list(inst.generate_speech(prompt=text, voice=voice))
+    if not chunks:
+        return _to_wav(np.zeros(24000, np.float32), 24000), 24000
+    raw = b"".join(chunks)
+    arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+    return _to_wav(arr, 24000), 24000
+
+# -- 18. NeuTTS Air --
+def _load_neutts():
+    """NeuTTS Air — placeholder. Edit _load_neutts() once the package is identified.
+
+    Template:
+        from neutts_package import NeuTTSAir
+        return NeuTTSAir.from_pretrained("model-id", device="cpu")
+    """
+    raise NotImplementedError(
+        "NeuTTS Air: package not yet configured.\n"
+        "Edit _load_neutts() in tts_lab.py with the correct import after installing.\n"
+        "See setup_tts_lab.sh step 18 for notes."
+    )
+
+def _synth_neutts(inst, text, params):
+    raise NotImplementedError("NeuTTS Air: configure _load_neutts() first.")
+
+# -- 19. IndexTTS-2 --
+def _load_indextts(model_dir=None):
+    """IndexTTS-2 — zero-shot voice cloning from IndexTeam/Bilibili.
+    Install: pip install git+https://github.com/index-tts/IndexTTS
+    Model auto-downloads to HF cache on first load.
+    """
+    from indextts.infer import IndexTTS
+    md = model_dir or (str(INDEXTTS_DIR) if INDEXTTS_DIR.exists() else "IndexTeam/IndexTTS")
+    model = IndexTTS(model_dir=md, device="cpu")
+    model.load_model()
+    return model
+
+def _synth_indextts(inst, text, params):
+    ref_id   = params.get("audio_prompt_id", "")
+    ref_path = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id else None
+    if not ref_path or not Path(ref_path).exists():
+        raise RuntimeError(
+            "IndexTTS-2 requires a reference WAV (voice prompt). "
+            "Upload a 5-30s WAV clip first, then synthesise."
+        )
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        tmp = f.name
+    try:
+        inst.infer(audio_prompt=ref_path, text=text, output_path=tmp)
+        wav = Path(tmp).read_bytes()
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+    with wave.open(io.BytesIO(wav), "rb") as wf:
+        sr = wf.getframerate()
+    return wav, sr
+
+# -- 20. Zonos v0.1 --
+def _load_zonos(variant="transformer"):
+    """Zonos v0.1 — Hybrid/Transformer TTS from Zyphra.
+    Install: pip install git+https://github.com/Zyphra/Zonos  +  pip install phonemizer
+    System:  sudo apt install espeak-ng  (already installed by setup_tts_lab.sh)
+    """
+    from zonos.model import Zonos
+    return Zonos.from_pretrained(f"Zyphra/Zonos-v0.1-{variant}", device="cpu")
+
+def _synth_zonos(inst, text, params):
+    import torch
+    from zonos.conditioning import make_cond_dict
+
+    speaker = None
+    ref_id  = params.get("audio_prompt_id", "")
+    if ref_id:
+        ref_path = UPLOAD_DIR / f"{ref_id}.wav"
+        if ref_path.exists():
+            try:
+                import torchaudio
+                wav_t, sr_r = torchaudio.load(str(ref_path))
+                speaker = inst.make_speaker_embedding(wav_t, sr_r)
+            except Exception:
+                pass
+
+    emotion = [
+        float(params.get("happiness", 0.3)),
+        float(params.get("sadness",   0.05)),
+        float(params.get("disgust",   0.05)),
+        float(params.get("fear",      0.05)),
+        float(params.get("surprise",  0.1)),
+        float(params.get("anger",     0.05)),
+        float(params.get("other",     0.2)),
+        float(params.get("neutral",   0.2)),
+    ]
+    cond = make_cond_dict(
+        text=text,
+        language=params.get("language", "en-us"),
+        speaker=speaker,
+        speaking_rate=float(params.get("speaking_rate", 13.0)),
+        emotion=emotion,
+    )
+    conditioning = inst.prepare_conditioning(cond)
+    with torch.no_grad():
+        codes = inst.generate(
+            conditioning,
+            max_new_tokens=int(float(params.get("max_new_tokens", 1024))),
+            disable_torch_compile=True,
+        )
+    wavs = inst.autoregressive_model.decode(codes)
+    arr  = wavs[0].squeeze().cpu().numpy().astype(np.float32)
+    return _to_wav(arr, 44000), 44000
+
+# -- 21. OpenVoice v2 --
+def _load_openvoice():
+    """OpenVoice v2 — MeloTTS base + tone-color conversion. MyShell AI.
+    Install: pip install git+https://github.com/myshell-ai/OpenVoice
+    Checkpoints (v1 or v2 layout):
+      sudo ln -sfn /opt/models/huggingface/hub/models--myshell-ai--OpenVoice/snapshots/<hash>/checkpoints \\
+                   /opt/models/openvoice_v2
+    Supports both v1 (base_speakers/EN/) and v2 (base_speakers/ses/) layouts.
+    """
+    import torch
+    from openvoice.api import ToneColorConverter
+    from melo.api import TTS as MeloTTS
+
+    ckpt_dir = OPENVOICE_MODELS_DIR / "converter"
+    if not (ckpt_dir / "config.json").exists():
+        raise FileNotFoundError(
+            f"OpenVoice checkpoints missing at {OPENVOICE_MODELS_DIR}.\n"
+            f"Run: sudo ln -sfn <hf_snapshot>/checkpoints /opt/models/openvoice_v2"
+        )
+    converter = ToneColorConverter(str(ckpt_dir / "config.json"), device="cpu")
+    converter.load_ckpt(str(ckpt_dir / "checkpoint.pth"))
+    base_tts  = MeloTTS(language="EN", device="cpu")
+
+    base_se = {}
+    ses_dir = OPENVOICE_MODELS_DIR / "base_speakers" / "ses"  # v2 layout
+    en_dir  = OPENVOICE_MODELS_DIR / "base_speakers" / "EN"   # v1 layout
+    if ses_dir.exists():
+        for p in ses_dir.glob("*.pth"):
+            base_se[p.stem] = torch.load(str(p), map_location="cpu", weights_only=False)
+    elif en_dir.exists():
+        for fname, key in [("en_default_se.pth", "en_default"), ("en_style_se.pth", "en_style")]:
+            p = en_dir / fname
+            if p.exists():
+                base_se[key] = torch.load(str(p), map_location="cpu", weights_only=False)
+    return {"converter": converter, "base_tts": base_tts, "base_se": base_se}
+
+def _synth_openvoice(inst, text, params):
+    import torch
+    converter = inst["converter"]
+    base_tts  = inst["base_tts"]
+    base_se   = inst["base_se"]
+
+    spk_key = params.get("speaker", "EN-US")
+    sp_ids  = dict(base_tts.hps.data.spk2id)
+    sp_id   = sp_ids.get(spk_key) or sp_ids.get("EN-US") or list(sp_ids.values())[0]
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f: src_tmp = f.name
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f: out_tmp = f.name
+    try:
+        base_tts.tts_to_file(text, sp_id, src_tmp, speed=float(params.get("speed", 0.85)))
+        se_key = spk_key.lower().replace("-", "_")
+        src_se = base_se.get(se_key) or base_se.get("en_us") or (list(base_se.values())[0] if base_se else None)
+        ref_id = params.get("audio_prompt_id", "")
+        ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
+        if ref_path and ref_path.exists():
+            from openvoice import se_extractor
+            target_se, _ = se_extractor.get_se(str(ref_path), converter, vad=True)
+        else:
+            target_se = src_se
+        if src_se is not None and target_se is not None:
+            converter.convert(
+                audio_src_path=src_tmp, src_se=src_se, tgt_se=target_se,
+                output_path=out_tmp, tau=float(params.get("tau", 0.3)),
+            )
+            wav = Path(out_tmp).read_bytes()
+        else:
+            wav = Path(src_tmp).read_bytes()
+        with wave.open(io.BytesIO(wav), "rb") as wf:
+            sr = wf.getframerate()
+        return wav, sr
+    finally:
+        Path(src_tmp).unlink(missing_ok=True)
+        Path(out_tmp).unlink(missing_ok=True)
+
 # ============================================================
 # REGISTRY + AVAILABILITY + DISPATCH
 # ============================================================
 LOADERS  = {"piper":_load_piper,"kokoro":_load_kokoro,"melo":_load_melo,
-            "bark":_load_bark,"styletts2":_load_styletts2,"f5tts":_load_f5tts,
-            "dia":_load_dia,"xtts":_load_xtts,"cosyvoice":_load_cosyvoice,
-            "parler":_load_parler,"chatterbox":_load_chatterbox}
+            "chattts":_load_chattts,"outetts":_load_outetts,"bark":_load_bark,
+            "styletts2":_load_styletts2,"f5tts":_load_f5tts,"dia":_load_dia,
+            "xtts":_load_xtts,"cosyvoice":_load_cosyvoice,"parler":_load_parler,
+            "chatterbox":_load_chatterbox,
+            "fishspeech":_load_fishspeech,"csm":_load_csm,"qwen3tts":_load_qwen3tts,
+            "orpheus":_load_orpheus,"neutts":_load_neutts,"indextts":_load_indextts,
+            "zonos":_load_zonos,"openvoice":_load_openvoice}
 SYNTHERS = {"piper":_synth_piper,"kokoro":_synth_kokoro,"melo":_synth_melo,
-            "bark":_synth_bark,"styletts2":_synth_styletts2,"f5tts":_synth_f5tts,
-            "dia":_synth_dia,"xtts":_synth_xtts,"cosyvoice":_synth_cosyvoice,
-            "parler":_synth_parler,"chatterbox":_synth_chatterbox}
+            "chattts":_synth_chattts,"outetts":_synth_outetts,"bark":_synth_bark,
+            "styletts2":_synth_styletts2,"f5tts":_synth_f5tts,"dia":_synth_dia,
+            "xtts":_synth_xtts,"cosyvoice":_synth_cosyvoice,"parler":_synth_parler,
+            "chatterbox":_synth_chatterbox,
+            "fishspeech":_synth_fishspeech,"csm":_synth_csm,"qwen3tts":_synth_qwen3tts,
+            "orpheus":_synth_orpheus,"neutts":_synth_neutts,"indextts":_synth_indextts,
+            "zonos":_synth_zonos,"openvoice":_synth_openvoice}
 
-_import_cache = {}
-def _available(name):
-    if name in _import_cache: return _import_cache[name]
-    def _check():
-        import importlib.util as ilu
-        pkg_map = {
-            "piper":"piper","kokoro":"kokoro_onnx","melo":"melo",
-            "bark":"bark","styletts2":"styletts2","f5tts":"f5_tts",
-            "dia":"dia","xtts":"TTS","cosyvoice":None,"parler":"parler_tts","chatterbox":"chatterbox",
-        }
-        pkg = pkg_map.get(name)
-        if pkg and not ilu.find_spec(pkg): return False, f"pip install {pkg} needed"
-        if name == "piper" and not _piper_voices(): return False, "No .onnx voice found"
-        if name == "kokoro" and not (MODELS_DIR/"kokoro-v1.0.onnx").exists(): return False, "kokoro-v1.0.onnx missing"
-        if name == "cosyvoice":
-            if not COSYVOICE_DIR.exists(): return False, "git clone FunAudioLLM/CosyVoice /opt/CosyVoice"
-            if not (COSYVOICE_DIR/"pretrained_models"/"CosyVoice2-0.5B").exists(): return False, "Model not downloaded"
-        stmts = {
-            "piper":     "from piper.voice import PiperVoice",
-            "kokoro":    "from kokoro_onnx import Kokoro",
-            "melo":      "from melo.api import TTS as _M",
-            "bark":      "from bark import generate_audio",
-            "styletts2": "from styletts2 import tts as _st2",
-            "f5tts":     "from f5_tts.api import F5TTS",
-            "dia":       "from dia.model import Dia",
-            "xtts":      "from TTS.api import TTS as _X",
-            "cosyvoice": "from cosyvoice.cli.cosyvoice import CosyVoice2",
-            "parler":    "from parler_tts import ParlerTTSForConditionalGeneration",
-            "chatterbox":"from chatterbox.tts import ChatterboxTTS",
-        }
-        stmt = stmts.get(name, "")
-        if stmt:
-            if name == "xtts": _patch_transformers_for_coqui()
-            if name == "cosyvoice":
-                for p in [str(COSYVOICE_DIR), str(COSYVOICE_DIR/"third_party"/"Matcha-TTS")]:
-                    if p not in sys.path: sys.path.insert(0, p)
-            try: exec(stmt, {})
-            except ImportError as e: return False, f"Import error: {e}"
-        return True, ""
-    r = _check()
-    _import_cache[name] = r
-    return r
+_import_cache: Dict[str, Tuple[bool, str]] = {}
+_import_cache_lock = threading.Lock()
+
+def _available(name: str) -> Tuple[bool, str]:
+    """Return (available, reason) for *name*, running the check in a thread-pool
+    worker so the event-loop thread is never blocked by heavy C-extension imports."""
+    with _import_cache_lock:
+        if name in _import_cache:
+            return _import_cache[name]
+    # Not cached yet — compute synchronously (called from executor thread at startup,
+    # or on first synthesise click before the sweep has reached this engine).
+    result = _check_available(name)
+    with _import_cache_lock:
+        _import_cache[name] = result
+    return result
+
+def _check_available(name: str) -> Tuple[bool, str]:
+    """Synchronous availability probe — uses find_spec + fs checks only.
+    No exec() / actual imports so the sweep is thread-safe and instant."""
+    import importlib.util as ilu
+    pkg_map = {
+        "piper":"piper","kokoro":"kokoro_onnx","melo":"melo",
+        "chattts":"ChatTTS","outetts":"outetts","bark":"bark","styletts2":"styletts2","f5tts":"f5_tts",
+        "dia":"dia","xtts":"TTS","cosyvoice":None,"parler":"parler_tts","chatterbox":"chatterbox",
+        "fishspeech":"fish_speech","csm":None,"qwen3tts":"transformers",
+        "orpheus":"orpheus_tts","neutts":None,"indextts":"indextts",
+        "zonos":"zonos","openvoice":"openvoice",
+    }
+    # ── 1. Quick package-present check (find_spec — no import, no C-ext init) ──
+    pkg = pkg_map.get(name)
+    if pkg and not ilu.find_spec(pkg):
+        return False, f"pip install {pkg} needed"
+    # ── 2. Engine-specific file / directory checks ─────────────────────────────
+    if name == "piper":
+        if not _piper_voices(): return False, "No .onnx voice found in models/"
+    elif name == "kokoro":
+        if not (MODELS_DIR/"kokoro-v1.0.onnx").exists(): return False, "kokoro-v1.0.onnx missing"
+    elif name == "cosyvoice":
+        if not COSYVOICE_DIR.exists(): return False, "git clone FunAudioLLM/CosyVoice /opt/CosyVoice"
+        if not (COSYVOICE_DIR/"pretrained_models"/"CosyVoice2-0.5B").exists():
+            return False, "CosyVoice2-0.5B model not downloaded"
+    elif name == "neutts":
+        return False, "NeuTTS Air: not configured — edit _load_neutts() in tts_lab.py"
+    elif name == "openvoice":
+        if not (OPENVOICE_MODELS_DIR/"converter"/"config.json").exists():
+            return False, f"Checkpoints missing at {OPENVOICE_MODELS_DIR}"
+    elif name == "csm":
+        # Sesame CSM is from GitHub (generator.py), NOT the PyPI 'csm' package
+        if not ilu.find_spec("generator"):
+            return False, "Sesame CSM needs: pip install git+https://github.com/SesameAILabs/csm + huggingface-cli login"
+    elif name == "indextts":
+        if not ilu.find_spec("indextts"):
+            return False, "pip install git+https://github.com/index-tts/IndexTTS"
+    return True, ""
 
 def _do_synth(name, text, params):
     st = _state[name]
@@ -490,17 +937,40 @@ def _do_synth(name, text, params):
             wanted = params.get("voice", "en_US-ryan-high")
             if st["instance"] and st.get("loaded_voice") != wanted:
                 _safe_del(st["instance"]); st["instance"] = None
+        if name == "outetts":
+            wanted = params.get("model_path", "OuteAI/OuteTTS-0.3-500M")
+            if st["instance"] and st.get("loaded_model") != wanted:
+                _safe_del(st["instance"]); st["instance"] = None
+        if name == "parler":
+            wanted = params.get("model_id", "parler-tts/parler-tts-mini-v1")
+            if st["instance"] and st.get("loaded_model") != wanted:
+                _safe_del(st["instance"]); st["instance"] = None
+        if name == "zonos":
+            wanted = params.get("variant", "transformer")
+            if st["instance"] and st.get("loaded_model") != wanted:
+                _safe_del(st["instance"]); st["instance"] = None
         if st["instance"] is None:
             ok, reason = _available(name)
             if not ok: raise RuntimeError(f"Not available: {reason}")
             if MODEL_INFO[name]["heavy"]: _evict_heavy(keep=name)
             st["status"] = "loading"; t0 = time.perf_counter()
             try:
-                st["instance"] = (_load_piper(params.get("voice","en_US-ryan-high"))
-                                  if name == "piper" else LOADERS[name]())
+                if name == "piper":
+                    st["instance"] = _load_piper(params.get("voice", "en_US-ryan-high"))
+                elif name == "outetts":
+                    st["instance"] = _load_outetts(params.get("model_path", "OuteAI/OuteTTS-0.3-500M"))
+                elif name == "parler":
+                    st["instance"] = _load_parler(params.get("model_id", "parler-tts/parler-tts-mini-v1"))
+                elif name == "zonos":
+                    st["instance"] = _load_zonos(params.get("variant", "transformer"))
+                else:
+                    st["instance"] = LOADERS[name]()
                 st["load_time_s"] = round(time.perf_counter()-t0, 2)
                 st["status"] = "loaded"; st["error"] = ""
-                if name == "piper": st["loaded_voice"] = params.get("voice","en_US-ryan-high")
+                if name == "piper":   st["loaded_voice"] = params.get("voice", "en_US-ryan-high")
+                if name == "outetts": st["loaded_model"] = params.get("model_path", "OuteAI/OuteTTS-0.3-500M")
+                if name == "parler":  st["loaded_model"] = params.get("model_id", "parler-tts/parler-tts-mini-v1")
+                if name == "zonos":   st["loaded_model"] = params.get("variant", "transformer")
             except Exception as e:
                 st["status"] = "error"; st["error"] = str(e); raise
     t0 = time.perf_counter()
@@ -521,16 +991,40 @@ class SynthReq(BaseModel):
     text:   str
     params: dict = {}
 
+# Pre-warm the availability cache in a background thread so the event loop is
+# never blocked by heavy C-extension imports (outetts→vllm, fish_speech→vllm, etc.)
+_sweep_done = threading.Event()
+
+def _sweep_availability():
+    """Run once at startup: probe every engine and populate _import_cache."""
+    for n in MODEL_ORDER:
+        try:
+            _available(n)
+        except Exception:
+            pass
+    _sweep_done.set()
+
+@app.on_event("startup")
+async def _startup():
+    t = threading.Thread(target=_sweep_availability, name="avail-sweep", daemon=True)
+    t.start()
+
 @app.get("/", response_class=HTMLResponse)
-async def index(): return HTMLResponse(_build_page())
+async def index():
+    # Serve the page immediately; badges update via /status polling
+    return HTMLResponse(_build_page())
 
 @app.get("/status")
 async def status():
     models = {}
+    sweep_running = not _sweep_done.is_set()
     for n in MODEL_ORDER:
         ok, reason = _available(n); st = _state[n]
         models[n] = {**MODEL_INFO[n], "available":ok, "reason":reason,
                      "status":st["status"], "load_time_s":st["load_time_s"], "error":st["error"]}
+        if sweep_running and n not in _import_cache:
+            models[n]["available"] = False
+            models[n]["reason"]    = "checking..."
     tot, used, free = _ram_mb()
     return JSONResponse({"models":models, "system":{"total":tot,"used":used,"free":free}})
 
@@ -540,6 +1034,7 @@ async def voices(model):
         "piper":     _piper_voices() or ["en_US-ryan-high"],
         "kokoro":    ALL_KOKORO_VOICES,
         "melo":      ["EN-Default","EN-US","EN-BR","EN-AU","EN_INDIA"],
+        "outetts":   [v for v,_ in OUTETTS_SPEAKERS],
         "bark":      [v for v,_ in BARK_PRESETS],
         "xtts":      ALL_XTTS_SPEAKERS,
         "cosyvoice": ["English Female","English Male"],
@@ -551,7 +1046,7 @@ async def synthesize(model, req: SynthReq):
     if model not in MODEL_ORDER: return JSONResponse({"error":f"Unknown: {model}"}, status_code=400)
     if not req.text.strip(): return JSONResponse({"error":"Empty text"}, status_code=400)
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         result = await loop.run_in_executor(None, _do_synth, model, req.text, req.params)
         return JSONResponse(result)
     except Exception as e:
@@ -563,6 +1058,17 @@ async def unload_model(model):
     if st and st["instance"] is not None:
         _safe_del(st["instance"]); st["instance"] = None; st["status"] = "unloaded"
     return {"unloaded": model}
+
+@app.post("/refresh")
+async def refresh_availability():
+    # Clear the cache and re-sweep in background
+    with _import_cache_lock:
+        _import_cache.clear()
+    _sweep_done.clear()
+    t = threading.Thread(target=_sweep_availability, name="avail-resweep", daemon=True)
+    t.start()
+    return JSONResponse({"refreshed": True, "models": list(MODEL_ORDER),
+                         "note": "sweep running in background — poll /status in ~60 s"})
 
 @app.post("/upload")
 async def upload_audio(file: UploadFile = File(...)):
@@ -637,6 +1143,37 @@ def _build_params(name):
               ("EN-BR","EN-BR British"),("EN-AU","EN-AU Australian"),("EN_INDIA","EN_INDIA Indian")]
         return _row(_grp("Speaker (5 accents)", _sel("speaker",sp,"EN-US")),
                     _grp('Speed <span class="range-val">0.85</span>', _rng("speed","0.5","1.5","0.05","0.85")))
+
+    if name == "chattts":
+        return (_row(
+            _grp("Prompt speed token", _sel("prompt", CHATTTS_SPEEDS, "[speed_5]")),
+            _grp('Temperature <span class="range-val">0.3</span>', _rng("temperature","0.1","1.5","0.05","0.3")),
+            _grp('Top-P <span class="range-val">0.7</span>', _rng("top_p","0.1","1.0","0.01","0.7")),
+            _grp('Top-K <span class="range-val">20</span>', _rng("top_k","1","100","1","20")),
+        )+_row(
+            _grp('Repetition penalty <span class="range-val">1.05</span>', _rng("repetition_penalty","1.0","2.0","0.01","1.05")),
+            _grp('Max new tokens <span class="range-val">512</span>', _rng("max_new_token","128","2048","64","512")),
+            _grp('Seed <span class="range-val">0</span>', _rng("seed","0","9999","1","0","0=random")),
+        )+_row(
+            _grp("Skip refine text", _sel("skip_refine_text", [("true","true"),("false","false")], "true")),
+        )+f'<div class="param-row">{_upload_widget("ct-file","ct-status","ct-prompt-id","Reference WAV (optional — derive ChatTTS speaker embedding)")}</div>')
+
+    if name == "outetts":
+        vc = ('<textarea class="form-control form-control-sm bg-dark text-light border-secondary" data-param="voice_characteristics" rows="3" placeholder="Optional character description, e.g. elderly man, warm, raspy, hesitant"></textarea>')
+        transcript = ('<input type="text" class="form-control form-control-sm bg-dark text-light border-secondary" data-param="transcript" placeholder="Optional transcript of uploaded reference WAV">')
+        return (_row(
+            _grp("Model", _sel("model_path", OUTETTS_MODELS, "OuteAI/OuteTTS-0.3-500M")),
+            _grp("Default speaker", _sel("speaker", OUTETTS_SPEAKERS, "en-female-1-neutral")),
+        )+_row(
+            _grp('Temperature <span class="range-val">0.4</span>', _rng("temperature","0.1","1.5","0.05","0.4")),
+            _grp('Repetition penalty <span class="range-val">1.1</span>', _rng("repetition_penalty","1.0","2.0","0.01","1.1")),
+            _grp('Top-K <span class="range-val">40</span>', _rng("top_k","1","100","1","40")),
+            _grp('Top-P <span class="range-val">0.9</span>', _rng("top_p","0.1","1.0","0.01","0.9")),
+            _grp('Min-P <span class="range-val">0.05</span>', _rng("min_p","0.0","0.5","0.01","0.05")),
+        )+_row(_grp('Max length <span class="range-val">32768</span>', _rng("max_length","4096","32768","512","32768")))
+        +f'<div class="param-row">{_upload_widget("ot-file","ot-status","ot-prompt-id","Reference WAV (optional — create OuteTTS speaker)")}</div>'
+        +f'<div class="param-row">{_grp("Reference transcript", transcript)}</div>'
+        +f'<div class="param-row" style="flex-direction:column"><div class="param-group" style="max-width:100%;width:100%"><label>Voice characteristics</label>{vc}</div></div>')
 
     if name == "bark":
         preset_opts = [(v,l) for v,l in BARK_PRESETS]
@@ -717,7 +1254,8 @@ def _build_params(name):
             f'data-txt="{p}" style="font-size:.72rem">{p[:42]}...</button>' for p in presets)
         ta = (f'<textarea class="form-control form-control-sm bg-dark text-light border-secondary"'
               f' data-param="description" rows="3">{presets[0]}</textarea>')
-        return (f'<div class="param-row" style="flex-direction:column">'
+        return (_row(_grp("Model", _sel("model_id", PARLER_MODELS, "parler-tts/parler-tts-mini-v1")))
+               +f'<div class="param-row" style="flex-direction:column">'
                 f'<div class="param-group" style="max-width:100%;width:100%"><label>Voice description</label>{ta}</div>'
                 f'<div class="d-flex gap-1 flex-wrap mt-1">{preset_btns}</div></div>'
                +_row(_grp('Temperature <span class="range-val">1.0</span>', _rng("temperature","0.1","2.0","0.1","1.0")),
@@ -730,43 +1268,84 @@ def _build_params(name):
             _grp('Seed <span class="range-val">0</span>', _rng("seed","0","9999","1","0","0=random")),
         )+f'<div class="param-row">{_upload_widget("cb-file","cb-status","cb-prompt-id","Voice cloning reference WAV (optional)")}</div>')
 
+    # -- 14. Fish Speech --
+    if name == "fishspeech":
+        return (f'<div class="param-row">{_upload_widget("fs2-file","fs2-status","fs2-prompt-id","Reference WAV (optional — enables voice cloning)")}</div>'
+               +_row(_grp('Speed <span class="range-val">1.0</span>', _rng("speed","0.5","2.0","0.1","1.0")))
+               +'<p class="text-muted small mt-1">Without reference: synthesises in default voice. Upload a 5-30s WAV to clone any voice.</p>')
+
+    # -- 15. Sesame CSM 1B --
+    if name == "csm":
+        hint = ('<div class="alert alert-info py-2 small mt-2 mb-0">'
+                'Gated model — run <code>huggingface-cli login</code> before first load. '
+                'Speaker 0 is male, 1-2 are alternatives.</div>')
+        return (_row(_grp("Speaker", _sel("speaker_id", CSM_SPEAKERS, "0")),
+                     _grp('Max audio (ms) <span class="range-val">30000</span>', _rng("max_audio_length_ms","5000","60000","1000","30000")))
+               +hint)
+
+    # -- 16. Qwen3-TTS --
+    if name == "qwen3tts":
+        return (f'<div class="param-row">{_upload_widget("q3-file","q3-status","q3-prompt-id","Reference WAV (optional — for voice conditioning)")}</div>'
+               +'<p class="text-muted small mt-1">Model auto-downloads from <code>Qwen/Qwen3-TTS</code> on HuggingFace on first load. '
+               'Check HuggingFace for available model variants.</p>')
+
+    # -- 17. Orpheus 3B --
+    if name == "orpheus":
+        emotion_hint = ('<div class="alert alert-info py-2 small mt-2 mb-0">'
+                        '<strong>Emotion tags (embed in text):</strong><br>'
+                        '<code>&lt;laugh&gt;</code> &nbsp; <code>&lt;chuckle&gt;</code> &nbsp; <code>&lt;sigh&gt;</code> &nbsp; '
+                        '<code>&lt;cough&gt;</code> &nbsp; <code>&lt;sniffle&gt;</code> &nbsp; <code>&lt;groan&gt;</code> &nbsp; '
+                        '<code>&lt;yawn&gt;</code> &nbsp; <code>&lt;gasp&gt;</code><br>'
+                        '<em>Example: "Oh my goodness &lt;sigh&gt; just a moment dear &lt;cough&gt; I need to find my glasses."</em>'
+                        '</div>')
+        return (_row(_grp("Voice", _sel("voice", ORPHEUS_VOICES, "tara")))
+               +emotion_hint)
+
+    # -- 18. NeuTTS Air --
+    if name == "neutts":
+        return ('<div class="alert alert-warning py-2 small">'
+                '⚠ <strong>NeuTTS Air is not yet configured.</strong><br>'
+                'Edit <code>_load_neutts()</code> and <code>_synth_neutts()</code> in <code>tts_lab.py</code> '
+                'with the correct package import once installed.</div>')
+
+    # -- 19. IndexTTS-2 --
+    if name == "indextts":
+        return (f'<div class="param-row">{_upload_widget("idx-file","idx-status","idx-prompt-id","Reference WAV (REQUIRED — 5-30s of target voice)")}</div>'
+               +'<p class="text-muted small mt-1">IndexTTS-2 requires a reference WAV for every synthesis call. '
+               'Upload a clip of the voice you want to clone, then click Synthesise.</p>')
+
+    # -- 20. Zonos v0.1 --
+    if name == "zonos":
+        lang_opts = [("en-us","English US"),("en-gb","English GB"),("de","German"),("fr","French"),
+                     ("ja","Japanese"),("ko","Korean"),("zh","Chinese"),("es","Spanish")]
+        emotion_info = ('<div class="alert alert-info py-2 small mt-2 mb-0">'
+                        '<strong>Emotion vector</strong> — sliders below control the 8-dim emotion blend. '
+                        'Higher <em>neutral</em> + low rest = calm elderly speech. '
+                        'Raise <em>other</em> for natural variation.</div>')
+        return (_row(_grp("Variant", _sel("variant", ZONOS_VARIANTS, "transformer")),
+                     _grp("Language", _sel("language", lang_opts, "en-us")),
+                     _grp('Speaking rate <span class="range-val">13.0</span>', _rng("speaking_rate","5.0","25.0","0.5","13.0","words/sec")),
+                     _grp('Max tokens <span class="range-val">1024</span>', _rng("max_new_tokens","256","2048","64","1024")))
+               +emotion_info
+               +_row(_grp('Happiness <span class="range-val">0.3</span>', _rng("happiness","0.0","1.0","0.05","0.3")),
+                     _grp('Sadness <span class="range-val">0.05</span>', _rng("sadness","0.0","1.0","0.05","0.05")),
+                     _grp('Surprise <span class="range-val">0.1</span>', _rng("surprise","0.0","1.0","0.05","0.1")),
+                     _grp('Neutral <span class="range-val">0.2</span>', _rng("neutral","0.0","1.0","0.05","0.2")),
+                     _grp('Other <span class="range-val">0.2</span>', _rng("other","0.0","1.0","0.05","0.2")))
+               +f'<div class="param-row">{_upload_widget("zn-file","zn-status","zn-prompt-id","Reference WAV (optional — speaker voice cloning)")}</div>')
+
+    # -- 21. OpenVoice v2 --
+    if name == "openvoice":
+        sp = [("EN-US","EN-US American"),("EN-BR","EN-BR British"),("EN-AU","EN-AU Australian")]
+        return ('<div class="alert alert-secondary py-2 small mb-2">MeloTTS synthesises; tone-color conversion adapts timbre. '
+                'Without reference WAV: uses the selected base speaker identity directly.</div>'
+               +_row(_grp("Base speaker", _sel("speaker", sp, "EN-US")),
+                     _grp('Speed <span class="range-val">0.85</span>', _rng("speed","0.5","1.5","0.05","0.85")),
+                     _grp('Tau (blend) <span class="range-val">0.3</span>', _rng("tau","0.0","1.0","0.05","0.3","0=original, 1=full clone")))
+               +f'<div class="param-row">{_upload_widget("ov-file","ov-status","ov-prompt-id","Reference WAV (optional — voice to clone via tone-color conversion)")}</div>')
+
     return ""
 
-def _build_tabs():
-    tabs = []; panes = []
-    for n in MODEL_ORDER:
-        info  = MODEL_INFO[n]
-        ok, reason = _available(n)
-        stars = _stars(info["arthur_fit"])
-        badge = ('<span class="badge bg-success ms-1">available</span>' if ok else
-                 f'<span class="badge bg-danger ms-1" title="{reason}">missing</span>')
-        note_icon = f'<span class="text-muted" style="font-size:.75rem" title="{info["notes"]}">ℹ️</span>'
-        rtf_badge = f'<span class="rtf-badge">{info["rtf_est"]}</span>'
-        tabs.append(f'<button class="nav-link{" active" if n==MODEL_ORDER[0] else ""}" '
-                    f'id="tab-btn-{n}" data-bs-toggle="tab" data-bs-target="#tab-{n}" type="button">'
-                    f'{info["label"]}{badge}</button>')
-        params_html = _build_params(n)
-        panes.append(
-            f'<div class="tab-pane fade{" show active" if n==MODEL_ORDER[0] else ""}" id="tab-{n}">'
-            f'<div class="model-header">'
-            f'<div><span class="model-title">{info["label"]}</span>'
-            f' {rtf_badge} {stars} {note_icon}</div>'
-            f'<div class="model-meta text-muted small">'
-            f'Weights: <b>{info["size"]}</b> &nbsp; RAM: <b>~{info["ram_est_mb"]} MB</b> &nbsp; '
-            f'Est. RTF: <b>{info["rtf_est"]}</b>'
-            f'{"  <span class=badge+bg-warning+text-dark>heavy</span>".replace("+", " ") if info["heavy"] else ""}'
-            f'</div></div>'
-            f'<div class="params-area">{params_html}</div>'
-            f'{"<hr>" if not ok else ""}'
-            f'{("<p class=text-warning>⚠ " + reason + "</p>") if not ok else ""}'
-            f'<button class="btn btn-primary btn-synth mt-2" onclick="synth(\'{n}\')">'
-            f'▶ Synthesise with {info["label"]}</button>'
-            f'<button class="btn btn-outline-secondary btn-sm ms-2 mt-2" onclick="unload(\'{n}\')">'
-            f'⏏ Unload</button>'
-            f'</div>')
-    nav  = f'<div class="nav nav-tabs flex-wrap" id="model-tabs">{"".join(tabs)}</div>'
-    pane = f'<div class="tab-content" id="model-tab-content">{"".join(panes)}</div>'
-    return nav + pane
 
 def _build_presets():
     btns = " ".join(
@@ -944,6 +1523,17 @@ async function refreshStatus() {
 
 setInterval(refreshStatus, 6000);
 window.addEventListener('load', refreshStatus);
+
+async function refreshAvailability() {
+  const btn = document.getElementById('btn-refresh');
+  if (btn) btn.disabled = true;
+  try {
+    await fetch(`${API}/refresh`, {method: 'POST'});
+    await refreshStatus();
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
 </script>"""
 
     def _result_card(n):
@@ -959,16 +1549,6 @@ window.addEventListener('load', refreshStatus);
                 f'<pre class="error-msg text-danger small mt-2"></pre>'
                 f'</div>')
 
-    tabs_html = _build_tabs()
-    # Inject spinner + result card into each tab pane
-    for n in MODEL_ORDER:
-        rc = _result_card(n)
-        tabs_html = tabs_html.replace(
-            f'<div class="tab-pane fade{" show active" if n==MODEL_ORDER[0] else ""}" id="tab-{n}">',
-            f'<div class="tab-pane fade{" show active" if n==MODEL_ORDER[0] else ""}" id="tab-{n}">')
-        tabs_html += rc  # appended below
-
-    # Re-build with result cards properly inside panes
     tabs = []; panes = []
     for n in MODEL_ORDER:
         info = MODEL_INFO[n]
@@ -999,14 +1579,17 @@ window.addEventListener('load', refreshStatus);
 
     return f"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Arthur TTS Lab — 11 Engines</title>
+<title>Arthur TTS Lab — {len(MODEL_ORDER)} Engines</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 {CSS}</head><body>
 <div class="container-fluid py-3">
-<h2 class="mb-1">🎙 Arthur TTS Lab <small class="text-muted fs-6">11 Engines · {len(MODEL_ORDER)} models</small></h2>
-<div class="mb-2">
-  <div class="ram-bar-wrap"><div class="ram-bar" id="ram-bar" style="width:0%"></div></div>
-  <small id="ram-text" class="text-muted">Loading RAM info...</small>
+<h2 class="mb-1">🎙 Arthur TTS Lab <small class="text-muted fs-6">{len(MODEL_ORDER)} Engines</small></h2>
+<div class="mb-2 d-flex align-items-center gap-3 flex-wrap">
+  <div>
+    <div class="ram-bar-wrap"><div class="ram-bar" id="ram-bar" style="width:0%"></div></div>
+    <small id="ram-text" class="text-muted">Loading RAM info...</small>
+  </div>
+  <button id="btn-refresh" class="btn btn-sm btn-outline-secondary" onclick="refreshAvailability()" title="Re-check which packages are installed">🔄 Refresh availability</button>
 </div>
 <div class="status-grid" id="status-grid"></div>
 
