@@ -255,10 +255,26 @@ def _synth_piper(inst, text, params):
 
 # -- 2. Kokoro --
 def _load_kokoro():
+    # kokoro-onnx 0.5.x calls EspeakWrapper.set_data_path() but phonemizer 3.3+
+    # renamed it.  Also point espeak at system data (espeakng-loader bundled path
+    # is a CI build path that doesn't exist on the VM).
+    ESPEAK_DATA = "/usr/lib/x86_64-linux-gnu/espeak-ng-data"
+    try:
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper as _EW
+        if not hasattr(_EW, "set_data_path"):
+            _EW.set_data_path = classmethod(lambda cls, p: None)
+        import os; os.environ.setdefault("ESPEAK_DATA_PATH", ESPEAK_DATA)
+    except Exception:
+        pass
     import onnxruntime as ort
     from kokoro_onnx import Kokoro
     mp = MODELS_DIR/"kokoro-v1.0.onnx"; vp = MODELS_DIR/"voices-v1.0.bin"
-    if not mp.exists(): raise FileNotFoundError(f"kokoro-v1.0.onnx missing")
+    if not mp.exists(): raise FileNotFoundError("kokoro-v1.0.onnx missing")
+    try:
+        from kokoro_onnx.config import EspeakConfig
+        return Kokoro(str(mp), str(vp), espeak_config=EspeakConfig(data_path=ESPEAK_DATA))
+    except (ImportError, TypeError, AttributeError):
+        pass
     opts = ort.SessionOptions(); opts.intra_op_num_threads = _N_CORES
     opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
     try:    return Kokoro(str(mp), str(vp), sess_options=opts)
