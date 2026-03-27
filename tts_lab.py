@@ -120,28 +120,28 @@ INDEXTTS_DIR         = Path("/opt/models/indextts")
 
 # -- Model registry --
 MODEL_INFO = {
-    "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"~100x RT","ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only. Real-time. Best for production.","arthur_fit":2},
-    "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"~35x RT", "ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice.","arthur_fit":5},
-    "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"~15x RT", "ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older.","arthur_fit":3},
-    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"TBD",      "ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts, speaker sampling, and optional reference-speaker extraction.","arthur_fit":4},
-    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"TBD",      "ram_est_mb":1600, "heavy":True, "notes":"Prompt-controlled character voice with default speaker or uploaded reference-speaker creation.","arthur_fit":4},
-    "bark":      {"label":"Bark",         "size":"1.3 GB",   "rtf_est":"~30x RT", "ram_est_mb":1500, "heavy":True, "notes":"Unique emotion tokens: [laughs] [sighs] [clears throat] [hesitantly] in text.","arthur_fit":5},
-    "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"~2x RT",  "ram_est_mb":1500, "heavy":True, "notes":"Fastest high-quality neural TTS. Style transfer from reference WAV. Alpha/beta control.","arthur_fit":4},
-    "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"~4x RT",  "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Flow matching. Upload 5-15s reference WAV.","arthur_fit":4},
-    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"~20x RT", "ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. March 2025.","arthur_fit":5},
-    "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"~3x RT",  "ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. Best multi-speaker quality.","arthur_fit":5},
-    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"~5x RT",  "ram_est_mb":2500, "heavy":True, "notes":"Chinese-first with English zero-shot support.","arthur_fit":3},
-    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"~20x RT", "ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description. Includes Mini Expresso option.","arthur_fit":4},
-    "chatterbox": {"label":"Chatterbox",   "size":"3.0 GB",   "rtf_est":"~12x RT", "ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion.","arthur_fit":5},
+    "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"RTF 0.37 (CPU)", "ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only. Real-time at RTF=0.37. Best for production.","arthur_fit":2},
+    "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"RTF 2.83 (CPU)","ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice. Needs GPU for real-time.","arthur_fit":5},
+    "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"RTF 1.01 (CPU)","ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older. Borderline real-time on CPU.","arthur_fit":3},
+    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"TBD",            "ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts, speaker sampling, and optional reference-speaker extraction.","arthur_fit":4},
+    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"CPU: timeout",  "ram_est_mb":1600, "heavy":True, "notes":"Prompt-controlled character voice. CPU timed out >480s — requires GPU.","arthur_fit":4},
+    "bark":      {"label":"Bark",         "size":"1.3 GB",   "rtf_est":"CPU: timeout",  "ram_est_mb":1500, "heavy":True, "notes":"Unique emotion tokens: [laughs] [sighs] [clears throat] [hesitantly]. CPU timed out >480s — requires GPU.","arthur_fit":5},
+    "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 1.52 (CPU)","ram_est_mb":1500, "heavy":True, "notes":"Fastest high-quality neural TTS. Style transfer from reference WAV. Alpha/beta control.","arthur_fit":4},
+    "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"GPU ~4x RT",    "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Flow matching. Upload 5-15s reference WAV.","arthur_fit":4},
+    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF 38.88 (CPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. Requires GPU.","arthur_fit":5},
+    "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"RTF 3.85 (CPU)","ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. Best multi-speaker quality.","arthur_fit":5},
+    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"GPU ~5x RT",    "ram_est_mb":2500, "heavy":True, "notes":"Chinese-first with English zero-shot support.","arthur_fit":3},
+    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"GPU ~20x RT",  "ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description. Includes Mini Expresso option.","arthur_fit":4},
+    "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"GPU ~12x RT",  "ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion. torchcodec stubbed for CPU.","arthur_fit":5},
     # -- New engines (14-21) --
-    "fishspeech": {"label":"Fish Speech",   "size":"~1.1 GB",  "rtf_est":"~5x RT",  "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning (VQ-VAE codec). Upload 5-30s reference WAV.","arthur_fit":4},
-    "csm":        {"label":"Sesame CSM 1B", "size":"~2 GB",    "rtf_est":"~8x RT",  "ram_est_mb":2000, "heavy":True, "notes":"Conversational Speech Model 1B. Multi-speaker. Context-conditioned. HF login required.","arthur_fit":4},
-    "qwen3tts":   {"label":"Qwen3-TTS",     "size":"~1-3 GB",  "rtf_est":"TBD",     "ram_est_mb":2000, "heavy":True, "notes":"Alibaba Qwen3-based TTS. Natural multilingual speech. Auto-downloads via transformers.","arthur_fit":3},
-    "orpheus":    {"label":"Orpheus 3B",    "size":"~3 GB",    "rtf_est":"~10x RT", "ram_est_mb":3000, "heavy":True, "notes":"LLaMA-3B-based TTS. Emotion tags: <laugh> <sigh> <chuckle> <gasp>. 8 built-in voices.","arthur_fit":5},
-    "neutts":     {"label":"NeuTTS Air",    "size":"TBD",      "rtf_est":"TBD",     "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
-    "indextts":   {"label":"IndexTTS-2",    "size":"~1.5 GB",  "rtf_est":"~6x RT",  "ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning from IndexTeam. Reference WAV required for synthesis.","arthur_fit":4},
-    "zonos":      {"label":"Zonos v0.1",    "size":"~1.2 GB",  "rtf_est":"~8x RT",  "ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate control. 44 kHz output.","arthur_fit":4},
-    "openvoice":  {"label":"OpenVoice v2",  "size":"~600 MB",  "rtf_est":"~10x RT", "ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Zero-shot voice cloning. MyShell AI.","arthur_fit":3},
+    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"GPU ~5x RT",   "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning (VQ-VAE codec). Upload 5-30s reference WAV.","arthur_fit":4},
+    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"GPU ~8x RT",   "ram_est_mb":2000, "heavy":True, "notes":"Conversational Speech Model 1B. Multi-speaker. Context-conditioned. HF login required.","arthur_fit":4},
+    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"TBD",           "ram_est_mb":2000, "heavy":True, "notes":"Alibaba Qwen3-based TTS. Model Qwen/Qwen3-TTS may not be public yet — check HuggingFace.","arthur_fit":3},
+    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"GPU only",      "ram_est_mb":3000, "heavy":True, "notes":"LLaMA-3B-based TTS. Emotion tags: <laugh> <sigh> <chuckle> <gasp>. 8 voices. Requires CUDA GPU.","arthur_fit":5},
+    "neutts":     {"label":"NeuTTS Air",   "size":"TBD",      "rtf_est":"TBD",           "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
+    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"GPU ~6x RT",   "ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning from IndexTeam. Reference WAV required for synthesis.","arthur_fit":4},
+    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"GPU ~8x RT",   "ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate control. 44 kHz output.","arthur_fit":4},
+    "openvoice":  {"label":"OpenVoice v2", "size":"~600 MB",  "rtf_est":"GPU ~10x RT",  "ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Zero-shot voice cloning. wavmark stubbed for CPU.","arthur_fit":3},
 }
 
 MODEL_ORDER = ["piper","kokoro","melo","chattts","outetts","bark","styletts2","f5tts","dia","xtts","cosyvoice","parler","chatterbox",
@@ -1405,8 +1405,10 @@ def _build_params(name):
     # -- 16. Qwen3-TTS --
     if name == "qwen3tts":
         return (f'<div class="param-row">{_upload_widget("q3-file","q3-status","q3-prompt-id","Reference WAV (optional — for voice conditioning)")}</div>'
-               +'<p class="text-muted small mt-1">Model auto-downloads from <code>Qwen/Qwen3-TTS</code> on HuggingFace on first load. '
-               'Check HuggingFace for available model variants.</p>')
+               +'<div class="alert alert-warning py-2 small mt-2 mb-0">'
+               +'⚠ <strong>Qwen/Qwen3-TTS may not be public on HuggingFace yet.</strong> '
+               +'Load will fail with a 404 if the model is gated or the ID has changed. '
+               +'Check <a href="https://huggingface.co/Qwen" target="_blank" class="alert-link">huggingface.co/Qwen</a> for the current model name.</div>')
 
     # -- 17. Orpheus 3B --
     if name == "orpheus":
@@ -1417,8 +1419,12 @@ def _build_params(name):
                         '<code>&lt;yawn&gt;</code> &nbsp; <code>&lt;gasp&gt;</code><br>'
                         '<em>Example: "Oh my goodness &lt;sigh&gt; just a moment dear &lt;cough&gt; I need to find my glasses."</em>'
                         '</div>')
+        gpu_warn = ('<div class="alert alert-danger py-2 small mt-2 mb-0">'
+                    '⚠ <strong>Orpheus 3B requires a CUDA GPU</strong> — vllm will not run on CPU. '
+                    'Load will fail immediately without a GPU. Add GPU and restart the server.</div>')
         return (_row(_grp("Voice", _sel("voice", ORPHEUS_VOICES, "tara")))
-               +emotion_hint)
+               +emotion_hint
+               +gpu_warn)
 
     # -- 18. NeuTTS Air --
     if name == "neutts":
