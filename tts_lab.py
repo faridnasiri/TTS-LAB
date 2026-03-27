@@ -548,6 +548,13 @@ def _synth_xtts(inst, text, params):
 
 # -- 11. CosyVoice2 --
 def _load_cosyvoice():
+    # hyperpyyaml is a CosyVoice dependency not always installed by default
+    import importlib.util as _ilu
+    if not _ilu.find_spec("hyperpyyaml"):
+        raise ImportError(
+            "CosyVoice2 requires hyperpyyaml — run:  pip install hyperpyyaml\n"
+            "Then restart the server."
+        )
     for p in [str(COSYVOICE_DIR), str(COSYVOICE_DIR/"third_party"/"Matcha-TTS")]:
         if p not in sys.path: sys.path.insert(0, p)
     from cosyvoice.cli.cosyvoice import CosyVoice2
@@ -1034,6 +1041,17 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not COSYVOICE_DIR.exists(): return False, "git clone FunAudioLLM/CosyVoice /opt/CosyVoice"
         if not (COSYVOICE_DIR/"pretrained_models"/"CosyVoice2-0.5B").exists():
             return False, "CosyVoice2-0.5B model not downloaded"
+        if not ilu.find_spec("hyperpyyaml"):
+            return False, "pip install hyperpyyaml  (CosyVoice2 dependency)"
+    elif name == "fishspeech":
+        # find_spec('fish_speech') passes for the PyPI package, but models.vqgan
+        # only exists in the full git-clone install.
+        if not ilu.find_spec("fish_speech.models.vqgan"):
+            return False, (
+                "Full repo needed: "
+                "cd /tmp && git clone https://github.com/fishaudio/fish-speech "
+                "&& pip install -e /tmp/fish-speech/"
+            )
     elif name == "neutts":
         return False, "NeuTTS Air: not configured — edit _load_neutts() in tts_lab.py"
     elif name == "openvoice":
