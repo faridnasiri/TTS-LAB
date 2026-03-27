@@ -350,7 +350,7 @@ def _load_outetts(model_path="OuteAI/OuteTTS-0.3-500M"):
         tokenizer_path=model_path,
         backend=outetts.Backend.HF,
         device="cpu",
-        max_seq_length=32768,
+        max_seq_length=4096,   # was 32768 — O(n²) attention kills CPU; 4096 > any TTS phrase
     )
     return outetts.Interface(cfg)
 
@@ -364,11 +364,15 @@ def _synth_outetts(inst, text, params):
             speaker = inst.create_speaker(str(prompt_path), transcript=params.get("transcript", "") or None)
     if speaker is None:
         speaker = inst.load_default_speaker(params.get("speaker", "en-female-1-neutral"))
+    # Auto-compute max_length from text length so CPU doesn't spin for 32K tokens.
+    # ~30 audio codec tokens per word + 512 buffer, capped at 4096.
+    _ui_max = int(float(params.get("max_length", 0)))
+    _auto_max = min(_ui_max if _ui_max > 0 else (len(text.split()) * 30 + 512), 4096)
     out = inst.generate(outetts.GenerationConfig(
         text=text,
         voice_characteristics=params.get("voice_characteristics") or None,
         speaker=speaker,
-        max_length=int(float(params.get("max_length", 32768))),
+        max_length=_auto_max,
         sampler_config=outetts.SamplerConfig(
             temperature=float(params.get("temperature", 0.4)),
             repetition_penalty=float(params.get("repetition_penalty", 1.1)),
@@ -1057,14 +1061,36 @@ async def voices(model):
     }
     return JSONResponse({"voices": vmap.get(model, [])})
 
+# Per-engine synthesis timeout (seconds). CPU-only engines that timed out in benchmarks
+# get a shorter limit so the browser gets a fast error instead of a 20-minute hang.
+_SYNTH_TIMEOUT = {
+    "outetts":    120,   # benchmarked: timeout >480s on CPU — bail fast
+    "bark":       180,   # benchmarked: timeout >480s on CPU
+    "orpheus":    120,   # LLM-based, vllm required — CPU unsupported
+    "dia":        240,   # RTF=38.88 on CPU — allow short phrases only
+    "chattts":     90,   # PyTorch errors on CPU; keep short
+    "f5tts":      120,
+    "qwen3tts":   120,
+}
+_DEFAULT_SYNTH_TIMEOUT = 300   # 5 min hard cap for all other engines
+
 @app.post("/synthesize/{model}")
 async def synthesize(model, req: SynthReq):
     if model not in MODEL_ORDER: return JSONResponse({"error":f"Unknown: {model}"}, status_code=400)
     if not req.text.strip(): return JSONResponse({"error":"Empty text"}, status_code=400)
+    timeout = _SYNTH_TIMEOUT.get(model, _DEFAULT_SYNTH_TIMEOUT)
     try:
         loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(None, _do_synth, model, req.text, req.params)
+        result = await asyncio.wait_for(
+            loop.run_in_executor(None, _do_synth, model, req.text, req.params),
+            timeout=float(timeout)
+        )
         return JSONResponse(result)
+    except asyncio.TimeoutError:
+        return JSONResponse({
+            "error": f"⏱ Synthesis timeout after {timeout}s — '{model}' is too slow on CPU. "
+                     f"This engine requires a GPU. Add a GPU and restart the server."
+        }, status_code=408)
     except Exception as e:
         return JSONResponse({"error":str(e),"trace":traceback.format_exc(limit=4)}, status_code=500)
 
@@ -1186,8 +1212,11 @@ def _build_params(name):
             _grp('Top-K <span class="range-val">40</span>', _rng("top_k","1","100","1","40")),
             _grp('Top-P <span class="range-val">0.9</span>', _rng("top_p","0.1","1.0","0.01","0.9")),
             _grp('Min-P <span class="range-val">0.05</span>', _rng("min_p","0.0","0.5","0.01","0.05")),
-        )+_row(_grp('Max length <span class="range-val">32768</span>', _rng("max_length","4096","32768","512","32768")))
+        +_row(_grp('Max tokens <span class="range-val">0 (auto)</span>', _rng("max_length","0","4096","128","0","0=auto from text length (~30 tok/word)")))
         +f'<div class="param-row">{_upload_widget("ot-file","ot-status","ot-prompt-id","Reference WAV (optional — create OuteTTS speaker)")}</div>'
+        +'<div class="alert alert-danger py-2 small mt-2 mb-0">'
+        +'⚠ <strong>OuteTTS is extremely slow on CPU</strong> — benchmarked at timeout (&gt;480s) for 40 words. '
+        +'Will be killed after 120s. <strong>Requires GPU for practical use.</strong></div>'
         +f'<div class="param-row">{_grp("Reference transcript", transcript)}</div>'
         +f'<div class="param-row" style="flex-direction:column"><div class="param-group" style="max-width:100%;width:100%"><label>Voice characteristics</label>{vc}</div></div>')
 
@@ -1204,9 +1233,13 @@ def _build_params(name):
             f'<button class="btn btn-sm btn-outline-secondary mb-1" onclick="setPreset(this.dataset.txt)" '
             f'data-txt="{t.replace(chr(34),chr(39))}" style="font-size:.72rem">{l}</button>'
             for t,l in BARK_ARTHUR_PRESETS)
+        cpu_warn = ('<div class="alert alert-danger py-2 small mt-2 mb-0">'
+                    '⚠ <strong>Bark is extremely slow on CPU</strong> — benchmarked at timeout (&gt;480s) for 40 words. '
+                    'Will be killed after 180s. <strong>Requires GPU for practical use.</strong></div>')
         return (_row(_grp("Voice preset", _sel("voice_preset", preset_opts, "v2/en_speaker_6")))
                +f'<div class="mt-2">{bark_presets_html}</div>'
-               +token_hint)
+               +token_hint
+               +cpu_warn)
 
     if name == "styletts2":
         return (_row(
