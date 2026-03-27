@@ -1328,7 +1328,7 @@ def _build_params(name):
             _grp('Top-K <span class="range-val">40</span>', _rng("top_k","1","100","1","40")),
             _grp('Top-P <span class="range-val">0.9</span>', _rng("top_p","0.1","1.0","0.01","0.9")),
             _grp('Min-P <span class="range-val">0.05</span>', _rng("min_p","0.0","0.5","0.01","0.05")),
-        +_row(_grp('Max tokens <span class="range-val">0 (auto)</span>', _rng("max_length","0","4096","128","0","0=auto from text length (~30 tok/word)")))
+        )+_row(_grp('Max tokens <span class="range-val">0 (auto)</span>', _rng("max_length","0","4096","128","0","0=auto from text length (~30 tok/word)")))
         +f'<div class="param-row">{_upload_widget("ot-file","ot-status","ot-prompt-id","Reference WAV (optional — create OuteTTS speaker)")}</div>'
         +'<div class="alert alert-danger py-2 small mt-2 mb-0">'
         +'⚠ <strong>OuteTTS is extremely slow on CPU</strong> — benchmarked at timeout (&gt;480s) for 40 words. '
