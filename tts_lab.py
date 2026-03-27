@@ -334,11 +334,20 @@ def _synth_chattts(inst, text, params):
     )
     if seed:
         infer_kw["manual_seed"] = seed
-    out = inst.infer(
-        text,
-        skip_refine_text=str(params.get("skip_refine_text", "true")).lower() in ("1", "true", "yes", "on"),
-        params_infer_code=inst.InferCodeParams(**infer_kw),
-    )
+    try:
+        out = inst.infer(
+            text,
+            skip_refine_text=str(params.get("skip_refine_text", "true")).lower() in ("1", "true", "yes", "on"),
+            params_infer_code=inst.InferCodeParams(**infer_kw),
+        )
+    except RuntimeError as _e:
+        if "narrow" in str(_e) or "length must be non-negative" in str(_e):
+            raise RuntimeError(
+                f"ChatTTS internal error: {_e}\n"
+                "Known cause: PyTorch version mismatch with ChatTTS.\n"
+                "Fix: pip install --upgrade ChatTTS  or  pin torch==2.3.1"
+            ) from _e
+        raise
     arr = np.array(out[0] if isinstance(out, list) else out, dtype=np.float32)
     return _to_wav(arr, 24000), 24000
 
@@ -536,7 +545,17 @@ def _synth_cosyvoice(inst, text, params):
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
     from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
-    return (ParlerTTSForConditionalGeneration.from_pretrained(model_id), AutoTokenizer.from_pretrained(model_id))
+    # Config version mismatch between parler-tts and transformers causes
+    # "Config initialisation error" on some installs. Silence it with
+    # ignore_mismatched_sizes so the model still loads with a warning.
+    try:
+        mdl = ParlerTTSForConditionalGeneration.from_pretrained(
+            model_id, ignore_mismatched_sizes=True)
+    except TypeError:
+        # older parler_tts builds don't accept ignore_mismatched_sizes
+        mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id)
+    tok = AutoTokenizer.from_pretrained(model_id)
+    return (mdl, tok)
 
 def _synth_parler(inst, text, params):
     import torch
@@ -552,6 +571,15 @@ def _synth_parler(inst, text, params):
 
 # -- 13. Chatterbox --
 def _load_chatterbox():
+    import sys
+    # torchcodec (chatterbox dep) hard-imports NVRTC C-extension at import time
+    # even when device="cpu", causing "libnvrtc.so.13: cannot open" on CPU-only machines.
+    # Stub the entire torchcodec namespace before chatterbox pulls it in.
+    for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
+                "torchcodec.decoders._core", "torchcodec.decoders.video_decoder"]:
+        if _tc not in sys.modules:
+            from unittest.mock import MagicMock as _MM
+            sys.modules[_tc] = _MM()
     import perth
     # perth 1.0.0 ships PerthImplicitWatermarker=None (proprietary stub).
     # Chatterbox calls it in __init__; patch with DummyWatermarker so it loads.
@@ -653,11 +681,23 @@ def _load_qwen3tts(model_id="Qwen/Qwen3-TTS"):
     Install: transformers already installed (dep of parler-tts).
     Model auto-downloads from HuggingFace on first load.
     Check https://huggingface.co/Qwen for latest model ID.
+    NOTE: Qwen/Qwen3-TTS was not yet public at initial benchmarking (March 2026).
     """
     import torch
     from transformers import AutoProcessor, AutoModel
-    proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-    mdl  = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+    try:
+        proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        mdl  = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+    except Exception as _e:
+        _s = str(_e).lower()
+        if "not found" in _s or "404" in _s or "repository" in _s or "does not exist" in _s:
+            raise RuntimeError(
+                f"Qwen3-TTS model '{model_id}' not found on HuggingFace.\n"
+                "The model may not be public yet, or the ID has changed.\n"
+                "Check https://huggingface.co/Qwen for the current model name.\n"
+                f"Original error: {_e}"
+            ) from _e
+        raise
     return (mdl, proc)
 
 def _synth_qwen3tts(inst, text, params):
@@ -689,7 +729,17 @@ def _load_orpheus(model_name="canopylabs/orpheus-3b-0.1-ft"):
           We patch it to \"cpu\" on install (see _remote_install_new_engines.sh).
     """
     from orpheus_tts import OrpheusModel
-    return OrpheusModel(model_name=model_name)
+    try:
+        return OrpheusModel(model_name=model_name)
+    except Exception as _e:
+        _s = str(_e).lower()
+        if "device" in _s or "cuda" in _s or "vllm" in _s or "empty" in _s:
+            raise RuntimeError(
+                "Orpheus 3B requires a CUDA GPU — vllm cannot run on CPU.\n"
+                "Add a GPU and ensure CUDA drivers are installed, then restart.\n"
+                f"Original error: {_e}"
+            ) from _e
+        raise
 
 def _synth_orpheus(inst, text, params):
     voice  = params.get("voice", "tara")
@@ -797,8 +847,22 @@ def _synth_zonos(inst, text, params):
             max_new_tokens=int(float(params.get("max_new_tokens", 1024))),
             disable_torch_compile=True,
         )
-    wavs = inst.autoregressive_model.decode(codes)
-    arr  = wavs[0].squeeze().cpu().numpy().astype(np.float32)
+    # Zonos 0.1.0 renamed/restructured the decode path.
+    # Try each known location before giving up.
+    _decoded = None
+    for _attr in ["autoregressive_model", "backbone", "codec", "model"]:
+        _obj = getattr(inst, _attr, None)
+        if _obj is not None and hasattr(_obj, "decode"):
+            _decoded = _obj.decode(codes); break
+    if _decoded is None:
+        if hasattr(inst, "decode"):
+            _decoded = inst.decode(codes)
+        else:
+            raise RuntimeError(
+                "Zonos API changed: no .decode() found on this version.\n"
+                "Update: pip install --upgrade git+https://github.com/Zyphra/Zonos"
+            )
+    arr  = _decoded[0].squeeze().cpu().numpy().astype(np.float32)
     return _to_wav(arr, 44000), 44000
 
 # -- 21. OpenVoice v2 --
@@ -810,6 +874,12 @@ def _load_openvoice():
                    /opt/models/openvoice_v2
     Supports both v1 (base_speakers/EN/) and v2 (base_speakers/ses/) layouts.
     """
+    import sys
+    # wavmark is an optional audio-watermarking dep that openvoice imports at module level.
+    # It is not needed for inference; stub it so CPU-only installs don't abort.
+    if "wavmark" not in sys.modules:
+        from unittest.mock import MagicMock as _MM
+        sys.modules["wavmark"] = _MM()
     import torch
     from openvoice.api import ToneColorConverter
     from melo.api import TTS as MeloTTS
