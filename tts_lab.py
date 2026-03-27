@@ -223,6 +223,22 @@ def _read_wav_mono_f32(path: Path):
         arr = arr.reshape(-1, n_channels).mean(axis=1)
     return arr, fr
 
+def _require_gpu(engine: str):
+    """Raise immediately if no CUDA GPU is present.
+    Call this at the TOP of loaders that are known to be impossible on CPU.
+    Fails in milliseconds instead of hanging for minutes.
+    """
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                f"{engine} requires a CUDA GPU and will not run on CPU.\n"
+                "Benchmarked result: timeout / error on CPU.\n"
+                "Add a GPU and restart the server, then try again."
+            )
+    except ImportError:
+        pass  # if torch isn't importable yet, let the loader handle it
+
 
 # ============================================================
 # LOADERS + SYNTH FUNCTIONS
@@ -353,13 +369,14 @@ def _synth_chattts(inst, text, params):
 
 # -- 5. OuteTTS --
 def _load_outetts(model_path="OuteAI/OuteTTS-0.3-500M"):
+    _require_gpu("OuteTTS")   # benchmarked: >480s timeout on CPU — refuse before loading
     import outetts
     cfg = outetts.ModelConfig(
         model_path=model_path,
         tokenizer_path=model_path,
         backend=outetts.Backend.HF,
-        device="cpu",
-        max_seq_length=4096,   # was 32768 — O(n²) attention kills CPU; 4096 > any TTS phrase
+        device="cuda",         # only reached when GPU is confirmed present
+        max_seq_length=4096,
     )
     return outetts.Interface(cfg)
 
@@ -395,6 +412,7 @@ def _synth_outetts(inst, text, params):
 
 # -- 6. Bark --
 def _load_bark():
+    _require_gpu("Bark")   # benchmarked: >480s timeout on CPU — refuse before loading
     import torch
     # Bark checkpoints contain numpy scalars not whitelisted in PyTorch 2.6+ weights_only mode.
     # Patch torch.load to allow legacy pickles only during preload, then restore.
@@ -728,6 +746,7 @@ def _load_orpheus(model_name="canopylabs/orpheus-3b-0.1-ft"):
     NOTE: orpheus_tts/decoder.py ships with snac_device=\"cuda\" hardcoded.
           We patch it to \"cpu\" on install (see _remote_install_new_engines.sh).
     """
+    _require_gpu("Orpheus 3B")   # vllm requires CUDA — refuses immediately on CPU
     from orpheus_tts import OrpheusModel
     try:
         return OrpheusModel(model_name=model_name)
@@ -997,7 +1016,16 @@ def _check_available(name: str) -> Tuple[bool, str]:
     pkg = pkg_map.get(name)
     if pkg and not ilu.find_spec(pkg):
         return False, f"pip install {pkg} needed"
-    # ── 2. Engine-specific file / directory checks ─────────────────────────────
+    # ── 2. GPU-required engines — check CUDA before doing anything else ────────
+    _GPU_REQUIRED = {"outetts", "bark", "orpheus"}
+    if name in _GPU_REQUIRED:
+        try:
+            import torch
+            if not torch.cuda.is_available():
+                return False, "CUDA GPU required — not available on this machine"
+        except ImportError:
+            pass  # torch not installed yet; loader will handle it
+    # ── 3. Engine-specific file / directory checks ─────────────────────────────
     if name == "piper":
         if not _piper_voices(): return False, "No .onnx voice found in models/"
     elif name == "kokoro":
