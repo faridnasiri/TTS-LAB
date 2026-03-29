@@ -175,14 +175,17 @@ async def media_stream(ws: WebSocket):
 
 class CallSession:
     def __init__(self):
-        self.stream_sid:   Optional[str] = None
-        self.history:      list[dict]    = []
-        self.audio_buf:    bytearray     = bytearray()
-        self.is_speaking:  bool          = False
-        self.call_start:   float         = asyncio.get_event_loop().time()
-        self._last_stage:  int           = 0   # for stage-change logging
-        self._media_count: int           = 0   # total media frames received
-        self._turn_count:  int           = 0   # scammer turns processed
+        self.stream_sid:        Optional[str] = None
+        self.history:           list[dict]    = []
+        self.audio_buf:         bytearray     = bytearray()
+        self.is_speaking:       bool          = False
+        self.call_start:        float         = asyncio.get_event_loop().time()
+        self._last_stage:       int           = 0   # for stage-change logging
+        self._media_count:      int           = 0   # total media frames received
+        self._turn_count:       int           = 0   # scammer turns processed
+        # Monotonic deadline until which inbound frames are discarded to prevent
+        # Arthur's own TTS echo from being transcribed by Whisper.
+        self._echo_mute_until: float          = 0.0
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -223,6 +226,10 @@ class CallSession:
                         continue
                     if self.is_speaking:
                         continue   # discard while Arthur is talking
+                    # Discard during TTS echo window — the conference routes Arthur's
+                    # audio back through inbound after a round-trip delay.
+                    if asyncio.get_event_loop().time() < self._echo_mute_until:
+                        continue
 
                     ulaw  = base64.b64decode(media["payload"])
                     pcm16 = ulaw_to_pcm16(ulaw)
@@ -438,8 +445,12 @@ class CallSession:
                 "media":     {"payload": payload_b64}
             }))
 
-            log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  voice=%s",
-                     tts_ms, dur_s, src_rate, resamp_ms, PIPER_VOICE)
+            # Mute inbound for dur_s (playback) + 4 s (conference echo round-trip).
+            # Prevents Whisper transcribing Arthur own voice echoing back.
+            self._echo_mute_until = asyncio.get_event_loop().time() + dur_s + 4.0
+
+            log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  voice=%s  mute=%.1fs",
+                     tts_ms, dur_s, src_rate, resamp_ms, PIPER_VOICE, dur_s + 4.0)
 
         except Exception as e:
             log.error("[TTS]  _speak error: %s", e)
