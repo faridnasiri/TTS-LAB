@@ -66,7 +66,8 @@ STREAM_RATE      = 8000       # Twilio Media Streams are 8 kHz μ-law
 
 # Local Piper TTS via tts_lab.py on the same VM (port 8001, ~200 ms latency)
 LOCAL_TTS_URL  = os.environ.get("LOCAL_TTS_URL", "http://localhost:8001")
-PIPER_VOICE    = os.environ.get("PIPER_VOICE",   "en_US-ryan-high")
+# en_US-lessac-high: mature, clear American male — best match for Arthur's age/region
+PIPER_VOICE    = os.environ.get("PIPER_VOICE",   "en_US-lessac-high")
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
