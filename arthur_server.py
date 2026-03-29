@@ -329,9 +329,17 @@ class CallSession:
         self.audio_buf.clear()
         log.debug("[STT]  Transcribing %d ms of audio...", buf_ms)
 
+        # Build context hint from Arthur's last utterance to help Whisper
+        # transcribe the scammer's reply in the right semantic neighbourhood.
+        last_arthur = next(
+            (t["parts"][0]["text"] for t in reversed(self.history) if t["role"] == "model"),
+            ""
+        )
+        context_hint = f"Arthur said: {last_arthur[:120]}" if last_arthur else ""
+
         t0 = time.perf_counter()
         transcript = await asyncio.get_event_loop().run_in_executor(
-            None, self._transcribe, buf
+            None, self._transcribe, buf, context_hint
         )
         stt_ms = int((time.perf_counter() - t0) * 1000)
 
@@ -357,7 +365,7 @@ class CallSession:
         self.history.append({"role": "model", "parts": [{"text": reply}]})
         await self._speak(ws, reply, stage)
 
-    def _transcribe(self, pcm16: bytes) -> str:
+    def _transcribe(self, pcm16: bytes, context_hint: str = "") -> str:
         arr = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
         segs, info = whisper.transcribe(
             arr,
@@ -370,6 +378,9 @@ class CallSession:
             no_speech_threshold=0.6,
             # Skip timestamp alignment for lower latency:
             without_timestamps=True,
+            # Anchor Whisper to recent conversation context so it transcribes
+            # the scammer's reply in the right semantic neighbourhood:
+            initial_prompt=context_hint or "Phone call between a scammer and an elderly man.",
         )
         segs = list(segs)
         text = " ".join(s.text.strip() for s in segs).strip()
@@ -378,14 +389,25 @@ class CallSession:
         return text
 
     async def _ask_gemini(self, user_text: str, stage: int) -> Optional[str]:
-        log.debug("[LLM]  → %s  stage=%d  history=%d turns  input='%s'",
+        log.debug("[LLM]  \u2192 %s  stage=%d  history=%d turns  input='%s'",
                   GEMINI_FLASH, stage, len(self.history), user_text[:60])
+        # Re-inject stage director note so the LLM knows how confused/anxious
+        # Arthur should sound.  This was previously embedded in the Gemini TTS
+        # prompt and got lost when we switched to local Piper TTS.
+        stage_note  = STAGE_PROMPTS.get(stage, STAGE_PROMPTS[1])
+        system_text = (
+            f"{CORE_PERSONA}\n\n"
+            f"[CURRENT BEHAVIOUR \u2014 Stage {stage}] {stage_note}\n"
+            "If the caller's words seem garbled or unclear, respond as if you "
+            "misheard them \u2014 stay in character, ask them to repeat, and naturally "
+            "steer the conversation to extract intelligence."
+        )
         payload = {
-            "system_instruction": {"parts": [{"text": CORE_PERSONA}]},
+            "system_instruction": {"parts": [{"text": system_text}]},
             "contents": self.history,
             "generationConfig": {
-                "temperature": 0.9,
-                "maxOutputTokens": 120,
+                "temperature": 0.85,
+                "maxOutputTokens": 200,
             }
         }
         url = f"{GEMINI_BASE}/{GEMINI_FLASH}:generateContent?key={GEMINI_API_KEY}"
