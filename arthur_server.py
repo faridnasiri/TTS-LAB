@@ -26,6 +26,7 @@ Setup:
 """
 
 import asyncio, base64, json, os, struct, logging, time
+from urllib.parse import parse_qs
 from typing import Optional
 import numpy as np
 import httpx
@@ -144,7 +145,8 @@ async def incoming_call(request: Request):
     Twilio inbound voice webhook.
     Returns TwiML that connects the call to our bidirectional Media Stream.
     """
-    form = await request.form()
+    body = (await request.body()).decode("utf-8", errors="ignore")
+    form = {k: (v[0] if v else "") for k, v in parse_qs(body, keep_blank_values=True).items()}
     call_sid = form.get("CallSid", "")
     from_num = form.get("From", "")
     to_num   = form.get("To", "")
