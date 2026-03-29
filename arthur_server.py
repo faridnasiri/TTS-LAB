@@ -61,10 +61,12 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
 STREAM_URL       = os.environ.get("STREAM_URL", "wss://arthur.sys.tips/media-stream")
 GEMINI_FLASH     = "gemini-2.0-flash"
-GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
-GEMINI_TTS_VOICE = "Gacrux"   # Mature — same as Android app default
 WHISPER_MODEL    = "base.en"  # small.en needs 4+ vCPUs; base.en is real-time on 2 vCPU (RTF 0.5x)
 STREAM_RATE      = 8000       # Twilio Media Streams are 8 kHz μ-law
+
+# Local Piper TTS via tts_lab.py on the same VM (port 8001, ~200 ms latency)
+LOCAL_TTS_URL  = os.environ.get("LOCAL_TTS_URL", "http://localhost:8001")
+PIPER_VOICE    = os.environ.get("PIPER_VOICE",   "en_US-ryan-high")
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -399,30 +401,14 @@ class CallSession:
         return reply
 
     async def _speak(self, ws: WebSocket, text: str, stage: int = 1):
-        """Synthesise with Gemini TTS (Gacrux/Mature) + stage director's notes."""
+        """Synthesise with local Piper TTS (tts_lab.py on localhost:8001)."""
         self.is_speaking = True
-        log.debug("[TTS]  → %s  voice=%s  stage=%d  chars=%d",
-                  GEMINI_TTS_MODEL, GEMINI_TTS_VOICE, stage, len(text))
+        log.debug("[TTS]  → Piper  voice=%s  stage=%d  chars=%d", PIPER_VOICE, stage, len(text))
         try:
-            director_note = STAGE_PROMPTS.get(stage, STAGE_PROMPTS[1])
-            full_prompt   = f"{director_note} {text}"
-
-            payload = {
-                "contents": [{"parts": [{"text": full_prompt}]}],
-                "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "speechConfig": {
-                        "voiceConfig": {
-                            "prebuiltVoiceConfig": {"voiceName": GEMINI_TTS_VOICE}
-                        }
-                    }
-                }
-            }
-
-            url = f"{GEMINI_BASE}/{GEMINI_TTS_MODEL}:generateContent?key={GEMINI_API_KEY}"
-            t0 = time.perf_counter()
+            url = f"{LOCAL_TTS_URL.rstrip('/')}/synthesize/piper"
+            t0  = time.perf_counter()
             async with httpx.AsyncClient(timeout=30) as http:
-                r = await http.post(url, json=payload)
+                r = await http.post(url, json={"text": text, "params": {"voice": PIPER_VOICE}})
             tts_ms = int((time.perf_counter() - t0) * 1000)
 
             if r.status_code != 200:
@@ -430,14 +416,17 @@ class CallSession:
                           r.status_code, tts_ms, r.text[:200])
                 return
 
-            data      = r.json()
-            b64_audio = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
-            pcm24k    = base64.b64decode(b64_audio)  # 16-bit PCM @ 24 kHz
-            dur_s     = len(pcm24k) / 2 / 24000
+            data = r.json()
+            if data.get("error"):
+                log.error("[TTS]  ✗ Piper error: %s", data["error"])
+                return
 
-            # Resample 24 kHz → 8 kHz μ-law for Twilio Media Streams
-            t1    = time.perf_counter()
-            pcm8k = resample_pcm16(pcm24k, from_rate=24000, to_rate=STREAM_RATE)
+            wav_bytes = base64.b64decode(data["audio_b64"])
+            pcm, src_rate = parse_wav_pcm(wav_bytes)
+            dur_s = len(pcm) / 2 / src_rate
+
+            t1 = time.perf_counter()
+            pcm8k = resample_pcm16(pcm, from_rate=src_rate, to_rate=STREAM_RATE)
             ulaw  = pcm16_to_ulaw(pcm8k)
             resamp_ms = int((time.perf_counter() - t1) * 1000)
 
@@ -448,8 +437,8 @@ class CallSession:
                 "media":     {"payload": payload_b64}
             }))
 
-            log.info("[TTS]  ← latency=%d ms  dur=%.2fs  pcm24k=%d B  resamp=%d ms  voice=%s",
-                     tts_ms, dur_s, len(pcm24k), resamp_ms, GEMINI_TTS_VOICE)
+            log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  voice=%s",
+                     tts_ms, dur_s, src_rate, resamp_ms, PIPER_VOICE)
 
         except Exception as e:
             log.error("[TTS]  _speak error: %s", e)
@@ -457,6 +446,15 @@ class CallSession:
             self.is_speaking = False
 
 # ── Audio helpers ─────────────────────────────────────────────────────────────
+
+import wave as _wave, io as _io
+
+def parse_wav_pcm(wav_bytes: bytes) -> tuple[bytes, int]:
+    """Extract raw signed-16-bit LE PCM and sample rate from a WAV blob."""
+    with _wave.open(_io.BytesIO(wav_bytes)) as wf:
+        sr  = wf.getframerate()
+        pcm = wf.readframes(wf.getnframes())
+    return pcm, sr
 
 def ulaw_to_pcm16(ulaw: bytes) -> bytes:
     out = bytearray(len(ulaw) * 2)
