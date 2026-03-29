@@ -239,7 +239,13 @@ class CallSession:
                             log.debug("[AUDIO] buf=%d ms  rms=%.4f  frames=%d",
                                       buf_ms, rms, self._media_count)
 
-                        if rms < 0.01:
+                        if rms < 0.004:
+                            # Absolute silence — discard without calling Whisper to avoid
+                            # the compression-ratio retry loop that wastes 15+ seconds.
+                            log.debug("[AUDIO] Absolute silence  buf=%d ms  rms=%.4f — discarding",
+                                      buf_ms, rms)
+                            self.audio_buf.clear()
+                        elif rms < 0.01:
                             log.debug("[AUDIO] Silence detected  buf=%d ms  rms=%.4f", buf_ms, rms)
                             await self._process_buffer(ws)
                         elif len(self.audio_buf) >= buf_cap:
@@ -343,7 +349,18 @@ class CallSession:
 
     def _transcribe(self, pcm16: bytes) -> str:
         arr = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
-        segs, info = whisper.transcribe(arr, language="en", vad_filter=True)
+        segs, info = whisper.transcribe(
+            arr,
+            language="en",
+            vad_filter=True,
+            # Prevents the temperature-retry loop that causes the
+            # "Compression ratio threshold is not met" 15-second hang:
+            condition_on_previous_text=False,
+            # Faster rejection of silence frames:
+            no_speech_threshold=0.6,
+            # Skip timestamp alignment for lower latency:
+            without_timestamps=True,
+        )
         segs = list(segs)
         text = " ".join(s.text.strip() for s in segs).strip()
         log.debug("[STT]  Whisper segments=%d  lang=%s  text='%s'",
