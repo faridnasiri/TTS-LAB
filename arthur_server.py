@@ -35,6 +35,7 @@ import numpy as np
 import httpx
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from faster_whisper import WhisperModel
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -100,9 +101,29 @@ whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8",
                        cpu_threads=CPU_THREADS, num_workers=1)
 log.info("Whisper ready.")
 
+# ── Global inject queue ───────────────────────────────────────────────────────
+# Phone app POSTs to /inject during a bridge call.
+# The active CallSession drains this queue in the background.
+# mode="speak": Arthur says the text verbatim via Gemini TTS.
+# mode="hint":  Added as a director note → Gemini generates the next reply from it.
+_inject_queue: asyncio.Queue = asyncio.Queue()
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI()
+
+class InjectRequest(BaseModel):
+    text: str
+    mode: str = "speak"   # "speak" | "hint"
+
+@app.post("/inject")
+async def inject(req: InjectRequest):
+    text = req.text.strip()
+    if not text:
+        return {"ok": False, "error": "empty text"}
+    await _inject_queue.put({"text": text, "mode": req.mode})
+    log.info("Inject queued  mode=%s  text='%s'", req.mode, text[:80])
+    return {"ok": True}
 
 @app.post("/incoming-call")
 async def incoming_call(request: Request):
@@ -141,6 +162,7 @@ class CallSession:
 
     async def run(self, ws: WebSocket):
         asyncio.create_task(self._greet(ws))
+        asyncio.create_task(self._inject_drainer(ws))
         try:
             async for raw in ws.iter_text():
                 msg   = json.loads(raw)
@@ -178,6 +200,36 @@ class CallSession:
         await asyncio.sleep(1.5)
         self.history.append({"role": "model", "parts": [{"text": INITIAL_GREETING}]})
         await self._speak(ws, INITIAL_GREETING, stage=1)
+
+    async def _inject_drainer(self, ws: WebSocket):
+        """Background task: drains _inject_queue while the call is active.
+        Waits if Arthur is currently speaking to avoid audio collision."""
+        try:
+            while True:
+                try:
+                    item = await asyncio.wait_for(_inject_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                # Wait until Arthur finishes speaking
+                while self.is_speaking:
+                    await asyncio.sleep(0.2)
+
+                stage = self._current_stage()
+                if item["mode"] == "speak":
+                    # Say this text verbatim — no Gemini generation
+                    self.history.append({"role": "model", "parts": [{"text": item["text"]}]})
+                    await self._speak(ws, item["text"], stage)
+                else:
+                    # "hint" mode — inject as director note, Gemini generates reply
+                    note = f"[Director: {item['text']}]"
+                    self.history.append({"role": "user", "parts": [{"text": note}]})
+                    reply = await self._ask_gemini(item["text"], stage)
+                    if reply:
+                        self.history.append({"role": "model", "parts": [{"text": reply}]})
+                        await self._speak(ws, reply, stage)
+        except Exception:
+            pass  # WebSocket closed — task ends naturally
 
     async def _process_buffer(self, ws: WebSocket):
         buf = bytes(self.audio_buf)
