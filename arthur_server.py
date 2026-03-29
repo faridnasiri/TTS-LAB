@@ -163,7 +163,7 @@ async def incoming_call(request: Request):
 @app.websocket("/media-stream")
 async def media_stream(ws: WebSocket):
     await ws.accept()
-    log.info("[CALL] Media Stream connected")
+    log.info("[CALL] Twilio Media Stream connected")
     await CallSession().run(ws)
 
 # ── Call session ──────────────────────────────────────────────────────────────
@@ -199,18 +199,20 @@ class CallSession:
         try:
             async for raw in ws.iter_text():
                 msg      = json.loads(raw)
-                # Twilio uses "event" here. Keep a tiny fallback to older stream shapes
-                # so a previous provider/test payload still logs cleanly.
-                event    = msg.get("event_type") or msg.get("event", "")
+                event    = msg.get("event", "")
                 media    = msg.get("media", {})
 
                 if event == "start":
                     start = msg.get("start", {})
-                    self.stream_sid = start.get("stream_id") or start.get("streamSid", "")
-                    log.info("[CALL] Stream started  id=%s", self.stream_sid)
+                    self.stream_sid = start.get("streamSid", "")
+                    call_sid = start.get("callSid", "")
+                    tracks = start.get("tracks", [])
+                    log.info("[CALL] Stream started  sid=%s  callSid=%s  tracks=%s",
+                             self.stream_sid, call_sid, tracks)
 
                 elif event == "media":
-                    # Ignore outbound echo so we don't transcribe Arthur's own voice.
+                    # Twilio bidirectional streams send our outbound media back too.
+                    # Ignore outbound so we don't transcribe Arthur's own voice.
                     track = media.get("track", "inbound")
                     if track == "outbound":
                         continue
