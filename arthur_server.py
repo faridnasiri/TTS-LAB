@@ -2,25 +2,24 @@
 Arthur Henderson — Home AI Bridge Server
 
 Stack:
-  Inbound calls     : Telnyx Call Control API (Programmable Voice)
+  Inbound calls     : Twilio Voice webhook + Media Streams
   STT               : faster-whisper (local, free)
   LLM               : Gemini Flash API
   TTS               : Gemini 2.5 Flash TTS
 
-Call flow (Call Control — NOT TeXML):
-  1. Telnyx POST /incoming-call  { event_type: "call.initiated", payload: { call_control_id } }
-  2. Server responds 200 OK {"result":"ok"}
-  3. Server calls POST /v2/calls/{ccid}/actions/answer
-  4. Server calls POST /v2/calls/{ccid}/actions/streaming_start  → WebSocket URL
-  5. Telnyx opens wss://arthur.sys.tips/media-stream
-  6. Bidirectional PCMU 8 kHz audio stream (same WebSocket protocol as TeXML)
+Call flow (Twilio Media Streams):
+  1. Twilio sends HTTP POST /incoming-call (form-encoded voice webhook)
+  2. Server returns TwiML <Connect><Stream url="wss://arthur.sys.tips/media-stream"/></Connect>
+  3. Twilio opens wss://arthur.sys.tips/media-stream
+  4. Twilio sends inbound μ-law 8 kHz audio frames over the WebSocket
+  5. Server runs STT → LLM → TTS and sends μ-law frames back over the same socket
 
 Setup:
   pip install fastapi uvicorn websockets faster-whisper numpy httpx pydantic
 
   Set env vars:
     GEMINI_API_KEY=<key>
-    TELNYX_API_KEY=<key from portal.telnyx.com → API Keys>
+    STREAM_URL=wss://arthur.sys.tips/media-stream
 
   Run:
     uvicorn arthur_server:app --host 0.0.0.0 --port 8000
@@ -30,7 +29,7 @@ import asyncio, base64, json, os, struct, logging, time
 from typing import Optional
 import numpy as np
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Response
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
 
@@ -59,14 +58,12 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 # ── Config ────────────────────────────────────────────────────────────────────
 
 GEMINI_API_KEY   = os.environ.get("GEMINI_API_KEY", "")
-TELNYX_API_KEY   = os.environ.get("TELNYX_API_KEY", "")
-TELNYX_API_BASE  = "https://api.telnyx.com/v2"
 STREAM_URL       = os.environ.get("STREAM_URL", "wss://arthur.sys.tips/media-stream")
 GEMINI_FLASH     = "gemini-2.0-flash"
 GEMINI_TTS_MODEL = "gemini-2.5-flash-preview-tts"
 GEMINI_TTS_VOICE = "Gacrux"   # Mature — same as Android app default
 WHISPER_MODEL    = "base.en"  # small.en needs 4+ vCPUs; base.en is real-time on 2 vCPU (RTF 0.5x)
-TELNYX_RATE      = 8000       # Telnyx MediaStream is 8 kHz μ-law
+STREAM_RATE      = 8000       # Twilio Media Streams are 8 kHz μ-law
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -144,67 +141,29 @@ async def inject(req: InjectRequest):
 @app.post("/incoming-call")
 async def incoming_call(request: Request):
     """
-    Telnyx Call Control webhook — receives JSON events, NOT XML.
-    Responds 200 OK immediately, then issues answer + streaming_start
-    via the Telnyx REST API in the background.
+    Twilio inbound voice webhook.
+    Returns TwiML that connects the call to our bidirectional Media Stream.
     """
-    try:
-        body = await request.json()
-    except Exception:
-        return {"result": "ok"}   # ignore malformed
+    form = await request.form()
+    call_sid = form.get("CallSid", "")
+    from_num = form.get("From", "")
+    to_num   = form.get("To", "")
+    log.info("[CALL] Twilio webhook  sid=%s  from=%s  to=%s", call_sid, from_num, to_num)
 
-    data     = body.get("data", {})
-    ev_type  = data.get("event_type", "")
-    payload  = data.get("payload", {})
-    ccid     = payload.get("call_control_id", "")
-
-    log.info("[CALL] Webhook  event=%s  ccid=%.20s…", ev_type, ccid or "?")
-
-    if ev_type == "call.initiated":
-        if not TELNYX_API_KEY:
-            log.error("[CALL] TELNYX_API_KEY not set — cannot answer call")
-        elif not ccid:
-            log.error("[CALL] call_control_id missing in payload")
-        else:
-            asyncio.create_task(_answer_and_stream(ccid))
-
-    # Always ACK immediately — Telnyx expects 200 within 5 s
-    return {"result": "ok"}
-
-
-async def _answer_and_stream(ccid: str):
-    """Answer the call and start the WebSocket media stream."""
-    headers = {
-        "Authorization": f"Bearer {TELNYX_API_KEY}",
-        "Content-Type": "application/json",
-    }
-    async with httpx.AsyncClient(timeout=10) as http:
-        # 1. Answer
-        r = await http.post(f"{TELNYX_API_BASE}/calls/{ccid}/actions/answer", headers=headers, json={})
-        log.info("[CALL] answer → HTTP %d", r.status_code)
-        if r.status_code not in (200, 201):
-            log.error("[CALL] answer failed: %s", r.text[:200])
-            return
-
-        await asyncio.sleep(0.8)   # brief pause — call must be ACTIVE before streaming
-
-        # 2. Start bidirectional media stream
-        r = await http.post(
-            f"{TELNYX_API_BASE}/calls/{ccid}/actions/streaming_start",
-            headers=headers,
-            json={
-                "stream_url":   STREAM_URL,
-                "stream_track": "inbound_track",   # scammer audio only → our STT
-            },
-        )
-        log.info("[CALL] streaming_start → HTTP %d  url=%s", r.status_code, STREAM_URL)
-        if r.status_code not in (200, 201):
-            log.error("[CALL] streaming_start failed: %s", r.text[:200])
+    twiml = (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<Response>'
+        '<Connect>'
+        f'<Stream url="{STREAM_URL}" />'
+        '</Connect>'
+        '</Response>'
+    )
+    return Response(content=twiml, media_type="text/xml")
 
 @app.websocket("/media-stream")
 async def media_stream(ws: WebSocket):
     await ws.accept()
-    log.info("Call connected")
+    log.info("[CALL] Media Stream connected")
     await CallSession().run(ws)
 
 # ── Call session ──────────────────────────────────────────────────────────────
@@ -240,19 +199,18 @@ class CallSession:
         try:
             async for raw in ws.iter_text():
                 msg      = json.loads(raw)
-                # Call Control uses "event_type"; TeXML used "event" — support both
+                # Twilio uses "event" here. Keep a tiny fallback to older stream shapes
+                # so a previous provider/test payload still logs cleanly.
                 event    = msg.get("event_type") or msg.get("event", "")
                 media    = msg.get("media", {})
 
                 if event == "start":
                     start = msg.get("start", {})
-                    # Call Control: stream_id   TeXML: streamSid
                     self.stream_sid = start.get("stream_id") or start.get("streamSid", "")
                     log.info("[CALL] Stream started  id=%s", self.stream_sid)
 
                 elif event == "media":
-                    # Call Control sends both inbound (scammer) and outbound (our TTS echo).
-                    # Only process inbound so we don't transcribe our own audio.
+                    # Ignore outbound echo so we don't transcribe Arthur's own voice.
                     track = media.get("track", "inbound")
                     if track == "outbound":
                         continue
@@ -264,12 +222,12 @@ class CallSession:
                     self.audio_buf.extend(pcm16)
                     self._media_count += 1
 
-                    buf_ms  = len(self.audio_buf) * 1000 // (TELNYX_RATE * 2)
-                    buf_min = TELNYX_RATE * 2    # 1 s minimum
-                    buf_cap = TELNYX_RATE * 16   # 8 s hard cap
+                    buf_ms  = len(self.audio_buf) * 1000 // (STREAM_RATE * 2)
+                    buf_min = STREAM_RATE * 2    # 1 s minimum
+                    buf_cap = STREAM_RATE * 16   # 8 s hard cap
 
                     if len(self.audio_buf) >= buf_min:
-                        chunk = np.frombuffer(bytes(self.audio_buf[-TELNYX_RATE // 2:]),
+                        chunk = np.frombuffer(bytes(self.audio_buf[-STREAM_RATE // 2:]),
                                               dtype=np.int16).astype(np.float32)
                         rms = float(np.sqrt(np.mean(chunk ** 2))) / 32768.0
 
@@ -347,7 +305,7 @@ class CallSession:
 
     async def _process_buffer(self, ws: WebSocket):
         buf = bytes(self.audio_buf)
-        buf_ms = len(buf) * 1000 // (TELNYX_RATE * 2)
+        buf_ms = len(buf) * 1000 // (STREAM_RATE * 2)
         self.audio_buf.clear()
         log.debug("[STT]  Transcribing %d ms of audio...", buf_ms)
 
@@ -456,9 +414,9 @@ class CallSession:
             pcm24k    = base64.b64decode(b64_audio)  # 16-bit PCM @ 24 kHz
             dur_s     = len(pcm24k) / 2 / 24000
 
-            # Resample 24 kHz → 8 kHz for Telnyx
+            # Resample 24 kHz → 8 kHz μ-law for Twilio Media Streams
             t1    = time.perf_counter()
-            pcm8k = resample_pcm16(pcm24k, from_rate=24000, to_rate=TELNYX_RATE)
+            pcm8k = resample_pcm16(pcm24k, from_rate=24000, to_rate=STREAM_RATE)
             ulaw  = pcm16_to_ulaw(pcm8k)
             resamp_ms = int((time.perf_counter() - t1) * 1000)
 
