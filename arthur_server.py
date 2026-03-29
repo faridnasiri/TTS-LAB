@@ -66,8 +66,9 @@ STREAM_RATE      = 8000       # Twilio Media Streams are 8 kHz μ-law
 
 # Local Piper TTS via tts_lab.py on the same VM (port 8001, ~200 ms latency)
 LOCAL_TTS_URL  = os.environ.get("LOCAL_TTS_URL", "http://localhost:8001")
-# en_US-lessac-high: mature, clear American male — best match for Arthur's age/region
-PIPER_VOICE    = os.environ.get("PIPER_VOICE",   "en_US-lessac-high")
+# en_US-joe-medium: faster than lessac-high on CPU (medium quality = smaller model),
+# more distinctive/gruff male character than ryan-high.  RTF ~0.25 on Xeon D-1528.
+PIPER_VOICE    = os.environ.get("PIPER_VOICE",   "en_US-joe-medium")
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 
@@ -343,8 +344,8 @@ class CallSession:
         )
         stt_ms = int((time.perf_counter() - t0) * 1000)
 
-        if not transcript or len(transcript.split()) < 2:
-            log.debug("[STT]  Discarded (too short)  words=%d  latency=%d ms",
+        if not transcript or len(transcript.split()) < 1:
+            log.debug("[STT]  Discarded (empty)  words=%d  latency=%d ms",
                       len(transcript.split()) if transcript else 0, stt_ms)
             return
 
