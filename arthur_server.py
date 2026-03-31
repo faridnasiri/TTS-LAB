@@ -149,6 +149,19 @@ INITIAL_GREETING = (
     "Who am I speaking with, dear?"
 )
 
+# Silence re-engagement — Arthur says one of these if no scammer speech for SILENCE_PROBE_SEC.
+# Rotates through the list to avoid repetition.
+SILENCE_PROBE_SEC = 90   # seconds of scammer silence before first probe
+SILENCE_FILLERS = [
+    "Hello? Are you still there, dear?",
+    "Oh, I thought I lost you for a moment. Are you still there?",
+    "I'm still here, I was just writing all this down. Hello?",
+    "Hello? My phone sometimes cuts out — can you hear me alright?",
+    "Sorry, Mr. Whiskers walked right across my notes. You were saying?",
+    "I\'m still here dear, just finding my reading glasses. Hello?",
+    "Now, I\'m ready to write down that number whenever you are. Hello?",
+]
+
 # ── Model loading ─────────────────────────────────────────────────────────────
 
 CPU_THREADS = int(os.environ.get("CPU_THREADS", os.cpu_count() or 6))
@@ -265,6 +278,9 @@ class CallSession:
         # Discard counters
         self._silence_discards: int = 0
         self._echo_discards:    int = 0
+        # Silence prober: track last real scammer speech to re-engage on long silence
+        self._last_speech_time: float = asyncio.get_event_loop().time()
+        self._probe_index:      int   = 0
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -283,6 +299,7 @@ class CallSession:
         log.info("[CALL] WebSocket connected")
         asyncio.create_task(self._greet(ws))
         asyncio.create_task(self._inject_drainer(ws))
+        asyncio.create_task(self._silence_prober(ws))
         try:
             async for raw in ws.iter_text():
                 msg      = json.loads(raw)
@@ -414,6 +431,31 @@ class CallSession:
         except Exception as e:
             log.debug("[INJECT] Drainer exiting: %s", e)  # WebSocket closed — expected
 
+    async def _silence_prober(self, ws: WebSocket):
+        """Background task: if no scammer speech for SILENCE_PROBE_SEC, Arthur
+        says a filler line to check if the caller is still there."""
+        try:
+            while True:
+                await asyncio.sleep(10)
+                if self.is_speaking:
+                    continue
+                now     = asyncio.get_event_loop().time()
+                silent  = now - self._last_speech_time
+                # Only probe after the greeting has been played (>= 5 s) and
+                # silence has exceeded the threshold.
+                if (now - self.call_start) < 10:
+                    continue
+                if silent >= SILENCE_PROBE_SEC:
+                    filler = SILENCE_FILLERS[self._probe_index % len(SILENCE_FILLERS)]
+                    self._probe_index += 1
+                    log.info("[PROBE] Silence=%.0fs — re-engaging: '%s'", silent, filler)
+                    self.history.append({"role": "model", "parts": [{"text": filler}]})
+                    await self._speak(ws, filler, self._current_stage())
+                    # Reset timer so we wait another SILENCE_PROBE_SEC before next probe
+                    self._last_speech_time = asyncio.get_event_loop().time()
+        except Exception as e:
+            log.debug("[PROBE] Prober exiting: %s", e)
+
     async def _process_buffer(self, ws: WebSocket):
         buf = bytes(self.audio_buf)
         buf_ms = len(buf) * 1000 // (STREAM_RATE * 2)
@@ -443,6 +485,7 @@ class CallSession:
         log.info("[STT]  Scammer: '%s'  words=%d  latency=%d ms  audio=%d ms",
                  transcript, words, stt_ms, buf_ms)
 
+        self._last_speech_time = asyncio.get_event_loop().time()  # reset silence probe
         self._turn_count += 1
         self.history.append({"role": "user", "parts": [{"text": transcript}]})
         log.debug("[STT]  History length: %d turns", len(self.history))
@@ -604,10 +647,13 @@ class CallSession:
             self.is_speaking = False
 
     async def _finalize_call(self, duration_s: float):
-        """Save JSON log and send Telegram report after every call."""
+        """Save JSON log (sync) then send Telegram report (async).
+        JSON is written with a blocking open() so a mid-flight service restart
+        cannot lose the file even if the Telegram POST is cancelled."""
+        import threading
         os.makedirs(CALLS_LOG_DIR, exist_ok=True)
-        ts  = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-        sid = (self.call_sid or "unknown")[-12:]
+        ts       = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        sid      = (self.call_sid or "unknown")[-12:]
         log_path = os.path.join(CALLS_LOG_DIR, f"{ts}_{sid}.json")
 
         report = {
@@ -622,6 +668,8 @@ class CallSession:
             "echo_discards":    self._echo_discards,
             "transcript":       self.transcript_log,
         }
+
+        # ── JSON: blocking write — survives SIGTERM ──────────────────────────
         try:
             with open(log_path, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, ensure_ascii=False)
@@ -629,6 +677,7 @@ class CallSession:
         except Exception as e:
             log.error("[REPORT] Failed to save JSON: %s", e)
 
+        # ── Telegram: async POST (best-effort) ───────────────────────────────
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
             await _send_telegram_report(report)
 
