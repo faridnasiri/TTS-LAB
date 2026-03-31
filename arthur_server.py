@@ -25,7 +25,7 @@ Setup:
     uvicorn arthur_server:app --host 0.0.0.0 --port 8000
 """
 
-import asyncio, base64, json, os, struct, logging, time
+import asyncio, base64, json, os, struct, logging, time, datetime
 from urllib.parse import parse_qs
 from typing import Optional
 import numpy as np
@@ -71,6 +71,14 @@ LOCAL_TTS_URL  = os.environ.get("LOCAL_TTS_URL", "http://localhost:8001")
 PIPER_VOICE    = os.environ.get("PIPER_VOICE",   "en_US-joe-medium")
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# ── Reporting ────────────────────────────────────────────────────────────────
+# Set env vars in /etc/systemd/system/arthur.service to enable:
+#   TELEGRAM_BOT_TOKEN=<token from @BotFather>
+#   TELEGRAM_CHAT_ID=<your numeric chat id>
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+CALLS_LOG_DIR    = os.environ.get("CALLS_LOG_DIR", "/opt/arthur/calls")
 
 # ── Arthur persona (mirrors ArthurPersonaPrompts.cs) ─────────────────────────
 
@@ -126,6 +134,11 @@ log.info("Whisper ready.")
 # mode="hint":  Added as a director note → Gemini generates the next reply from it.
 _inject_queue: asyncio.Queue = asyncio.Queue()
 
+# Latest Twilio call metadata — set by /incoming-call, read by CallSession.
+_latest_call_meta: dict = {}
+# Reference to the active CallSession; None between calls.
+_active_session: "CallSession | None" = None
+
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
 app = FastAPI()
@@ -143,6 +156,21 @@ async def inject(req: InjectRequest):
     log.info("Inject queued  mode=%s  text='%s'", req.mode, text[:80])
     return {"ok": True}
 
+@app.get("/transcript")
+async def get_transcript():
+    """Live transcript of the current call for Android polling."""
+    if _active_session is None:
+        return {"call_active": False, "turns": [], "elapsed_s": 0}
+    elapsed = asyncio.get_event_loop().time() - _active_session.call_start
+    return {
+        "call_active": True,
+        "call_sid":    _active_session.call_sid,
+        "from_num":    _active_session.from_num,
+        "elapsed_s":   round(elapsed, 1),
+        "stage":       _active_session._last_stage,
+        "turns":       _active_session.transcript_log,
+    }
+
 @app.post("/incoming-call")
 async def incoming_call(request: Request):
     """
@@ -155,6 +183,9 @@ async def incoming_call(request: Request):
     from_num = form.get("From", "")
     to_num   = form.get("To", "")
     log.info("[CALL] Twilio webhook  sid=%s  from=%s  to=%s", call_sid, from_num, to_num)
+    global _latest_call_meta
+    _latest_call_meta = {"call_sid": call_sid, "from_num": from_num,
+                         "to_num": to_num, "t_start": time.time()}
 
     twiml = (
         '<?xml version="1.0" encoding="UTF-8"?>'
@@ -170,7 +201,12 @@ async def incoming_call(request: Request):
 async def media_stream(ws: WebSocket):
     await ws.accept()
     log.info("[CALL] Twilio Media Stream connected")
-    await CallSession().run(ws)
+    global _active_session
+    _active_session = CallSession()
+    try:
+        await _active_session.run(ws)
+    finally:
+        _active_session = None
 
 # ── Call session ──────────────────────────────────────────────────────────────
 
@@ -187,6 +223,17 @@ class CallSession:
         # Monotonic deadline until which inbound frames are discarded to prevent
         # Arthur's own TTS echo from being transcribed by Whisper.
         self._echo_mute_until: float          = 0.0
+        # Call metadata from /incoming-call webhook
+        _m = _latest_call_meta
+        self.call_sid  = _m.get("call_sid", "")
+        self.from_num  = _m.get("from_num", "")
+        self.to_num    = _m.get("to_num",   "")
+        self.t_start_wall: float = _m.get("t_start", time.time())
+        # Verbose per-turn transcript for /transcript endpoint + call report
+        self.transcript_log: list[dict] = []
+        # Discard counters
+        self._silence_discards: int = 0
+        self._echo_discards:    int = 0
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -230,6 +277,7 @@ class CallSession:
                     # Discard during TTS echo window — the conference routes Arthur's
                     # audio back through inbound after a round-trip delay.
                     if asyncio.get_event_loop().time() < self._echo_mute_until:
+                        self._echo_discards += 1
                         continue
 
                     ulaw  = base64.b64decode(media["payload"])
@@ -256,6 +304,7 @@ class CallSession:
                             log.debug("[AUDIO] Absolute silence  buf=%d ms  rms=%.4f — discarding",
                                       buf_ms, rms)
                             self.audio_buf.clear()
+                            self._silence_discards += 1
                         elif rms < 0.01:
                             log.debug("[AUDIO] Silence detected  buf=%d ms  rms=%.4f", buf_ms, rms)
                             await self._process_buffer(ws)
@@ -276,9 +325,19 @@ class CallSession:
             log.error("[CALL] run() error: %s", e)
 
         elapsed = asyncio.get_event_loop().time() - self.call_start
-        log.info("[CALL] ────────────────────────────────────────")
-        log.info("[CALL] Call ended  duration=%.0fs  turns=%d  media_frames=%d",
-                 elapsed, self._turn_count, self._media_count)
+        log.info("[CALL] " + "─" * 40)
+        log.info("[CALL] Call ended  duration=%.0fs  turns=%d  frames=%d  "
+                 "silence_discards=%d  echo_discards=%d",
+                 elapsed, self._turn_count, self._media_count,
+                 self._silence_discards, self._echo_discards)
+        if self.transcript_log:
+            t = self.transcript_log
+            log.info("[CALL] Avg latencies  STT=%.0fms  LLM=%.0fms  TTS=%.0fms  total=%.0fms",
+                     sum(x["stt_ms"] for x in t)/len(t),
+                     sum(x["llm_ms"] for x in t)/len(t),
+                     sum(x["tts_ms"] for x in t)/len(t),
+                     sum(x["total_ms"] for x in t)/len(t))
+        await self._finalize_call(elapsed)
 
     async def _greet(self, ws: WebSocket):
         log.info("[CALL] Greeting in 1.5s...")
@@ -357,14 +416,39 @@ class CallSession:
         self.history.append({"role": "user", "parts": [{"text": transcript}]})
         log.debug("[STT]  History length: %d turns", len(self.history))
 
+        elapsed_s = asyncio.get_event_loop().time() - self.call_start
         stage = self._current_stage()
-        reply = await self._ask_gemini(transcript, stage)
+
+        llm_t0 = time.perf_counter()
+        reply  = await self._ask_gemini(transcript, stage)
+        llm_ms = int((time.perf_counter() - llm_t0) * 1000)
         if not reply:
             return
 
         log.info("[LLM]  Arthur [stage %d turn %d]: '%s'", stage, self._turn_count, reply)
         self.history.append({"role": "model", "parts": [{"text": reply}]})
+
+        tts_t0 = time.perf_counter()
         await self._speak(ws, reply, stage)
+        tts_ms = int((time.perf_counter() - tts_t0) * 1000)
+
+        turn = {
+            "turn":      self._turn_count,
+            "elapsed_s": round(elapsed_s, 1),
+            "stage":     stage,
+            "t_unix":    time.time(),
+            "scammer":   transcript,
+            "arthur":    reply,
+            "audio_ms":  buf_ms,
+            "stt_ms":    stt_ms,
+            "llm_ms":    llm_ms,
+            "tts_ms":    tts_ms,
+            "total_ms":  stt_ms + llm_ms + tts_ms,
+        }
+        self.transcript_log.append(turn)
+        log.info("[TURN] #%d  elapsed=%.0fs  stage=%d  stt=%dms  llm=%dms  tts=%dms  total=%dms",
+                 self._turn_count, elapsed_s, stage,
+                 stt_ms, llm_ms, tts_ms, stt_ms + llm_ms + tts_ms)
 
     def _transcribe(self, pcm16: bytes, context_hint: str = "") -> str:
         arr = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32) / 32768.0
@@ -479,6 +563,96 @@ class CallSession:
             log.error("[TTS]  _speak error: %s", e)
         finally:
             self.is_speaking = False
+
+    async def _finalize_call(self, duration_s: float):
+        """Save JSON log and send Telegram report after every call."""
+        os.makedirs(CALLS_LOG_DIR, exist_ok=True)
+        ts  = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        sid = (self.call_sid or "unknown")[-12:]
+        log_path = os.path.join(CALLS_LOG_DIR, f"{ts}_{sid}.json")
+
+        report = {
+            "call_sid":         self.call_sid,
+            "from_num":         self.from_num,
+            "to_num":           self.to_num,
+            "started_utc":      datetime.datetime.utcfromtimestamp(self.t_start_wall).isoformat() + "Z",
+            "duration_s":       round(duration_s, 1),
+            "turns":            self._turn_count,
+            "media_frames":     self._media_count,
+            "silence_discards": self._silence_discards,
+            "echo_discards":    self._echo_discards,
+            "transcript":       self.transcript_log,
+        }
+        try:
+            with open(log_path, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2, ensure_ascii=False)
+            log.info("[REPORT] JSON saved: %s", log_path)
+        except Exception as e:
+            log.error("[REPORT] Failed to save JSON: %s", e)
+
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
+            await _send_telegram_report(report)
+
+
+async def _send_telegram_report(r: dict):
+    """Format and POST the call report to the Telegram Bot API."""
+    dur_m, dur_s = divmod(int(r["duration_s"]), 60)
+    header = (
+        f"🎣 *Arthur Henderson — Call Report*\n"
+        f"\n"
+        f"📞 From: `{r['from_num']}`\n"
+        f"🎯 To:   `{r['to_num']}`\n"
+        f"⏱ Duration: *{dur_m}m {dur_s}s*\n"
+        f"💬 Turns: *{r['turns']}*\n"
+        f"📅 {r['started_utc']}\n"
+    )
+    turns = r.get("transcript", [])
+    lines = []
+    for t in turns:
+        mm, ss = divmod(int(t["elapsed_s"]), 60)
+        lines.append(
+            f"[{mm:02d}:{ss:02d} S{t['stage']}] 🔴 *Scammer:* {t['scammer']}\n"
+            f"              🔵 *Arthur:*  {t['arthur']}\n"
+            f"              `STT {t['stt_ms']}ms | LLM {t['llm_ms']}ms | TTS {t['tts_ms']}ms | total {t['total_ms']}ms`"
+        )
+    transcript_block = "\n\n".join(lines) if lines else "_No turns recorded._"
+
+    if turns:
+        avg = lambda k: sum(x[k] for x in turns) // len(turns)
+        perf = (
+            f"\n\n⚡ *Avg latencies*\n"
+            f"STT {avg('stt_ms')}ms | LLM {avg('llm_ms')}ms | "
+            f"TTS {avg('tts_ms')}ms | total {avg('total_ms')}ms\n"
+            f"Silence discards: {r['silence_discards']}  Echo discards: {r['echo_discards']}"
+        )
+    else:
+        perf = ""
+
+    # Split into chunks ≤ 4096 chars (Telegram limit)
+    full = header + "\n*Transcript*\n" + transcript_block + perf
+    chunks, cur = [], ""
+    for para in full.split("\n\n"):
+        if len(cur) + len(para) + 2 > 4000:
+            chunks.append(cur)
+            cur = para
+        else:
+            cur += ("\n\n" if cur else "") + para
+    if cur:
+        chunks.append(cur)
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=15) as http:
+            for chunk in chunks:
+                await http.post(url, json={
+                    "chat_id":    TELEGRAM_CHAT_ID,
+                    "text":       chunk,
+                    "parse_mode": "Markdown",
+                })
+        log.info("[REPORT] Telegram report sent (%d chunk(s))", len(chunks))
+    except Exception as e:
+        log.error("[REPORT] Telegram send failed: %s", e)
+
 
 # ── Audio helpers ─────────────────────────────────────────────────────────────
 
