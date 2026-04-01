@@ -80,7 +80,7 @@ TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 CALLS_LOG_DIR    = os.environ.get("CALLS_LOG_DIR", "/opt/arthur/calls")
 
-# ── Arthur persona (mirrors ArthurPersonaPrompts.cs) ─────────────────────────
+# ── Arthur persona ──────────────────────────────────────────────────
 
 CORE_PERSONA = """
 You are Arthur Henderson, a 78-year-old retired postal worker from Phoenix, Arizona.
@@ -91,54 +91,47 @@ YOU ARE NOT CONFUSED OR GOOFY.  You are a sharp, warm, trusting man who takes
 things seriously.  You believe what people tell you.  You cooperate fully.
 
 YOUR SECRET GOAL: Extract information that law enforcement can use to locate
-these people in the real world.  Pursue naturally — never let the caller sense
-you are stalling.  Priority targets:
-  1. Their direct callback number (most important — say you need it in case you
-     get disconnected, which happens often with your old landline).
-  2. Full name and employee / badge / case ID number — tell them your son
-     always says to write down exactly who you spoke with.
-  3. Exact company name and the website address spelled letter by letter
-     (say your typing is slow and you want to verify them online).
-  4. Physical address to mail a check or gift cards if they request payment.
-  5. Bank routing number, account number, or crypto wallet — read it back
-     digit by digit to confirm.
+these people in the real world.  Priority targets:
+  1. Their direct callback number.
+  2. Full name and employee / badge / case ID number.
+  3. Exact company name and website address (spelled letter by letter).
+  4. Physical address to mail a check or gift cards.
+  5. Bank routing number, account number, or crypto wallet.
 
-SPEECH STYLE:
-  - Speak as a real, calm, cooperative elderly man — not a caricature.
-  - NEVER sound confused about WHAT they want.  Sound slow only about
-    HOW to do it: finding a pen, navigating the computer, reading small print.
-  - Keep responses 1-3 sentences.  Natural pauses, warm tone, no dramatics.
+SPEECH RULES — CRITICAL:
+  - MAXIMUM 5 WORDS PER RESPONSE.  Shorter is better.
+    Examples of correct length: "Yes." / "Yes, go on." / "Your badge number, dear?"
+  - SIMPLE YES/NO QUESTIONS: answer with just "Yes." — single word.
+    Many calls start with a robotic IVR asking confirmation questions before
+    transferring to a human.  Always answer these with "Yes." — never with a
+    long sentence.  Examples:
+      "Can you hear me?" → "Yes."
+      "Are you there?" → "Yes."
+      "Is this a good time?" → "Yes."
+      "Do you want to lower your bills?" → "Yes."
+      "Press 1 or say yes" → "Yes."
   - No stage directions, no parentheticals.
-  - Weave in small believable details: the TV in the background, Mr. Whiskers
-    walking across the keyboard, needing reading glasses.
-  - Always seem moments away from giving them what they want.
   - Never hang up, never become suspicious or hostile.
 """
 
-# Stage prompts — each stage has a TACTICAL GOAL, not just a mood.
-# The LLM should advance toward extracting the next piece of intel.
+# Stage prompts — each stage has a TACTICAL GOAL.
 STAGE_PROMPTS = {
     1: (
-        "GOAL: Build trust and get their name, badge number, and callback number. "
-        "Sound alarmed but cooperative. Say you always write down who you speak with "
-        "because your son taught you. Ask for their direct number in case the line drops."
+        "GOAL: Get their name, badge number, and callback number. "
+        "If they are still in an automated intro, just say Yes to their questions. "
+        "Once a human is on the line, ask: name, badge number, direct callback number."
     ),
     2: (
-        "GOAL: Get the exact company name, website URL (spelled letter by letter), "
-        "and any case or reference number. Tell them you are looking this up to verify "
-        "and that you want to make sure you have the right website before you do anything."
+        "GOAL: Get company name and website spelled letter by letter. "
+        "Max 5 words. Example: 'Spell the website please?'"
     ),
     3: (
-        "GOAL: Extract payment details — exact amounts, where to send money or gift cards, "
-        "full mailing address, bank account and routing numbers, or crypto wallet address. "
-        "You are almost ready to comply but need every detail written down perfectly. "
-        "Ask for each number digit by digit because your handwriting is shaky."
+        "GOAL: Get payment destination digit by digit. "
+        "Max 5 words. Example: 'Say each digit slowly.'"
     ),
     4: (
-        "GOAL: Maximum extraction — make them repeat and confirm every piece of "
-        "information. Say your son is coming over Sunday and will also need to call "
-        "them. Ask for a supervisor name and direct line. Circle back to re-confirm "
-        "the callback number, case number, and mailing address one more time."
+        "GOAL: Re-confirm everything. Ask for supervisor. "
+        "Max 5 words. Example: 'That case number again?'"
     ),
 }
 
@@ -289,6 +282,10 @@ class CallSession:
         self._last_speech_time: float = asyncio.get_event_loop().time()
         self._probe_index:      int   = 0
         self._bg_tasks:         list  = []   # cancelled in run() finally
+        # Barge-in: scammer speaking while Arthur talks
+        self._barge_in:  bool         = False
+        # Processing lock: ensures only one _process_buffer runs at a time
+        self._proc_lock: asyncio.Lock = asyncio.Lock()
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -330,16 +327,27 @@ class CallSession:
                     track = media.get("track", "inbound")
                     if track == "outbound":
                         continue
+
+                    # Always decode payload so we can check RMS for barge-in.
+                    ulaw  = base64.b64decode(media["payload"])
+                    pcm16 = ulaw_to_pcm16(ulaw)
+
                     if self.is_speaking:
-                        continue   # discard while Arthur is talking
+                        # Barge-in detection: scammer talking while Arthur speaks.
+                        # Uses a fast RMS check on the raw frame (160 samples = 20 ms).
+                        arr = np.frombuffer(pcm16, dtype=np.int16).astype(np.float32)
+                        rms = float(np.sqrt(np.mean(arr ** 2))) / 32768.0
+                        if rms > 0.025 and not self._barge_in:
+                            self._barge_in = True
+                            log.info("[BARGE] Scammer speaking rms=%.4f — cutting Arthur off", rms)
+                        continue   # don't buffer while Arthur is talking
+
                     # Discard during TTS echo window — the conference routes Arthur's
                     # audio back through inbound after a round-trip delay.
                     if asyncio.get_event_loop().time() < self._echo_mute_until:
                         self._echo_discards += 1
                         continue
 
-                    ulaw  = base64.b64decode(media["payload"])
-                    pcm16 = ulaw_to_pcm16(ulaw)
                     self.audio_buf.extend(pcm16)
                     self._media_count += 1
 
@@ -357,18 +365,19 @@ class CallSession:
                                       buf_ms, rms, self._media_count)
 
                         if rms < 0.004:
-                            # Absolute silence — discard without calling Whisper to avoid
-                            # the compression-ratio retry loop that wastes 15+ seconds.
+                            # Absolute silence — discard without calling Whisper.
                             log.debug("[AUDIO] Absolute silence  buf=%d ms  rms=%.4f — discarding",
                                       buf_ms, rms)
                             self.audio_buf.clear()
                             self._silence_discards += 1
                         elif rms < 0.01:
                             log.debug("[AUDIO] Silence detected  buf=%d ms  rms=%.4f", buf_ms, rms)
-                            await self._process_buffer(ws)
+                            if not self._proc_lock.locked():
+                                asyncio.create_task(self._run_process_buffer(ws))
                         elif len(self.audio_buf) >= buf_cap:
                             log.debug("[AUDIO] Hard cap hit  buf=%d ms", buf_ms)
-                            await self._process_buffer(ws)
+                            if not self._proc_lock.locked():
+                                asyncio.create_task(self._run_process_buffer(ws))
 
                 elif event == "stop":
                     log.info("[CALL] Stop event received")
@@ -401,6 +410,12 @@ class CallSession:
                      sum(x["tts_ms"] for x in t)/len(t),
                      sum(x["total_ms"] for x in t)/len(t))
         await self._finalize_call(elapsed)
+
+    async def _run_process_buffer(self, ws: WebSocket):
+        """Lock-guarded wrapper: ensures only one STT→LLM→TTS pipeline runs at a time.
+        Launched as a task so run() stays live for barge-in detection."""
+        async with self._proc_lock:
+            await self._process_buffer(ws)
 
     async def _greet(self, ws: WebSocket):
         log.info("[CALL] Greeting in 1.5s...")
@@ -580,8 +595,8 @@ class CallSession:
             "system_instruction": {"parts": [{"text": system_text}]},
             "contents": self.history,
             "generationConfig": {
-                "temperature": 0.75,
-                "maxOutputTokens": 220,
+                "temperature": 0.65,
+                "maxOutputTokens": 40,
             }
         }
         url = f"{GEMINI_BASE}/{GEMINI_FLASH}:generateContent?key={GEMINI_API_KEY}"
@@ -642,19 +657,34 @@ class CallSession:
             ulaw  = pcm16_to_ulaw(pcm8k)
             resamp_ms = int((time.perf_counter() - t1) * 1000)
 
-            payload_b64 = base64.b64encode(ulaw).decode()
-            await ws.send_text(json.dumps({
-                "event":     "media",
-                "streamSid": self.stream_sid,
-                "media":     {"payload": payload_b64}
-            }))
+            # Send in 200 ms chunks so the event loop can check barge-in between them.
+            CHUNK = STREAM_RATE * 200 // 1000  # 1600 bytes = 200 ms at 8 kHz
+            total_chunks = (len(ulaw) + CHUNK - 1) // CHUNK
+            barged = False
+            self._barge_in = False
+            for i, offset in enumerate(range(0, len(ulaw), CHUNK)):
+                if self._barge_in:
+                    barged = True
+                    log.info("[BARGE] Playback stopped at chunk %d/%d", i, total_chunks)
+                    break
+                await ws.send_text(json.dumps({
+                    "event":     "media",
+                    "streamSid": self.stream_sid,
+                    "media":     {"payload": base64.b64encode(ulaw[offset:offset + CHUNK]).decode()}
+                }))
+                await asyncio.sleep(0)  # yield — lets run() handle inbound frames
 
-            # Mute inbound for dur_s (playback) + 4 s (conference echo round-trip).
-            # Prevents Whisper transcribing Arthur own voice echoing back.
-            self._echo_mute_until = asyncio.get_event_loop().time() + dur_s + 4.0
+            if barged:
+                # Cancel echo mute — scammer is already talking
+                self._echo_mute_until = asyncio.get_event_loop().time()
+            else:
+                # Full playback — mute echo for playback duration + round-trip buffer
+                self._echo_mute_until = asyncio.get_event_loop().time() + dur_s + 4.0
 
-            log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  voice=%s  mute=%.1fs",
-                     tts_ms, dur_s, src_rate, resamp_ms, PIPER_VOICE, dur_s + 4.0)
+            log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  "
+                     "chunks=%d  barge=%s  mute=%.1fs",
+                     tts_ms, dur_s, src_rate, resamp_ms, total_chunks,
+                     barged, 0.0 if barged else dur_s + 4.0)
 
         except Exception as e:
             log.error("[TTS]  _speak error: %s", e)
