@@ -244,8 +244,15 @@ async def incoming_call(request: Request):
 @app.websocket("/media-stream")
 async def media_stream(ws: WebSocket):
     await ws.accept()
-    log.info("[CALL] Twilio Media Stream connected")
     global _active_session
+    if _active_session is not None:
+        # A session is already running — this is the duplicate Twilio WebSocket
+        # created by the Android conference bridge leg.  Reject it immediately.
+        log.warning("[CALL] Duplicate WebSocket rejected (session already active  sid=%s)",
+                    _active_session.call_sid)
+        await ws.close()
+        return
+    log.info("[CALL] Twilio Media Stream connected")
     _active_session = CallSession()
     try:
         await _active_session.run(ws)
@@ -281,6 +288,7 @@ class CallSession:
         # Silence prober: track last real scammer speech to re-engage on long silence
         self._last_speech_time: float = asyncio.get_event_loop().time()
         self._probe_index:      int   = 0
+        self._bg_tasks:         list  = []   # cancelled in run() finally
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -295,11 +303,13 @@ class CallSession:
         return stage
 
     async def run(self, ws: WebSocket):
-        log.info("[CALL] ────────────────────────────────────────")
+        log.info("[CALL] \u2500" * 40)
         log.info("[CALL] WebSocket connected")
-        asyncio.create_task(self._greet(ws))
-        asyncio.create_task(self._inject_drainer(ws))
-        asyncio.create_task(self._silence_prober(ws))
+        self._bg_tasks = [
+            asyncio.create_task(self._greet(ws)),
+            asyncio.create_task(self._inject_drainer(ws)),
+            asyncio.create_task(self._silence_prober(ws)),
+        ]
         try:
             async for raw in ws.iter_text():
                 msg      = json.loads(raw)
@@ -371,6 +381,11 @@ class CallSession:
             log.info("[CALL] WebSocket disconnected")
         except Exception as e:
             log.error("[CALL] run() error: %s", e)
+        finally:
+            for t in self._bg_tasks:
+                t.cancel()
+            await asyncio.gather(*self._bg_tasks, return_exceptions=True)
+            log.debug("[CALL] %d background tasks cancelled", len(self._bg_tasks))
 
         elapsed = asyncio.get_event_loop().time() - self.call_start
         log.info("[CALL] " + "─" * 40)
