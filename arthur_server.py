@@ -283,6 +283,9 @@ class CallSession:
         self._barge_in:  bool         = False
         # Processing lock: ensures only one _process_buffer runs at a time
         self._proc_lock: asyncio.Lock = asyncio.Lock()
+        # Call recording: inbound PCM16 timeline + TTS overlays for mixing
+        self._rec_inbound:   bytearray              = bytearray()
+        self._tts_overlays:  list[tuple[float,bytes]] = []  # (t_rel_s, pcm8k_bytes)
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -328,6 +331,10 @@ class CallSession:
                     # Always decode payload so we can check RMS for barge-in.
                     ulaw  = base64.b64decode(media["payload"])
                     pcm16 = ulaw_to_pcm16(ulaw)
+
+                    # Append to recording timeline before any mute/speaking checks
+                    # so the WAV has no gaps and TTS overlays align correctly.
+                    self._rec_inbound.extend(pcm16)
 
                     if self.is_speaking:
                         # Barge-in detection: scammer talking while Arthur speaks.
@@ -665,6 +672,8 @@ class CallSession:
             self._barge_in = False
             send_start = asyncio.get_event_loop().time()
             self._echo_mute_until = send_start + dur_s + 4.0  # anchored to playback start
+            # Store TTS for call recording — position relative to call start
+            self._tts_overlays.append((send_start - self.call_start, bytes(pcm8k)))
             for i, offset in enumerate(range(0, len(ulaw), CHUNK)):
                 if self._barge_in:
                     barged = True
@@ -728,6 +737,58 @@ class CallSession:
         # ── Telegram: async POST (best-effort) ───────────────────────────────
         if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID:
             await _send_telegram_report(report)
+            await self._send_recording(report, ts, sid)
+
+
+    async def _send_recording(self, report: dict, ts: str, sid: str):
+        """Mix inbound audio + TTS overlays into a WAV, save, upload to Telegram."""
+        if not self._rec_inbound:
+            return
+        try:
+            # Build base track from all inbound frames (full timeline, no gaps)
+            rec = np.frombuffer(bytes(self._rec_inbound), dtype=np.int16).astype(np.float32)
+
+            # Mix each TTS utterance at its correct playback position
+            for t_rel, tts_bytes in self._tts_overlays:
+                offset = int(t_rel * STREAM_RATE)
+                tts    = np.frombuffer(tts_bytes, dtype=np.int16).astype(np.float32)
+                end    = min(offset + len(tts), len(rec))
+                if offset < len(rec):
+                    rec[offset:end] = np.clip(
+                        rec[offset:end] + tts[:end - offset] * 0.65, -32768, 32767)
+
+            # Write WAV (8 kHz mono PCM16 ≈ 960 KB/min)
+            wav_path = os.path.join(CALLS_LOG_DIR, f"{ts}_{sid}.wav")
+            with _wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(STREAM_RATE)
+                wf.writeframes(rec.astype(np.int16).tobytes())
+
+            size_mb = os.path.getsize(wav_path) / 1_000_000
+            log.info("[RECORD] WAV saved: %s  %.1f MB", wav_path, size_mb)
+
+            if size_mb > 48:
+                log.warning("[RECORD] File too large for Telegram (%.1f MB) — skipping upload", size_mb)
+                return
+
+            dur_m, dur_s_r = divmod(int(report["duration_s"]), 60)
+            caption = f"\U0001f3a4 {dur_m}m {dur_s_r}s \u00b7 {report['turns']} turns \u00b7 {report['from_num']}"
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendAudio"
+            async with httpx.AsyncClient(timeout=120) as http:
+                with open(wav_path, "rb") as f:
+                    r = await http.post(url, data={
+                        "chat_id":   TELEGRAM_CHAT_ID,
+                        "caption":   caption,
+                        "title":     f"Arthur {report['started_utc'][:10]}",
+                        "performer": "Arthur vs Scammer",
+                    }, files={"audio": (os.path.basename(wav_path), f, "audio/wav")})
+            if r.status_code == 200:
+                log.info("[RECORD] Telegram audio sent")
+            else:
+                log.error("[RECORD] Telegram audio failed HTTP %d: %s", r.status_code, r.text[:200])
+        except Exception as e:
+            log.error("[RECORD] Recording error: %s", e)
 
 
 async def _send_telegram_report(r: dict):
