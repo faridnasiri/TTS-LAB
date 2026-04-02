@@ -55,6 +55,7 @@ log = logging.getLogger("arthur")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+logging.getLogger("faster_whisper").setLevel(logging.WARNING)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -412,6 +413,8 @@ class CallSession:
         """Lock-guarded wrapper: ensures only one STT→LLM→TTS pipeline runs at a time.
         Launched as a task so run() stays live for barge-in detection."""
         async with self._proc_lock:
+            if not self.audio_buf:   # another task already consumed the buffer
+                return
             await self._process_buffer(ws)
 
     async def _greet(self, ws: WebSocket):
