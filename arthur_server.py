@@ -183,6 +183,17 @@ class InjectRequest(BaseModel):
     text: str
     mode: str = "speak"   # "speak" | "hint"
 
+@app.post("/conference-ready")
+async def conference_ready():
+    """Android posts here the instant CurrentCall.Conference() is called.
+    Unblocks _greet() so Arthur speaks in sync with the 3-way merge."""
+    if _active_session is not None:
+        _active_session._conference_ready.set()
+        log.info("[CALL] Conference-ready signal received")
+        return {"ok": True}
+    log.warning("[CALL] Conference-ready: no active session")
+    return {"ok": False, "error": "no active session"}
+
 @app.post("/inject")
 async def inject(req: InjectRequest):
     text = req.text.strip()
@@ -288,6 +299,9 @@ class CallSession:
         # Call recording: inbound PCM16 timeline + TTS overlays for mixing
         self._rec_inbound:   bytearray              = bytearray()
         self._tts_overlays:  list[tuple[float,bytes]] = []  # (t_rel_s, pcm8k_bytes)
+        # Fired by /conference-ready when Android confirms the 3-way merge.
+        # _greet() blocks on this so Arthur speaks the moment the scammer can hear.
+        self._conference_ready: asyncio.Event = asyncio.Event()
 
     def _current_stage(self) -> int:
         elapsed = asyncio.get_event_loop().time() - self.call_start
@@ -426,8 +440,16 @@ class CallSession:
             await self._process_buffer(ws)
 
     async def _greet(self, ws: WebSocket):
-        log.info("[CALL] Greeting in 0.5s...")
-        await asyncio.sleep(0.5)
+        """Wait until Android signals the 3-way conference is merged, then greet.
+        Falls back to a 5 s timeout so Arthur still speaks if the signal is lost."""
+        t0 = asyncio.get_event_loop().time()
+        try:
+            await asyncio.wait_for(self._conference_ready.wait(), timeout=5.0)
+            waited = asyncio.get_event_loop().time() - t0
+            log.info("[CALL] Conference-ready received after %.2fs — greeting", waited)
+        except asyncio.TimeoutError:
+            log.warning("[CALL] Conference-ready timeout (5s) — greeting anyway")
+        await asyncio.sleep(0.2)   # brief audio-path settle after merge
         log.info("[CALL] Playing greeting: '%s'", INITIAL_GREETING)
         self.history.append({"role": "model", "parts": [{"text": INITIAL_GREETING}]})
         await self._speak(ws, INITIAL_GREETING, stage=1)
