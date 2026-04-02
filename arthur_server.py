@@ -137,10 +137,7 @@ STAGE_PROMPTS = {
 
 STAGE_THRESHOLDS_SEC = [0, 180, 360, 540]  # 0/3/6/9 minutes
 
-INITIAL_GREETING = (
-    "Hello? Oh my goodness, I almost didn't hear the phone. "
-    "Who am I speaking with, dear?"
-)
+INITIAL_GREETING = "Hello?"
 
 # Silence re-engagement — Arthur says one of these if no scammer speech for SILENCE_PROBE_SEC.
 # Rotates through the list to avoid repetition.
@@ -418,9 +415,9 @@ class CallSession:
             await self._process_buffer(ws)
 
     async def _greet(self, ws: WebSocket):
-        log.info("[CALL] Greeting in 1.5s...")
-        await asyncio.sleep(1.5)
-        log.info("[CALL] Playing greeting: '%s'", INITIAL_GREETING[:60])
+        log.info("[CALL] Greeting in 0.3s...")
+        await asyncio.sleep(0.3)
+        log.info("[CALL] Playing greeting: '%s'", INITIAL_GREETING)
         self.history.append({"role": "model", "parts": [{"text": INITIAL_GREETING}]})
         await self._speak(ws, INITIAL_GREETING, stage=1)
 
@@ -658,10 +655,14 @@ class CallSession:
             resamp_ms = int((time.perf_counter() - t1) * 1000)
 
             # Send in 200 ms chunks so the event loop can check barge-in between them.
+            # IMPORTANT: set echo mute from send_start (= playback start) not send_end.
+            # Old bug: setting after loop made effective mute = 2*dur_s+4s (double).
             CHUNK = STREAM_RATE * 200 // 1000  # 1600 bytes = 200 ms at 8 kHz
             total_chunks = (len(ulaw) + CHUNK - 1) // CHUNK
             barged = False
             self._barge_in = False
+            send_start = asyncio.get_event_loop().time()
+            self._echo_mute_until = send_start + dur_s + 4.0  # anchored to playback start
             for i, offset in enumerate(range(0, len(ulaw), CHUNK)):
                 if self._barge_in:
                     barged = True
