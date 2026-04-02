@@ -426,8 +426,8 @@ class CallSession:
             await self._process_buffer(ws)
 
     async def _greet(self, ws: WebSocket):
-        log.info("[CALL] Greeting in 0.3s...")
-        await asyncio.sleep(0.3)
+        log.info("[CALL] Greeting in 50ms...")
+        await asyncio.sleep(0.05)   # brief pause for stream to stabilise
         log.info("[CALL] Playing greeting: '%s'", INITIAL_GREETING)
         self.history.append({"role": "model", "parts": [{"text": INITIAL_GREETING}]})
         await self._speak(ws, INITIAL_GREETING, stage=1)
