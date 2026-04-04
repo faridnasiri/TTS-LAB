@@ -440,15 +440,15 @@ class CallSession:
 
     async def _greet(self, ws: WebSocket):
         """Wait until Android signals that the 3-way conference is live, then
-        add 200 ms for audio routing to fully settle before playing the greeting.
+        add 50 ms for audio routing to fully settle before playing the greeting.
         Falls back to a fixed 8 s ceiling so the call never stalls."""
         log.info("[CALL] Waiting for /conference-ready signal (max 8s)...")
         try:
             await asyncio.wait_for(self._conference_ready.wait(), timeout=8.0)
-            log.info("[CALL] Conference confirmed — greeting in 200ms")
+            log.info("[CALL] Conference confirmed — greeting in 50ms")
         except asyncio.TimeoutError:
             log.warning("[CALL] /conference-ready not received within 8s — greeting anyway")
-        await asyncio.sleep(0.2)   # let audio routing fully settle
+        await asyncio.sleep(0.05)  # let audio routing fully settle
         log.info("[CALL] Playing greeting: '%s'", INITIAL_GREETING)
         self.history.append({"role": "model", "parts": [{"text": INITIAL_GREETING}]})
         await self._speak(ws, INITIAL_GREETING, stage=1)
