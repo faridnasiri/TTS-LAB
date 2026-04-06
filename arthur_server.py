@@ -317,6 +317,17 @@ class CallSession:
     async def run(self, ws: WebSocket):
         log.info("[CALL] \u2500" * 40)
         log.info("[CALL] WebSocket connected")
+        # Flush any stale inject commands queued between calls (e.g. button presses
+        # made while no call was active, or leftovers from the previous session).
+        flushed = 0
+        while not _inject_queue.empty():
+            try:
+                _inject_queue.get_nowait()
+                flushed += 1
+            except asyncio.QueueEmpty:
+                break
+        if flushed:
+            log.info("[INJECT] Flushed %d stale item(s) from queue at call start", flushed)
         self._bg_tasks = [
             asyncio.create_task(self._greet(ws)),
             asyncio.create_task(self._inject_drainer(ws)),
