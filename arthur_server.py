@@ -698,14 +698,16 @@ class CallSession:
             resamp_ms = int((time.perf_counter() - t1) * 1000)
 
             # Send in 200 ms chunks so the event loop can check barge-in between them.
-            # IMPORTANT: set echo mute from send_start (= playback start) not send_end.
-            # Old bug: setting after loop made effective mute = 2*dur_s+4s (double).
+            # Echo mute is set AFTER the loop (anchored to playback END) so we only
+            # suppress the post-speech echo window, not audio during playback
+            # (is_speaking=True already discards inbound frames while Arthur talks).
+            # 1.5 s covers the Twilio conference echo round-trip (~50–300 ms) with
+            # a comfortable safety margin without eating the scammer's reply.
             CHUNK = STREAM_RATE * 200 // 1000  # 1600 bytes = 200 ms at 8 kHz
             total_chunks = (len(ulaw) + CHUNK - 1) // CHUNK
             barged = False
             self._barge_in = False
             send_start = asyncio.get_event_loop().time()
-            self._echo_mute_until = send_start + dur_s + 4.0  # anchored to playback start
             # Store TTS for call recording — position relative to call start
             self._tts_overlays.append((send_start - self.call_start, bytes(pcm8k)))
             for i, offset in enumerate(range(0, len(ulaw), CHUNK)):
@@ -724,13 +726,14 @@ class CallSession:
                 # Cancel echo mute — scammer is already talking
                 self._echo_mute_until = asyncio.get_event_loop().time()
             else:
-                # Full playback — mute echo for playback duration + round-trip buffer
-                self._echo_mute_until = asyncio.get_event_loop().time() + dur_s + 4.0
+                # Suppress echo of the last TTS chunk for 1.5 s after it was sent.
+                # Twilio conference round-trip echo arrives within ~300 ms; 1.5 s is safe.
+                self._echo_mute_until = asyncio.get_event_loop().time() + 1.5
 
             log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  "
                      "chunks=%d  barge=%s  mute=%.1fs",
                      tts_ms, dur_s, src_rate, resamp_ms, total_chunks,
-                     barged, 0.0 if barged else dur_s + 4.0)
+                     barged, 0.0 if barged else 1.5)
 
         except Exception as e:
             log.error("[TTS]  _speak error: %s", e)
