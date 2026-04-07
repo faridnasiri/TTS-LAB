@@ -1,0 +1,27 @@
+[Unit]
+Description=Arthur Henderson AI Bridge Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/arthur
+ExecStart=/opt/arthur-env/bin/uvicorn arthur_server:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=always
+RestartSec=5
+
+# Secrets injected via environment -- not stored in source control.
+# Copy to /etc/systemd/system/arthur.service and add:
+#   Environment=GEMINI_API_KEY=...
+#   Environment=TELEGRAM_BOT_TOKEN=...
+#   Environment=TELEGRAM_CHAT_ID=...
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=12
+Environment=MKL_NUM_THREADS=12
+Environment=ORT_NUM_THREADS=12
+Environment=CPU_THREADS=12
+Environment=HF_HOME=/opt/models/huggingface
+Environment=CALLS_LOG_DIR=/opt/arthur/calls
+
+[Install]
+WantedBy=multi-user.target
