@@ -143,7 +143,7 @@ INITIAL_GREETING = "Hello?"
 
 # Silence re-engagement — Arthur says one of these if no scammer speech for SILENCE_PROBE_SEC.
 # Rotates through the list to avoid repetition.
-SILENCE_PROBE_SEC = 90   # seconds of scammer silence before first probe
+SILENCE_PROBE_SEC = 20   # seconds of scammer silence before first probe
 SILENCE_FILLERS = [
     "Hello? Are you still there, dear?",
     "Oh, I thought I lost you for a moment. Are you still there?",
@@ -511,9 +511,9 @@ class CallSession:
                     continue
                 now     = asyncio.get_event_loop().time()
                 silent  = now - self._last_speech_time
-                # Only probe after the greeting has been played (>= 5 s) and
+                # Only probe after the greeting has finished playing (~3 s) and
                 # silence has exceeded the threshold.
-                if (now - self.call_start) < 10:
+                if (now - self.call_start) < 4:
                     continue
                 if silent >= SILENCE_PROBE_SEC:
                     filler = SILENCE_FILLERS[self._probe_index % len(SILENCE_FILLERS)]
@@ -939,6 +939,132 @@ def resample_pcm16(pcm16: bytes, from_rate: int, to_rate: int) -> bytes:
     indices = np.linspace(0, len(arr) - 1, new_len)
     resampled = np.interp(indices, np.arange(len(arr)), arr).astype(np.int16)
     return resampled.tobytes()
+
+# ── Call log web viewer ───────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def _purge_old_call_logs():
+    """Delete call files (JSON + WAV) older than 90 days on startup."""
+    cutoff = time.time() - 90 * 86400
+    removed = 0
+    for ext in ("*.json", "*.wav"):
+        import glob
+        for path in glob.glob(os.path.join(CALLS_LOG_DIR, ext)):
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+                    removed += 1
+            except OSError:
+                pass
+    if removed:
+        log.info("[CALLS] Purged %d file(s) older than 90 days", removed)
+
+@app.get("/calls", response_class=Response)
+def calls_viewer():
+    """HTML call log review page — lists all recorded calls newest-first."""
+    import glob, html as html_mod
+    os.makedirs(CALLS_LOG_DIR, exist_ok=True)
+    files = sorted(glob.glob(os.path.join(CALLS_LOG_DIR, "*.json")), reverse=True)
+
+    rows = []
+    for path in files:
+        try:
+            with open(path, encoding="utf-8") as f:
+                r = json.load(f)
+        except Exception:
+            continue
+
+        sid      = os.path.basename(path)[:-5]          # strip .json
+        wav_name = sid + ".wav"
+        has_wav  = os.path.exists(os.path.join(CALLS_LOG_DIR, wav_name))
+        dur_m, dur_s = divmod(int(r.get("duration_s", 0)), 60)
+        turns    = r.get("turns", 0)
+        from_num = html_mod.escape(r.get("from_num", "?"))
+        started  = html_mod.escape(r.get("started_utc", "?")[:19].replace("T", " "))
+
+        audio_tag = (f'<audio controls src="/calls/{wav_name}" '
+                     f'style="height:24px;vertical-align:middle"></audio>'
+                     if has_wav else '<span style="color:#888">no audio</span>')
+
+        turn_rows = ""
+        for t in r.get("transcript", []):
+            mm, ss = divmod(int(t.get("elapsed_s", 0)), 60)
+            turn_rows += (
+                f'<tr><td style="color:#aaa">[{mm:02d}:{ss:02d} S{t.get("stage",1)}]</td>'
+                f'<td>🔴 {html_mod.escape(t.get("scammer",""))}</td>'
+                f'<td>🔵 {html_mod.escape(t.get("arthur",""))}</td>'
+                f'<td style="color:#aaa;white-space:nowrap">'
+                f'STT {t.get("stt_ms","?")}ms / LLM {t.get("llm_ms","?")}ms / '
+                f'TTS {t.get("tts_ms","?")}ms</td></tr>'
+            )
+
+        detail_id = f"d{sid.replace('-','')}"
+        rows.append(f"""
+<tr onclick="toggle('{detail_id}')" style="cursor:pointer;border-top:1px solid #333">
+  <td style="padding:6px 8px;color:#aaa">{started}</td>
+  <td style="padding:6px 8px">{from_num}</td>
+  <td style="padding:6px 8px">{dur_m}m {dur_s}s</td>
+  <td style="padding:6px 8px">{turns} turn{"s" if turns!=1 else ""}</td>
+  <td style="padding:6px 8px">{audio_tag}</td>
+</tr>
+<tr id="{detail_id}" style="display:none;background:#1a1a1a">
+  <td colspan="5" style="padding:8px 16px">
+    <table style="width:100%;border-collapse:collapse;font-size:0.85em">
+      <thead><tr style="color:#888">
+        <th align="left">Time</th><th align="left">Scammer</th>
+        <th align="left">Arthur</th><th align="left">Latency</th>
+      </tr></thead>
+      <tbody>{turn_rows if turn_rows else "<tr><td colspan=4 style='color:#555'>No turns recorded.</td></tr>"}</tbody>
+    </table>
+  </td>
+</tr>""")
+
+    body = "\n".join(rows) or "<tr><td colspan=5 style='color:#555;padding:16px'>No calls yet.</td></tr>"
+
+    html = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>Arthur — Call Logs</title>
+<style>
+  body{{background:#111;color:#ddd;font-family:monospace;margin:0;padding:16px}}
+  h1{{color:#4af;margin:0 0 12px}}
+  table{{width:100%;border-collapse:collapse}}
+  tr:hover td{{background:#1e1e1e}}
+  audio{{max-width:220px}}
+</style>
+</head><body>
+<h1>🎣 Arthur — Call Logs</h1>
+<p style="color:#888">{len(files)} call(s) stored &nbsp;·&nbsp;
+   <a href="/calls" style="color:#4af">↻ refresh</a></p>
+<table>
+<thead><tr style="color:#888;border-bottom:1px solid #444">
+  <th align="left" style="padding:4px 8px">Started (UTC)</th>
+  <th align="left" style="padding:4px 8px">From</th>
+  <th align="left" style="padding:4px 8px">Duration</th>
+  <th align="left" style="padding:4px 8px">Turns</th>
+  <th align="left" style="padding:4px 8px">Recording</th>
+</tr></thead>
+<tbody>{body}</tbody>
+</table>
+<script>function toggle(id){{var e=document.getElementById(id);e.style.display=e.style.display==="none"?"table-row":"none";}}</script>
+</body></html>"""
+
+    return Response(content=html, media_type="text/html")
+
+
+@app.get("/calls/{filename}")
+def calls_file(filename: str):
+    """Serve a WAV recording by filename (e.g. /calls/20260407T030644Z_abc123.wav)."""
+    if not filename.endswith(".wav") or "/" in filename or ".." in filename:
+        return Response(status_code=404)
+    path = os.path.join(CALLS_LOG_DIR, filename)
+    if not os.path.exists(path):
+        return Response(status_code=404)
+    with open(path, "rb") as f:
+        data = f.read()
+    return Response(content=data, media_type="audio/wav",
+                    headers={"Content-Disposition": f'inline; filename="{filename}"'})
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
