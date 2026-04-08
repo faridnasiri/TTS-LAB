@@ -188,6 +188,9 @@ async def inject(req: InjectRequest):
     text = req.text.strip()
     if not text:
         return {"ok": False, "error": "empty text"}
+    if _active_session is None:
+        log.debug("[INJECT] Dropped — no active call  mode=%s  text='%s'", req.mode, text[:40])
+        return {"ok": False, "error": "no active call"}
     await _inject_queue.put({"text": text, "mode": req.mode})
     log.info("Inject queued  mode=%s  text='%s'", req.mode, text[:80])
     return {"ok": True}
@@ -480,10 +483,21 @@ class CallSession:
                 # Wait until Arthur finishes speaking
                 waited = 0.0
                 while self.is_speaking:
-                    await asyncio.sleep(0.2)
-                    waited += 0.2
+                    await asyncio.sleep(0.05)
+                    waited += 0.05
                 if waited > 0:
-                    log.debug("[INJECT] Waited %.1fs for Arthur to finish speaking", waited)
+                    log.debug("[INJECT] Waited %.2fs for Arthur to finish speaking", waited)
+
+                # Also wait for the post-speech echo mute to expire before playing
+                # the next inject.  Without this, back-to-back injects each add a
+                # fresh 0.5 s mute window, suppressing the scammer for their entire
+                # reply window.
+                mute_wait = 0.0
+                while asyncio.get_event_loop().time() < self._echo_mute_until:
+                    await asyncio.sleep(0.05)
+                    mute_wait += 0.05
+                if mute_wait > 0:
+                    log.debug("[INJECT] Waited %.2fs for echo mute to expire", mute_wait)
 
                 stage = self._current_stage()
                 if item["mode"] == "speak":
@@ -516,6 +530,9 @@ class CallSession:
                 if (now - self.call_start) < 4:
                     continue
                 if silent >= SILENCE_PROBE_SEC:
+                    # Skip probe if echo mute is still active (greeting or inject just played)
+                    if asyncio.get_event_loop().time() < self._echo_mute_until:
+                        continue
                     filler = SILENCE_FILLERS[self._probe_index % len(SILENCE_FILLERS)]
                     self._probe_index += 1
                     log.info("[PROBE] Silence=%.0fs — re-engaging: '%s'", silent, filler)
@@ -726,14 +743,16 @@ class CallSession:
                 # Cancel echo mute — scammer is already talking
                 self._echo_mute_until = asyncio.get_event_loop().time()
             else:
-                # Suppress echo of the last TTS chunk for 1.5 s after it was sent.
-                # Twilio conference round-trip echo arrives within ~300 ms; 1.5 s is safe.
-                self._echo_mute_until = asyncio.get_event_loop().time() + 1.5
+                # Suppress echo of the last TTS chunk for 0.5 s after it was sent.
+                # Twilio conference round-trip echo arrives within ~50–300 ms;
+                # 0.5 s provides a safe margin without eating the scammer's reply.
+                # (Previously 1.5 s — was suppressing the first 1.5 s of every reply.)
+                self._echo_mute_until = asyncio.get_event_loop().time() + 0.5
 
             log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  "
                      "chunks=%d  barge=%s  mute=%.1fs",
                      tts_ms, dur_s, src_rate, resamp_ms, total_chunks,
-                     barged, 0.0 if barged else 1.5)
+                     barged, 0.0 if barged else 0.5)
 
         except Exception as e:
             log.error("[TTS]  _speak error: %s", e)
