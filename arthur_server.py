@@ -174,6 +174,10 @@ _inject_queue: asyncio.Queue = asyncio.Queue()
 _latest_call_meta: dict = {}
 # Reference to the active CallSession; None between calls.
 _active_session: "CallSession | None" = None
+# Pre-warmed TTS audio cache: text → (ulaw_8k_bytes, pcm16_8k_bytes).
+# Eliminates the ~200 ms Piper HTTP round-trip for INITIAL_GREETING and
+# SILENCE_FILLERS so they play instantly even when the call is nearly over.
+_tts_cache: dict[str, tuple[bytes, bytes]] = {}
 
 # ── FastAPI app ───────────────────────────────────────────────────────────────
 
@@ -677,55 +681,57 @@ class CallSession:
         return reply
 
     async def _speak(self, ws: WebSocket, text: str, stage: int = 1):
-        """Synthesise with local Piper TTS (tts_lab.py on localhost:8001)."""
+        """Synthesise with Piper TTS.  Uses _tts_cache for an instant fast path
+        (pre-warmed phrases skip the ~200 ms HTTP round-trip entirely)."""
         self.is_speaking = True
         log.debug("[TTS]  → Piper  voice=%s  stage=%d  chars=%d", PIPER_VOICE, stage, len(text))
         try:
-            url = f"{LOCAL_TTS_URL.rstrip('/')}/synthesize/piper"
-            t0  = time.perf_counter()
-            async with httpx.AsyncClient(timeout=30) as http:
-                r = await http.post(url, json={
-                    "text": text,
-                    "params": {
-                        "voice":        PIPER_VOICE,
-                        "length_scale": 1.3,   # 30% slower than native speed
-                        "noise_scale":  0.75,  # slight voice variation — more natural
-                        "noise_w":      0.9,   # slight duration variation
-                    }
-                })
-            tts_ms = int((time.perf_counter() - t0) * 1000)
+            cached = _tts_cache.get(text)
+            if cached:
+                ulaw, pcm8k = cached
+                dur_s = len(ulaw) / STREAM_RATE
+                tts_ms, resamp_ms, src_rate = 0, 0, STREAM_RATE
+                log.debug("[TTS]  cache hit  dur=%.2fs  chars=%d", dur_s, len(text))
+            else:
+                url = f"{LOCAL_TTS_URL.rstrip('/')}/synthesize/piper"
+                t0  = time.perf_counter()
+                async with httpx.AsyncClient(timeout=30) as http:
+                    r = await http.post(url, json={
+                        "text": text,
+                        "params": {
+                            "voice":        PIPER_VOICE,
+                            "length_scale": 1.3,
+                            "noise_scale":  0.75,
+                            "noise_w":      0.9,
+                        }
+                    })
+                tts_ms = int((time.perf_counter() - t0) * 1000)
 
-            if r.status_code != 200:
-                log.error("[TTS]  ✗ HTTP %d  latency=%d ms  body=%s",
-                          r.status_code, tts_ms, r.text[:200])
-                return
+                if r.status_code != 200:
+                    log.error("[TTS]  ✗ HTTP %d  latency=%d ms  body=%s",
+                              r.status_code, tts_ms, r.text[:200])
+                    return
 
-            data = r.json()
-            if data.get("error"):
-                log.error("[TTS]  ✗ Piper error: %s", data["error"])
-                return
+                data = r.json()
+                if data.get("error"):
+                    log.error("[TTS]  ✗ Piper error: %s", data["error"])
+                    return
 
-            wav_bytes = base64.b64decode(data["audio_b64"])
-            pcm, src_rate = parse_wav_pcm(wav_bytes)
-            dur_s = len(pcm) / 2 / src_rate
+                wav_bytes = base64.b64decode(data["audio_b64"])
+                pcm, src_rate = parse_wav_pcm(wav_bytes)
+                dur_s = len(pcm) / 2 / src_rate
 
-            t1 = time.perf_counter()
-            pcm8k = resample_pcm16(pcm, from_rate=src_rate, to_rate=STREAM_RATE)
-            ulaw  = pcm16_to_ulaw(pcm8k)
-            resamp_ms = int((time.perf_counter() - t1) * 1000)
+                t1 = time.perf_counter()
+                pcm8k = resample_pcm16(pcm, from_rate=src_rate, to_rate=STREAM_RATE)
+                ulaw  = pcm16_to_ulaw(pcm8k)
+                resamp_ms = int((time.perf_counter() - t1) * 1000)
 
             # Send in 200 ms chunks so the event loop can check barge-in between them.
-            # Echo mute is set AFTER the loop (anchored to playback END) so we only
-            # suppress the post-speech echo window, not audio during playback
-            # (is_speaking=True already discards inbound frames while Arthur talks).
-            # 1.5 s covers the Twilio conference echo round-trip (~50–300 ms) with
-            # a comfortable safety margin without eating the scammer's reply.
             CHUNK = STREAM_RATE * 200 // 1000  # 1600 bytes = 200 ms at 8 kHz
             total_chunks = (len(ulaw) + CHUNK - 1) // CHUNK
             barged = False
             self._barge_in = False
             send_start = asyncio.get_event_loop().time()
-            # Store TTS for call recording — position relative to call start
             self._tts_overlays.append((send_start - self.call_start, bytes(pcm8k)))
             for i, offset in enumerate(range(0, len(ulaw), CHUNK)):
                 if self._barge_in:
@@ -740,19 +746,15 @@ class CallSession:
                 await asyncio.sleep(0)  # yield — lets run() handle inbound frames
 
             if barged:
-                # Cancel echo mute — scammer is already talking
                 self._echo_mute_until = asyncio.get_event_loop().time()
             else:
-                # Suppress echo of the last TTS chunk for 0.5 s after it was sent.
-                # Twilio conference round-trip echo arrives within ~50–300 ms;
-                # 0.5 s provides a safe margin without eating the scammer's reply.
-                # (Previously 1.5 s — was suppressing the first 1.5 s of every reply.)
+                # Suppress echo for 0.5 s — covers Twilio conference round-trip (~50–300 ms).
                 self._echo_mute_until = asyncio.get_event_loop().time() + 0.5
 
             log.info("[TTS]  ← latency=%d ms  dur=%.2fs  src=%d Hz  resamp=%d ms  "
-                     "chunks=%d  barge=%s  mute=%.1fs",
+                     "chunks=%d  barge=%s  mute=%.1fs  cached=%s",
                      tts_ms, dur_s, src_rate, resamp_ms, total_chunks,
-                     barged, 0.0 if barged else 0.5)
+                     barged, 0.0 if barged else 0.5, cached is not None)
 
         except Exception as e:
             log.error("[TTS]  _speak error: %s", e)
@@ -977,6 +979,50 @@ def _purge_old_call_logs():
                 pass
     if removed:
         log.info("[CALLS] Purged %d file(s) older than 90 days", removed)
+
+async def _warm_tts_cache():
+    """Pre-synthesise INITIAL_GREETING + SILENCE_FILLERS via Piper.
+    Called at startup so these phrases play from RAM with ~0 ms latency
+    instead of the usual ~200 ms Piper HTTP round-trip."""
+    phrases = [INITIAL_GREETING, "Yes."] + SILENCE_FILLERS
+    hit = 0
+    try:
+        async with httpx.AsyncClient(timeout=30) as http:
+            for text in phrases:
+                try:
+                    r = await http.post(
+                        f"{LOCAL_TTS_URL.rstrip('/')}/synthesize/piper",
+                        json={
+                            "text": text,
+                            "params": {
+                                "voice":        PIPER_VOICE,
+                                "length_scale": 1.3,
+                                "noise_scale":  0.75,
+                                "noise_w":      0.9,
+                            }
+                        }
+                    )
+                    if r.status_code == 200:
+                        data = r.json()
+                        if not data.get("error"):
+                            wav_bytes = base64.b64decode(data["audio_b64"])
+                            pcm, src_rate = parse_wav_pcm(wav_bytes)
+                            pcm8k = resample_pcm16(pcm, from_rate=src_rate, to_rate=STREAM_RATE)
+                            ulaw  = pcm16_to_ulaw(pcm8k)
+                            _tts_cache[text] = (ulaw, bytes(pcm8k))
+                            hit += 1
+                            log.debug("[TTS]  cached '%s'  %d bytes", text[:50], len(ulaw))
+                            continue
+                    log.warning("[TTS]  cache warm HTTP %d for '%s'", r.status_code, text[:40])
+                except Exception as e:
+                    log.warning("[TTS]  cache warm error '%s': %s", text[:40], e)
+    except Exception as e:
+        log.warning("[TTS]  cache warm failed: %s", e)
+    log.info("[TTS]  startup cache: %d/%d phrase(s) ready", hit, len(phrases))
+
+@app.on_event("startup")
+async def _startup_warm_cache():
+    await _warm_tts_cache()
 
 @app.get("/calls", response_class=Response)
 def calls_viewer():
