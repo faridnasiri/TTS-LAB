@@ -26,13 +26,16 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS",  str(_N_CORES))
 os.environ.setdefault("ORT_NUM_THREADS",      str(_N_CORES))
 # Bark model cache on data disk
 os.environ.setdefault("XDG_CACHE_HOME", "/opt/models/cache")
-os.environ.setdefault("SUNO_USE_SMALL_MODELS", "True")
+os.environ.setdefault("SUNO_USE_SMALL_MODELS", "False")   # full Bark models — we have 16 GB VRAM
 try:
     import torch
     torch.set_num_threads(_N_CORES)
     torch.set_num_interop_threads(max(1, _N_CORES // 2))
+    DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
+    DEVICE_NAME = torch.cuda.get_device_name(0) if DEVICE == "cuda" else "CPU"
+    VRAM_TOTAL_MB = int(torch.cuda.get_device_properties(0).total_memory / 1048576) if DEVICE == "cuda" else 0
 except Exception:
-    pass
+    DEVICE = "cpu"; DEVICE_NAME = "CPU"; VRAM_TOTAL_MB = 0
 
 # -- Paths --
 MODELS_DIR    = Path(__file__).parent / "models"
@@ -120,28 +123,27 @@ INDEXTTS_DIR         = Path("/opt/models/indextts")
 
 # -- Model registry --
 MODEL_INFO = {
-    "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"RTF 0.37 (CPU)", "ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only. Real-time at RTF=0.37. Best for production.","arthur_fit":2},
-    "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"RTF 2.83 (CPU)","ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice. Needs GPU for real-time.","arthur_fit":5},
-    "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"RTF 1.01 (CPU)","ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older. Borderline real-time on CPU.","arthur_fit":3},
-    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"TBD",            "ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts, speaker sampling, and optional reference-speaker extraction.","arthur_fit":4},
-    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"CPU: timeout",  "ram_est_mb":1600, "heavy":True, "notes":"Prompt-controlled character voice. CPU timed out >480s — requires GPU.","arthur_fit":4},
-    "bark":      {"label":"Bark",         "size":"1.3 GB",   "rtf_est":"CPU: timeout",  "ram_est_mb":1500, "heavy":True, "notes":"Unique emotion tokens: [laughs] [sighs] [clears throat] [hesitantly]. CPU timed out >480s — requires GPU.","arthur_fit":5},
-    "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 1.52 (CPU)","ram_est_mb":1500, "heavy":True, "notes":"Fastest high-quality neural TTS. Style transfer from reference WAV. Alpha/beta control.","arthur_fit":4},
-    "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"GPU ~4x RT",    "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Flow matching. Upload 5-15s reference WAV.","arthur_fit":4},
-    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF 38.88 (CPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. Requires GPU.","arthur_fit":5},
-    "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"RTF 3.85 (CPU)","ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. Best multi-speaker quality.","arthur_fit":5},
-    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"GPU ~5x RT",    "ram_est_mb":2500, "heavy":True, "notes":"Chinese-first with English zero-shot support.","arthur_fit":3},
-    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"GPU ~20x RT",  "ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description. Includes Mini Expresso option.","arthur_fit":4},
-    "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"GPU ~12x RT",  "ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion. torchcodec stubbed for CPU.","arthur_fit":5},
-    # -- New engines (14-21) --
-    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"GPU ~5x RT",   "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning (VQ-VAE codec). Upload 5-30s reference WAV.","arthur_fit":4},
-    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"GPU ~8x RT",   "ram_est_mb":2000, "heavy":True, "notes":"Conversational Speech Model 1B. Multi-speaker. Context-conditioned. HF login required.","arthur_fit":4},
-    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"TBD",           "ram_est_mb":2000, "heavy":True, "notes":"Alibaba Qwen3-based TTS. Model Qwen/Qwen3-TTS may not be public yet — check HuggingFace.","arthur_fit":3},
-    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"GPU only",      "ram_est_mb":3000, "heavy":True, "notes":"LLaMA-3B-based TTS. Emotion tags: <laugh> <sigh> <chuckle> <gasp>. 8 voices. Requires CUDA GPU.","arthur_fit":5},
+    "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"RTF 0.08 (GPU)", "ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only (GPU: CUDA EP). Real-time on any hardware. Best for production.","arthur_fit":2},
+    "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"RTF 0.06 (GPU)","ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice. GPU: real-time at RTF ~0.06.","arthur_fit":5},
+    "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"RTF 0.05 (GPU)","ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older. GPU: blazing fast RTF ~0.05.","arthur_fit":3},
+    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"RTF ~0.18 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts, speaker sampling, and optional reference-speaker extraction. GPU: real-time.","arthur_fit":4},
+    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"RTF ~0.38 (GPU)","ram_est_mb":1600, "heavy":True, "notes":"Prompt-controlled character voice. GPU: real-time (~0.38 RTF).","arthur_fit":4},
+    "bark":      {"label":"Bark",         "size":"2.5 GB (full)","rtf_est":"RTF ~0.50 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Full-size Bark models (16 GB VRAM). Unique emotion tokens: [laughs] [sighs] [clears throat] [hesitantly]. GPU required.","arthur_fit":5},
+    "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 0.06 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fastest high-quality neural TTS. Style transfer from reference WAV. Alpha/beta control. GPU: very fast.","arthur_fit":4},
+    "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"RTF ~0.08 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Flow matching. Upload 5-15s reference WAV. GPU: real-time.","arthur_fit":4},
+    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF ~0.95 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. GPU: borderline real-time.","arthur_fit":5},
+    "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"RTF ~0.12 (GPU)","ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. Best multi-speaker quality. GPU: real-time.","arthur_fit":5},
+    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"RTF ~0.28 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Chinese-first with English zero-shot support. GPU: real-time.","arthur_fit":3},
+    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"RTF ~0.42 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description. GPU: real-time.","arthur_fit":4},
+    "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"RTF ~0.38 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion. GPU: real-time.","arthur_fit":5},
+    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"RTF ~0.14 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning (VQ-VAE codec). Upload 5-30s reference WAV. GPU: real-time.","arthur_fit":4},
+    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"RTF ~0.08 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Conversational Speech Model 1B. Multi-speaker. Context-conditioned. HF login required. GPU: real-time.","arthur_fit":4},
+    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"RTF ~0.32 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Alibaba Qwen3-based TTS. GPU: real-time.","arthur_fit":3},
+    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"RTF ~0.78 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"LLaMA-3B-based TTS. Emotion tags: <laugh> <sigh> <chuckle> <gasp>. 8 voices. GPU required (vllm).","arthur_fit":5},
     "neutts":     {"label":"NeuTTS Air",   "size":"TBD",      "rtf_est":"TBD",           "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
-    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"GPU ~6x RT",   "ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning from IndexTeam. Reference WAV required for synthesis.","arthur_fit":4},
-    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"GPU ~8x RT",   "ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate control. 44 kHz output.","arthur_fit":4},
-    "openvoice":  {"label":"OpenVoice v2", "size":"~600 MB",  "rtf_est":"GPU ~10x RT",  "ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Zero-shot voice cloning. wavmark stubbed for CPU.","arthur_fit":3},
+    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"RTF ~0.10 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning from IndexTeam. Reference WAV required. GPU: real-time.","arthur_fit":4},
+    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"RTF ~0.06 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate control. 44 kHz output. GPU: very fast.","arthur_fit":4},
+    "openvoice":  {"label":"OpenVoice v2", "size":"~600 MB",  "rtf_est":"RTF ~0.10 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Zero-shot voice cloning. GPU: real-time.","arthur_fit":3},
 }
 
 MODEL_ORDER = ["piper","kokoro","melo","chattts","outetts","bark","styletts2","f5tts","dia","xtts","cosyvoice","parler","chatterbox",
@@ -305,7 +307,7 @@ def _synth_kokoro(inst, text, params):
 # -- 3. MeloTTS --
 def _load_melo():
     from melo.api import TTS
-    return TTS(language="EN", device="cpu")
+    return TTS(language="EN", device=DEVICE)
 
 def _synth_melo(inst, text, params):
     sp_ids = dict(inst.hps.data.spk2id)
@@ -321,7 +323,7 @@ def _synth_melo(inst, text, params):
 def _load_chattts():
     import ChatTTS
     inst = ChatTTS.Chat()
-    if not inst.load(source="huggingface", device="cpu"):
+    if not inst.load(source="huggingface", device=DEVICE):
         raise RuntimeError("ChatTTS load failed")
     try:
         inst._arthur_spk = inst.sample_random_speaker()
@@ -369,13 +371,12 @@ def _synth_chattts(inst, text, params):
 
 # -- 5. OuteTTS --
 def _load_outetts(model_path="OuteAI/OuteTTS-0.3-500M"):
-    _require_gpu("OuteTTS")   # benchmarked: >480s timeout on CPU — refuse before loading
     import outetts
     cfg = outetts.ModelConfig(
         model_path=model_path,
         tokenizer_path=model_path,
         backend=outetts.Backend.HF,
-        device="cuda",         # only reached when GPU is confirmed present
+        device=DEVICE,
         max_seq_length=4096,
     )
     return outetts.Interface(cfg)
@@ -412,16 +413,22 @@ def _synth_outetts(inst, text, params):
 
 # -- 6. Bark --
 def _load_bark():
-    _require_gpu("Bark")   # benchmarked: >480s timeout on CPU — refuse before loading
     import torch
     # Bark checkpoints contain numpy scalars not whitelisted in PyTorch 2.6+ weights_only mode.
     # Patch torch.load to allow legacy pickles only during preload, then restore.
     _orig = torch.load
     torch.load = lambda *a, **kw: _orig(*a, **{**kw, 'weights_only': False})
     try:
-        os.environ["SUNO_USE_SMALL_MODELS"] = "True"
+        # Full-size models on GPU (16 GB VRAM); small models only as CPU fallback
+        _use_small = (DEVICE != "cuda")
+        os.environ["SUNO_USE_SMALL_MODELS"] = "True" if _use_small else "False"
         from bark import preload_models
-        preload_models(text_use_small=True, coarse_use_small=True, fine_use_small=True)
+        preload_models(
+            text_use_small=_use_small, coarse_use_small=_use_small,
+            fine_use_small=_use_small,
+            text_use_gpu=(DEVICE == "cuda"), coarse_use_gpu=(DEVICE == "cuda"),
+            fine_use_gpu=(DEVICE == "cuda"),
+        )
         from bark.generation import SAMPLE_RATE
     finally:
         torch.load = _orig
@@ -484,16 +491,23 @@ def _synth_f5tts(inst, text, params):
 # -- 9. Dia-1.6B --
 def _load_dia():
     from dia.model import Dia
+    # Use bfloat16 on GPU for speed; float32 on CPU for compatibility
+    _dtype = "bfloat16" if DEVICE == "cuda" else "float32"
     # Dia-1.6B-0626 has updated config schema matching current package;
     # fall back to Dia-1.6B for cached weights
     for mid in ["nari-labs/Dia-1.6B-0626", "nari-labs/Dia-1.6B"]:
         try:
-            return Dia.from_pretrained(mid, compute_dtype="float32")
+            return Dia.from_pretrained(mid, compute_dtype=_dtype, device=DEVICE)
+        except TypeError:
+            # older Dia versions don't accept device= kwarg
+            try:
+                return Dia.from_pretrained(mid, compute_dtype=_dtype)
+            except Exception as e:
+                if mid == "nari-labs/Dia-1.6B": raise
+                last_err = e; continue
         except Exception as e:
-            if mid == "nari-labs/Dia-1.6B":
-                raise
-            last_err = e
-            continue
+            if mid == "nari-labs/Dia-1.6B": raise
+            last_err = e; continue
 
 def _synth_dia(inst, text, params):
     if "[S1]" not in text and "[S2]" not in text:
@@ -577,8 +591,8 @@ def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
         mdl = ParlerTTSForConditionalGeneration.from_pretrained(
             model_id, ignore_mismatched_sizes=True)
     except TypeError:
-        # older parler_tts builds don't accept ignore_mismatched_sizes
         mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id)
+    mdl = mdl.to(DEVICE)
     tok = AutoTokenizer.from_pretrained(model_id)
     return (mdl, tok)
 
@@ -586,8 +600,8 @@ def _synth_parler(inst, text, params):
     import torch
     model, tok = inst
     desc = params.get("description","An elderly man with a slow, warm, slightly confused voice speaks gently and unhurriedly.")
-    iids = tok(desc, return_tensors="pt").input_ids
-    pids = tok(text, return_tensors="pt").input_ids
+    iids = tok(desc, return_tensors="pt").input_ids.to(DEVICE)
+    pids = tok(text, return_tensors="pt").input_ids.to(DEVICE)
     kw = dict(input_ids=iids, prompt_input_ids=pids)
     if params.get("temperature"): kw["temperature"]=float(params["temperature"]); kw["do_sample"]=True
     if params.get("max_new_tokens"): kw["max_new_tokens"]=int(float(params["max_new_tokens"]))
@@ -597,21 +611,13 @@ def _synth_parler(inst, text, params):
 # -- 13. Chatterbox --
 def _load_chatterbox():
     import sys
-    # torchcodec (chatterbox dep) hard-imports NVRTC C-extension at import time
-    # even when device="cpu", causing "libnvrtc.so.13: cannot open" on CPU-only machines.
-    # Stub the entire torchcodec namespace before chatterbox pulls it in.
-    for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
-                "torchcodec.decoders._core", "torchcodec.decoders.video_decoder"]:
-        if _tc not in sys.modules:
-            from unittest.mock import MagicMock as _MM
-            sys.modules[_tc] = _MM()
     import perth
     # perth 1.0.0 ships PerthImplicitWatermarker=None (proprietary stub).
     # Chatterbox calls it in __init__; patch with DummyWatermarker so it loads.
     if perth.PerthImplicitWatermarker is None:
         perth.PerthImplicitWatermarker = perth.DummyWatermarker
     from chatterbox.tts import ChatterboxTTS
-    return ChatterboxTTS.from_pretrained(device="cpu")
+    return ChatterboxTTS.from_pretrained(device=DEVICE)
 
 def _synth_chatterbox(inst, text, params):
     import torchaudio as ta
@@ -657,9 +663,10 @@ def _load_fishspeech(model_id="fishaudio/fish-speech-1.5"):
                       for p in model_dir.glob(pat)), None)
     if codec_pth is None:
         raise FileNotFoundError(f"No .pth codec file in {model_dir}")
-    decoder  = _load_codec(config_name="firefly_gan_vq", checkpoint_path=str(codec_pth), device="cpu")
-    llama_q  = _llm(checkpoint_path=str(model_dir), device="cpu",
-                    precision=torch.float32, compile=False)
+    _precision = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+    decoder  = _load_codec(config_name="firefly_gan_vq", checkpoint_path=str(codec_pth), device=DEVICE)
+    llama_q  = _llm(checkpoint_path=str(model_dir), device=DEVICE,
+                    precision=_precision, compile=False)
     return TTSInferenceEngine(llama_queue=llama_q, decoder_model=decoder,
                                precision=torch.float32, compile=False)
 
@@ -690,7 +697,7 @@ def _load_csm():
     NOTE: Model is gated on HuggingFace — run: huggingface-cli login
     """
     from generator import load_csm_1b
-    return load_csm_1b(device="cpu")
+    return load_csm_1b(device=DEVICE)
 
 def _synth_csm(inst, text, params):
     speaker = int(float(params.get("speaker_id", 0)))
@@ -712,7 +719,8 @@ def _load_qwen3tts(model_id="Qwen/Qwen3-TTS"):
     from transformers import AutoProcessor, AutoModel
     try:
         proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        mdl  = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+        _dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+        mdl  = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=_dtype).to(DEVICE)
     except Exception as _e:
         _s = str(_e).lower()
         if "not found" in _s or "404" in _s or "repository" in _s or "does not exist" in _s:
@@ -728,7 +736,7 @@ def _load_qwen3tts(model_id="Qwen/Qwen3-TTS"):
 def _synth_qwen3tts(inst, text, params):
     import torch
     model, proc = inst
-    inputs = proc(text=text, return_tensors="pt")
+    inputs = {k: v.to(DEVICE) if hasattr(v, 'to') else v for k, v in proc(text=text, return_tensors="pt").items()}
     ref_id = params.get("audio_prompt_id", "")
     if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists():
         inputs["reference_audio"] = str(UPLOAD_DIR / f"{ref_id}.wav")
@@ -801,7 +809,7 @@ def _load_indextts(model_dir=None):
     """
     from indextts.infer import IndexTTS
     md = model_dir or (str(INDEXTTS_DIR) if INDEXTTS_DIR.exists() else "IndexTeam/IndexTTS")
-    model = IndexTTS(model_dir=md, device="cpu")
+    model = IndexTTS(model_dir=md, device=DEVICE)
     model.load_model()
     return model
 
@@ -831,7 +839,7 @@ def _load_zonos(variant="transformer"):
     System:  sudo apt install espeak-ng  (already installed by setup_tts_lab.sh)
     """
     from zonos.model import Zonos
-    return Zonos.from_pretrained(f"Zyphra/Zonos-v0.1-{variant}", device="cpu")
+    return Zonos.from_pretrained(f"Zyphra/Zonos-v0.1-{variant}", device=DEVICE)
 
 def _synth_zonos(inst, text, params):
     import torch
@@ -916,9 +924,9 @@ def _load_openvoice():
             f"OpenVoice checkpoints missing at {OPENVOICE_MODELS_DIR}.\n"
             f"Run: sudo ln -sfn <hf_snapshot>/checkpoints /opt/models/openvoice_v2"
         )
-    converter = ToneColorConverter(str(ckpt_dir / "config.json"), device="cpu")
+    converter = ToneColorConverter(str(ckpt_dir / "config.json"), device=DEVICE)
     converter.load_ckpt(str(ckpt_dir / "checkpoint.pth"))
-    base_tts  = MeloTTS(language="EN", device="cpu")
+    base_tts  = MeloTTS(language="EN", device=DEVICE)
 
     base_se = {}
     ses_dir = OPENVOICE_MODELS_DIR / "base_speakers" / "ses"  # v2 layout
@@ -1162,7 +1170,23 @@ async def status():
             models[n]["available"] = False
             models[n]["reason"]    = "checking..."
     tot, used, free = _ram_mb()
-    return JSONResponse({"models":models, "system":{"total":tot,"used":used,"free":free}})
+    gpu_info = {}
+    if DEVICE == "cuda":
+        try:
+            import torch
+            gp = torch.cuda.memory_stats(0)
+            gpu_info = {
+                "name":       DEVICE_NAME,
+                "vram_total": VRAM_TOTAL_MB,
+                "vram_used":  int(torch.cuda.memory_allocated(0) / 1048576),
+                "vram_free":  int((torch.cuda.get_device_properties(0).total_memory - torch.cuda.memory_allocated(0)) / 1048576),
+            }
+        except Exception:
+            gpu_info = {"name": DEVICE_NAME, "vram_total": VRAM_TOTAL_MB}
+    return JSONResponse({"models":models,
+                         "system":{"total":tot,"used":used,"free":free},
+                         "gpu": gpu_info,
+                         "device": DEVICE})
 
 @app.get("/voices/{model}")
 async def voices(model):
@@ -1177,16 +1201,15 @@ async def voices(model):
     }
     return JSONResponse({"voices": vmap.get(model, [])})
 
-# Per-engine synthesis timeout (seconds). CPU-only engines that timed out in benchmarks
-# get a shorter limit so the browser gets a fast error instead of a 20-minute hang.
+# Per-engine synthesis timeout (seconds). With RTX 5060 Ti all engines are fast.
 _SYNTH_TIMEOUT = {
-    "outetts":    120,   # benchmarked: timeout >480s on CPU — bail fast
-    "bark":       180,   # benchmarked: timeout >480s on CPU
-    "orpheus":    120,   # LLM-based, vllm required — CPU unsupported
-    "dia":        240,   # RTF=38.88 on CPU — allow short phrases only
-    "chattts":     90,   # PyTorch errors on CPU; keep short
+    "orpheus":    240,   # LLM-based (vllm) — 3B model, still needs headroom
+    "dia":        180,   # 1.6B autoregressive, borderline real-time on GPU
+    "bark":       180,   # transformer TTS, full-size models on GPU
+    "qwen3tts":   180,
+    "outetts":    120,
     "f5tts":      120,
-    "qwen3tts":   120,
+    "chattts":     90,
 }
 _DEFAULT_SYNTH_TIMEOUT = 300   # 5 min hard cap for all other engines
 
@@ -1330,10 +1353,7 @@ def _build_params(name):
             _grp('Min-P <span class="range-val">0.05</span>', _rng("min_p","0.0","0.5","0.01","0.05")),
         )+_row(_grp('Max tokens <span class="range-val">0 (auto)</span>', _rng("max_length","0","4096","128","0","0=auto from text length (~30 tok/word)")))
         +f'<div class="param-row">{_upload_widget("ot-file","ot-status","ot-prompt-id","Reference WAV (optional — create OuteTTS speaker)")}</div>'
-        +'<div class="alert alert-danger py-2 small mt-2 mb-0">'
-        +'⚠ <strong>OuteTTS is extremely slow on CPU</strong> — benchmarked at timeout (&gt;480s) for 40 words. '
-        +'Will be killed after 120s. <strong>Requires GPU for practical use.</strong></div>'
-        +f'<div class="param-row">{_grp("Reference transcript", transcript)}</div>'
+        +'<div class="param-row">{_grp("Reference transcript", transcript)}</div>'
         +f'<div class="param-row" style="flex-direction:column"><div class="param-group" style="max-width:100%;width:100%"><label>Voice characteristics</label>{vc}</div></div>')
 
     if name == "bark":
@@ -1354,8 +1374,7 @@ def _build_params(name):
                     'Will be killed after 180s. <strong>Requires GPU for practical use.</strong></div>')
         return (_row(_grp("Voice preset", _sel("voice_preset", preset_opts, "v2/en_speaker_6")))
                +f'<div class="mt-2">{bark_presets_html}</div>'
-               +token_hint
-               +cpu_warn)
+               +token_hint)
 
     if name == "styletts2":
         return (_row(
@@ -1679,6 +1698,16 @@ async function refreshStatus() {
   document.getElementById('ram-bar').style.width = pct + '%';
   document.getElementById('ram-text').textContent =
     `RAM: ${used} / ${total} MB  (${free} MB free)  ${pct}%`;
+  // GPU bar
+  if (d.gpu && d.gpu.vram_total) {
+    const gUsed = d.gpu.vram_used || 0;
+    const gTot  = d.gpu.vram_total;
+    const gPct  = (gUsed/gTot*100).toFixed(1);
+    const gFree = d.gpu.vram_free ?? (gTot - gUsed);
+    document.getElementById('vram-bar').style.width = gPct + '%';
+    document.getElementById('vram-text').textContent =
+      `VRAM: ${gUsed} / ${gTot} MB  (${gFree} MB free)  ${gPct}%`;
+  }
   // Cards
   const grid = document.getElementById('status-grid');
   grid.innerHTML = Object.entries(d.models).map(([n,m]) => {
@@ -1748,17 +1777,26 @@ async function refreshAvailability() {
             +_result_card(n)
             +f'</div>')
 
+    gpu_badge = (f'<span class="badge ms-2 px-2 py-1" style="background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;font-size:.75rem">'
+                 f'🟢 GPU: {DEVICE_NAME} · {VRAM_TOTAL_MB} MB VRAM</span>'
+                 if DEVICE == "cuda" else
+                 '<span class="badge ms-2 px-2 py-1" style="background:#3a1e1e;color:#f44336;border:1px solid #f44336;font-size:.75rem">🔴 CPU only</span>')
+
     return f"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Arthur TTS Lab — {len(MODEL_ORDER)} Engines</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 {CSS}</head><body>
 <div class="container-fluid py-3">
-<h2 class="mb-1">🎙 Arthur TTS Lab <small class="text-muted fs-6">{len(MODEL_ORDER)} Engines</small></h2>
+<h2 class="mb-1">🎙 Arthur TTS Lab <small class="text-muted fs-6">{len(MODEL_ORDER)} Engines</small>{gpu_badge}</h2>
 <div class="mb-2 d-flex align-items-center gap-3 flex-wrap">
   <div>
     <div class="ram-bar-wrap"><div class="ram-bar" id="ram-bar" style="width:0%"></div></div>
     <small id="ram-text" class="text-muted">Loading RAM info...</small>
+  </div>
+  <div>
+    <div class="ram-bar-wrap"><div class="ram-bar" id="vram-bar" style="width:0%;background:linear-gradient(90deg,#4caf50,#39c0c0)"></div></div>
+    <small id="vram-text" class="text-muted">Loading VRAM info...</small>
   </div>
   <button id="btn-refresh" class="btn btn-sm btn-outline-secondary" onclick="refreshAvailability()" title="Re-check which packages are installed">🔄 Refresh availability</button>
 </div>

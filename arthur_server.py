@@ -158,8 +158,25 @@ SILENCE_FILLERS = [
 
 CPU_THREADS = int(os.environ.get("CPU_THREADS", os.cpu_count() or 6))
 
-log.info("Loading Whisper '%s' on %d threads...", WHISPER_MODEL, CPU_THREADS)
-whisper = WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8",
+# ── GPU detection ─────────────────────────────────────────────────────────────
+try:
+    import ctranslate2 as _ct2
+    _cuda_ok = "float16" in _ct2.get_supported_compute_types("cuda")
+except Exception:
+    _cuda_ok = False
+
+if _cuda_ok:
+    _WHISPER_DEVICE       = "cuda"
+    _WHISPER_COMPUTE_TYPE = "float16"
+    log.info("CUDA detected — Whisper will run on GPU (float16)")
+else:
+    _WHISPER_DEVICE       = "cpu"
+    _WHISPER_COMPUTE_TYPE = "int8"
+    log.info("No CUDA — Whisper will run on CPU (int8)")
+
+log.info("Loading Whisper '%s' on %s...", WHISPER_MODEL, _WHISPER_DEVICE)
+whisper = WhisperModel(WHISPER_MODEL, device=_WHISPER_DEVICE,
+                       compute_type=_WHISPER_COMPUTE_TYPE,
                        cpu_threads=CPU_THREADS, num_workers=1)
 log.info("Whisper ready.")
 
