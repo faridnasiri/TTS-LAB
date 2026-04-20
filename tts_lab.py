@@ -127,7 +127,7 @@ MODEL_INFO = {
     "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"RTF 2.77 (GPU)","ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice. ONNX CPU-only (tiny model).","arthur_fit":5},
     "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"RTF 0.30 (GPU)","ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older. GPU: 3.4× faster than CPU.","arthur_fit":3},
     "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"RTF 2.59 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts and speaker sampling. gpt.py patched for PyTorch 2.10 compat.","arthur_fit":4},
-    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"needs GGUF",   "ram_est_mb":1600, "heavy":True, "notes":"HF backend broken (15K tokens for any text). Needs GGUF file via LLAMACPP backend.","arthur_fit":4},
+    "outetts":   {"label":"OuteTTS 1.0",   "size":"384 MB (Q4_K_M GGUF)","rtf_est":"RTF 2.19 (GPU)","ram_est_mb":800,  "heavy":True, "notes":"OuteTTS-1.0-0.6B GGUF via LLAMACPP + GPU. HF backend broken. llama-cpp-python built with GGML_CUDA=on. Default: /opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf","arthur_fit":4},
     "bark":      {"label":"Bark",         "size":"2.5 GB (full)","rtf_est":"RTF 4.64 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Full-size models on GPU. Unique emotion tokens: [laughs] [sighs] [clears throat]. 110s cold load.","arthur_fit":5},
     "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 0.35 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fast high-quality TTS. Style transfer from reference WAV. GPU: real-time.","arthur_fit":4},
     "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"needs ref WAV", "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Upload 5-15s reference WAV first.","arthur_fit":4},
@@ -386,28 +386,41 @@ def _synth_chattts(inst, text, params):
     return _to_wav(arr, 24000), 24000
 
 # -- 5. OuteTTS --
-def _load_outetts(model_path="OuteAI/OuteTTS-0.3-500M"):
+# Models on VM:
+#   /opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf  ← recommended (outetts 0.4.x)
+#   /opt/models/outetts-gguf/OuteTTS-0.3-500M-Q4_K_M.gguf  ← incompatible (wrong token mapping)
+#
+# OuteTTS 1.0 tokenizer: OuteAI/OuteTTS-1.0-0.6B
+# OuteTTS 0.3 tokenizer: OuteAI/OuteTTS-0.3-500M  (NOT for use with outetts 0.4.x)
+#
+# HF backend is permanently broken: pre-encodes text as ~15K positional tokens.
+# LLAMACPP backend with CUDA GGUF requires llama-cpp-python built with GGML_CUDA=on.
+# Build: CMAKE_ARGS="-DGGML_CUDA=on -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc" \
+#        pip install llama-cpp-python --force-reinstall
+
+OUTETTS_DEFAULT_GGUF = "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf"
+OUTETTS_DEFAULT_TOKENIZER = "OuteAI/OuteTTS-1.0-0.6B"
+
+def _load_outetts(model_path=OUTETTS_DEFAULT_GGUF):
     import outetts
-    # OuteTTS HF backend pre-encodes text as ~15 K positional tokens regardless
-    # of text length, always exceeding max_seq_length → generation fails.
-    # Fix: use GGUF model with LLAMACPP backend.  Download once:
-    #   huggingface-cli download OuteAI/OuteTTS-0.3-500M-GGUF \
-    #       --local-dir /opt/models/outetts-gguf --include "*.gguf"
-    # Then pass model_path="/opt/models/outetts-gguf/model.gguf"
-    gguf_path = model_path  # caller can pass an explicit .gguf path
+    gguf_path = model_path
     if not gguf_path.endswith(".gguf"):
         raise RuntimeError(
-            "OuteTTS-0.3-500M HF backend is broken: pre-encodes text as ~15K tokens "
-            "exceeding any max_seq_length.\n"
-            "Use GGUF: huggingface-cli download OuteAI/OuteTTS-0.3-500M-GGUF "
-            "--local-dir /opt/models/outetts-gguf --include '*.gguf'\n"
-            "Then POST params: {\"model_path\":\"/opt/models/outetts-gguf/model.gguf\"}"
+            "OuteTTS HF backend is broken (pre-encodes text as ~15K tokens).\n"
+            f"Use GGUF: {OUTETTS_DEFAULT_GGUF}\n"
+            f"Then POST params: {{\"model_path\":\"{OUTETTS_DEFAULT_GGUF}\"}}"
         )
+    # Detect tokenizer from model filename
+    tokenizer = OUTETTS_DEFAULT_TOKENIZER
+    if "0.3" in gguf_path:
+        tokenizer = "OuteAI/OuteTTS-0.3-500M"
     cfg = outetts.ModelConfig(
         model_path=gguf_path,
-        tokenizer_path="OuteAI/OuteTTS-0.3-500M",
+        tokenizer_path=tokenizer,
         backend=outetts.Backend.LLAMACPP,
         device=DEVICE,
+        max_seq_length=32768,   # native context; default 4096 causes KV cache slot failure
+        n_gpu_layers=99,        # must be explicit — device="cuda" alone doesn't set this
     )
     return outetts.Interface(cfg)
 
@@ -1137,7 +1150,7 @@ def _ensure_loaded(name, params):
             if st["instance"] and st.get("loaded_voice") != wanted:
                 _safe_del(st["instance"]); st["instance"] = None
         if name == "outetts":
-            wanted = params.get("model_path", "OuteAI/OuteTTS-0.3-500M")
+            wanted = params.get("model_path", OUTETTS_DEFAULT_GGUF)
             if st["instance"] and st.get("loaded_model") != wanted:
                 _safe_del(st["instance"]); st["instance"] = None
         if name == "parler":
@@ -1157,7 +1170,7 @@ def _ensure_loaded(name, params):
                 if name == "piper":
                     st["instance"] = _load_piper(params.get("voice", "en_US-ryan-high"))
                 elif name == "outetts":
-                    st["instance"] = _load_outetts(params.get("model_path", "OuteAI/OuteTTS-0.3-500M"))
+                    st["instance"] = _load_outetts(params.get("model_path", OUTETTS_DEFAULT_GGUF))
                 elif name == "parler":
                     st["instance"] = _load_parler(params.get("model_id", "parler-tts/parler-tts-mini-v1"))
                 elif name == "zonos":
@@ -1167,7 +1180,7 @@ def _ensure_loaded(name, params):
                 st["load_time_s"] = round(time.perf_counter()-t0, 2)
                 st["status"] = "loaded"; st["error"] = ""
                 if name == "piper":   st["loaded_voice"] = params.get("voice", "en_US-ryan-high")
-                if name == "outetts": st["loaded_model"] = params.get("model_path", "OuteAI/OuteTTS-0.3-500M")
+                if name == "outetts": st["loaded_model"] = params.get("model_path", OUTETTS_DEFAULT_GGUF)
                 if name == "parler":  st["loaded_model"] = params.get("model_id", "parler-tts/parler-tts-mini-v1")
                 if name == "zonos":   st["loaded_model"] = params.get("variant", "transformer")
             except Exception as e:
