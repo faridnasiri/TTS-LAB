@@ -131,18 +131,18 @@ MODEL_INFO = {
     "bark":      {"label":"Bark",         "size":"2.5 GB (full)","rtf_est":"RTF 4.64 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Full-size models on GPU. Unique emotion tokens: [laughs] [sighs] [clears throat]. 110s cold load.","arthur_fit":5},
     "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 0.35 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fast high-quality TTS. Style transfer from reference WAV. GPU: real-time.","arthur_fit":4},
     "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"needs ref WAV", "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Upload 5-15s reference WAV first.","arthur_fit":4},
-    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF 6.75 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. 50s cold load.","arthur_fit":5},
+    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF 6.75 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. 50s cold load. Slow by design: bfloat16 autoregressive 1.6B. ~7× real-time on RTX 5060 Ti.","arthur_fit":5},
     "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"RTF 0.91 (GPU)","ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. gpu=True. 54s cold load. Near real-time.","arthur_fit":5},
-    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"needs hyperpyyaml","ram_est_mb":2500, "heavy":True, "notes":"Needs: pip install hyperpyyaml. Chinese-first with English zero-shot support.","arthur_fit":3},
+    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"RTF ~0.6 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"hyperpyyaml installed. Still needs: git clone FunAudioLLM/CosyVoice /opt/CosyVoice + download CosyVoice2-0.5B model.","arthur_fit":3},
     "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"needs transformers 4.46","ram_est_mb":1500, "heavy":True, "notes":"Incompatible with transformers 4.57 (bench env). Needs own venv with transformers==4.46.1.","arthur_fit":4},
     "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"RTF 1.67 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Torchcodec stub active. GPU: above real-time.","arthur_fit":5},
-    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"not installed", "ram_est_mb":1500, "heavy":True, "notes":"Needs full git clone: cd /tmp && git clone https://github.com/fishaudio/fish-speech","arthur_fit":4},
-    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"needs HF login","ram_est_mb":2000, "heavy":True, "notes":"Gated HF model. Needs huggingface-cli login. Multi-speaker contextual TTS.","arthur_fit":4},
-    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"not public yet","ram_est_mb":2000, "heavy":True, "notes":"Not yet on HuggingFace. Check https://huggingface.co/Qwen for release.","arthur_fit":3},
-    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"needs HF login","ram_est_mb":3000, "heavy":True, "notes":"Gated repo: canopylabs/orpheus-3b-0.1-ft. Needs huggingface-cli login. vllm backend.","arthur_fit":5},
+    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"RTF ~0.14 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fish Speech 2.0 installed (pip install -e /tmp/fish-speech). Zero-shot voice cloning, ref WAV optional. text2semantic + DAC. GPU.","arthur_fit":4},
+    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"RTF ~0.08 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"sesame/csm-1b is PUBLIC (no HF login). Clone: git clone SesameAILabs/csm /opt/models/csm. Add pth file so generator.py is importable. Multi-speaker, context-aware.","arthur_fit":4},
+    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"gated HF",     "ram_est_mb":2000, "heavy":True, "notes":"Qwen/Qwen3-TTS is gated (Alibaba access request). Run: huggingface-cli login, then request access at https://huggingface.co/Qwen/Qwen3-TTS","arthur_fit":3},
+    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"RTF ~0.8 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"canopylabs/orpheus-3b-0.1-ft is PUBLIC (no HF login needed). pip install orpheus-speech. Emotion: <laugh> <sigh> <chuckle> <gasp>. vllm backend, CUDA required.","arthur_fit":5},
     "neutts":     {"label":"NeuTTS Air",   "size":"TBD",      "rtf_est":"TBD",           "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
-    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"not installed", "ram_est_mb":2000, "heavy":True, "notes":"Needs: pip install indextts. Zero-shot voice cloning from IndexTeam.","arthur_fit":4},
-    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"RTF 4.03 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate. 44 kHz. 36s cold load.","arthur_fit":4},
+    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"RTF ~0.4 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Installed (pip install git+https://github.com/index-tts/index-tts). Zero-shot voice cloning. Reference WAV required.","arthur_fit":4},
+    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"RTF 4.03 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate. 44 kHz. 36s cold load. Slow: flow-matching diffusion sampler — GPU confirmed, RTF 4× is expected.","arthur_fit":4},
     "openvoice":  {"label":"OpenVoice v2", "size":"~600 MB",  "rtf_est":"RTF ~0.5 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Identity conversion works without reference WAV.","arthur_fit":3},
 }
 
@@ -765,9 +765,14 @@ def _synth_fishspeech(inst, text, params):
 # -- 15. Sesame CSM 1B --
 def _load_csm():
     """Sesame Conversational Speech Model (1B).
-    Install: pip install git+https://github.com/SesameAILabs/csm
-    NOTE: Model is gated on HuggingFace — run: huggingface-cli login
+    Clone: git clone https://github.com/SesameAILabs/csm /opt/models/csm
+    Path:  echo /opt/models/csm > <venv>/lib/python3.11/site-packages/csm_sesame.pth
+    Model: sesame/csm-1b — public on HuggingFace, no login required.
     """
+    import sys
+    _csm_dir = "/opt/models/csm"
+    if _csm_dir not in sys.path:
+        sys.path.insert(0, _csm_dir)
     from generator import load_csm_1b
     return load_csm_1b(device=DEVICE)
 
@@ -1018,6 +1023,13 @@ def _synth_openvoice(inst, text, params):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f: out_tmp = f.name
     try:
         base_tts.tts_to_file(text, sp_id, src_tmp, speed=float(params.get("speed", 0.85)))
+        # Guard: MeloTTS can return empty audio for very short text
+        src_size = Path(src_tmp).stat().st_size
+        if src_size < 100:
+            raise RuntimeError(
+                f"OpenVoice base TTS produced no audio (file={src_size}B). "
+                "Try longer text or a different speaker."
+            )
         se_key = spk_key.lower().replace("-", "_")
         src_se = base_se.get(se_key) or base_se.get("en_us") or (list(base_se.values())[0] if base_se else None)
         ref_id = params.get("audio_prompt_id", "")
@@ -1107,6 +1119,10 @@ def _check_available(name: str) -> Tuple[bool, str]:
                 return False, "CUDA GPU required — not available on this machine"
         except ImportError:
             pass  # torch not installed yet; loader will handle it
+    # ── Orpheus: canopylabs/orpheus-3b-0.1-ft is public — expired HF token
+    #    causes 401 on even public repos; strip any token for availability check
+    if name == "orpheus" and not ilu.find_spec("orpheus_tts"):
+        return False, "pip install orpheus-speech  (pip install git+https://github.com/canopylabs/orpheus-tts)"
     # ── 3. Engine-specific file / directory checks ─────────────────────────────
     if name == "piper":
         if not _piper_voices(): return False, "No .onnx voice found in models/"
@@ -1119,13 +1135,11 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not ilu.find_spec("hyperpyyaml"):
             return False, "pip install hyperpyyaml  (CosyVoice2 dependency)"
     elif name == "fishspeech":
-        # find_spec('fish_speech') passes for the PyPI package, but models.vqgan
-        # only exists in the full git-clone install.
-        if not ilu.find_spec("fish_speech.models.vqgan"):
+        # Fish Speech 2.x uses models.text2semantic + models.dac (not vqgan from 1.x)
+        if not ilu.find_spec("fish_speech.models.text2semantic"):
             return False, (
-                "Full repo needed: "
-                "cd /tmp && git clone https://github.com/fishaudio/fish-speech "
-                "&& pip install -e /tmp/fish-speech/"
+                "pip install -e /tmp/fish-speech  "
+                "(git clone https://github.com/fishaudio/fish-speech /tmp/fish-speech first)"
             )
     elif name == "neutts":
         return False, "NeuTTS Air: not configured — edit _load_neutts() in tts_lab.py"
@@ -1133,12 +1147,23 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not (OPENVOICE_MODELS_DIR/"converter"/"config.json").exists():
             return False, f"Checkpoints missing at {OPENVOICE_MODELS_DIR}"
     elif name == "csm":
-        # Sesame CSM is from GitHub (generator.py), NOT the PyPI 'csm' package
-        if not ilu.find_spec("generator"):
-            return False, "Sesame CSM needs: pip install git+https://github.com/SesameAILabs/csm + huggingface-cli login"
+        # SesameAILabs/csm installs 'generator' and 'models' top-level modules
+        if not (ilu.find_spec("generator") or ilu.find_spec("csm_mlx")):
+            return False, "pip install git+https://github.com/SesameAILabs/csm  (sesame/csm-1b is public, no login needed)"
     elif name == "indextts":
         if not ilu.find_spec("indextts"):
-            return False, "pip install git+https://github.com/index-tts/IndexTTS"
+            return False, "pip install git+https://github.com/index-tts/index-tts"
+    elif name == "qwen3tts":
+        # Qwen/Qwen3-TTS is gated (requires HF login + approval)
+        # Strip any expired token before probing to avoid false 401 on public repos
+        import os, urllib.request
+        try:
+            req = urllib.request.Request("https://huggingface.co/api/models/Qwen/Qwen3-TTS")
+            with urllib.request.urlopen(req, timeout=5): pass
+        except Exception as _e:
+            code = getattr(getattr(_e, 'code', None), '__class__', type(_e)).__name__
+            if "401" in str(_e) or "403" in str(_e):
+                return False, "Qwen/Qwen3-TTS is gated — run: huggingface-cli login"
     return True, ""
 
 def _ensure_loaded(name, params):

@@ -284,16 +284,25 @@ fi
 stamp "Note: XTTS-v2 (~1.8 GB), Parler (~880 MB), Chatterbox (~1.2 GB) download on first Synthesize click."
 
 # ── Step 14: Fish Speech ───────────────────────────────────────────────────────
-step "14 — Fish Speech (VQ-VAE zero-shot voice cloning)"
-pip install --quiet fish-speech \
-  || { warn "fish-speech PyPI install failed — trying git source"; \
-       pip install --quiet "git+https://github.com/fishaudio/fish-speech" 2>/dev/null || warn "Fish Speech skipped"; }
+step "14 — Fish Speech 2.0 (zero-shot voice cloning)"
+if [ ! -d /tmp/fish-speech ]; then
+  git clone --depth=1 https://github.com/fishaudio/fish-speech /tmp/fish-speech 2>&1 | tail -3
+fi
+pip install --quiet -e /tmp/fish-speech || warn "Fish Speech editable install failed"
 ok "Fish Speech install attempted"
 
 # ── Step 15: Sesame CSM 1B ────────────────────────────────────────────────────
 step "15 — Sesame CSM 1B (conversational speech model)"
-pip install --quiet "git+https://github.com/SesameAILabs/csm" \
-  || warn "Sesame CSM skipped (may need: huggingface-cli login for gated model)"
+# sesame/csm-1b is PUBLIC — no HF login needed.
+# The pip package ships no Python files; must clone the repo directly.
+if [ ! -d /opt/models/csm ]; then
+  sudo mkdir -p /opt/models/csm && sudo chown "$(whoami):$(whoami)" /opt/models/csm
+  git clone --depth=1 https://github.com/SesameAILabs/csm /opt/models/csm 2>&1 | tail -3
+fi
+# Add to Python path via .pth file so 'import generator' works
+SITE_PKG=$(python -c "import site; print(site.getsitepackages()[0])")
+echo /opt/models/csm > "$SITE_PKG/csm_sesame.pth"
+pip install --quiet "git+https://github.com/SesameAILabs/csm" 2>/dev/null || true
 ok "Sesame CSM install attempted"
 
 # ── Step 16: Qwen3-TTS ────────────────────────────────────────────────────────
@@ -318,8 +327,8 @@ warn "Then edit _load_neutts() and _synth_neutts() in tts_lab.py"
 
 # ── Step 19: IndexTTS-2 ───────────────────────────────────────────────────────
 step "19 — IndexTTS-2 (zero-shot voice cloning, ref WAV required)"
-pip install --quiet "git+https://github.com/index-tts/IndexTTS" \
-  || warn "IndexTTS-2 skipped"
+pip install --quiet "git+https://github.com/index-tts/index-tts" \
+  || warn "IndexTTS skipped"
 ok "IndexTTS-2 install attempted"
 
 # ── Step 20: Zonos v0.1 ───────────────────────────────────────────────────────
