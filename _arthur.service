@@ -22,6 +22,9 @@ Environment=ORT_NUM_THREADS=12
 Environment=CPU_THREADS=12
 Environment=HF_HOME=/opt/models/huggingface
 Environment=CALLS_LOG_DIR=/opt/arthur/calls
+# RTX 5060 Ti GPU — CUDA 12.8 / SM 12.0
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=TORCH_CUDA_ARCH_LIST=12.0
 
 [Install]
 WantedBy=multi-user.target

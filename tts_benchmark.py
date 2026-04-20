@@ -29,6 +29,17 @@ from typing import Optional
 
 import numpy as np
 
+# ── GPU detection ─────────────────────────────────────────────────────────────
+try:
+    import torch as _t
+    DEVICE      = "cuda" if _t.cuda.is_available() else "cpu"
+    DEVICE_NAME = _t.cuda.get_device_name(0) if DEVICE == "cuda" else "CPU"
+    del _t
+except Exception:
+    DEVICE = "cpu"; DEVICE_NAME = "CPU"
+
+print(f"[bench] Device: {DEVICE}  ({DEVICE_NAME})")
+
 # ── Test config ───────────────────────────────────────────────────────────────
 
 # Representative Arthur utterance: ~40 words, ~8s at elderly confused pace
@@ -120,7 +131,7 @@ def bench_piper() -> BenchResult:
     voice = None
     try:
         t0 = time.perf_counter()
-        voice = PiperVoice.load(str(model_path), config_path=str(config_path), use_cuda=False)
+        voice = PiperVoice.load(str(model_path), config_path=str(config_path), use_cuda=(DEVICE=="cuda"))
         r.load_time_s = round(time.perf_counter() - t0, 3)
 
         rb = _ram_mb()
@@ -203,7 +214,7 @@ def bench_melo() -> BenchResult:
     tts = None
     try:
         t0 = time.perf_counter()
-        tts = TTS(language="EN", device="cpu")
+        tts = TTS(language="EN", device=DEVICE)
         r.load_time_s = round(time.perf_counter() - t0, 3)
         speaker_ids = tts.hps.data.spk2id
 
@@ -249,7 +260,7 @@ def bench_chattts() -> BenchResult:
     try:
         t0 = time.perf_counter()
         inst = ChatTTS.Chat()
-        if not inst.load(source="huggingface", device="cpu"):
+        if not inst.load(source="huggingface", device=DEVICE):
             raise RuntimeError("ChatTTS load failed")
         spk = inst.sample_random_speaker()
         r.load_time_s = round(time.perf_counter() - t0, 3)
@@ -307,7 +318,7 @@ def bench_outetts() -> BenchResult:
         t0 = time.perf_counter()
         cfg  = outetts.ModelConfig(
             model_path="OuteAI/OuteTTS-0.3-500M", tokenizer_path="OuteAI/OuteTTS-0.3-500M",
-            backend=outetts.Backend.HF, device="cpu", max_seq_length=32768,
+            backend=outetts.Backend.HF, device=DEVICE, max_seq_length=32768,
         )
         inst    = outetts.Interface(cfg)
         speaker = inst.load_default_speaker("en-female-1-neutral")
@@ -365,8 +376,12 @@ def bench_bark() -> BenchResult:
         torch.load = lambda *a, **kw: _orig(*a, **{**kw, "weights_only": False})
         t0 = time.perf_counter()
         try:
-            os.environ["SUNO_USE_SMALL_MODELS"] = "True"
-            preload_models(text_use_small=True, coarse_use_small=True, fine_use_small=True)
+            _use_small = (DEVICE != "cuda")
+            os.environ["SUNO_USE_SMALL_MODELS"] = "True" if _use_small else "False"
+            preload_models(
+                text_use_small=_use_small, coarse_use_small=_use_small, fine_use_small=_use_small,
+                text_use_gpu=(DEVICE=="cuda"), coarse_use_gpu=(DEVICE=="cuda"), fine_use_gpu=(DEVICE=="cuda"),
+            )
         finally:
             torch.load = _orig
         r.load_time_s = round(time.perf_counter() - t0, 3)
@@ -509,7 +524,11 @@ def bench_dia() -> BenchResult:
         t0 = time.perf_counter()
         for mid in ["nari-labs/Dia-1.6B-0626", "nari-labs/Dia-1.6B"]:
             try:
-                inst = Dia.from_pretrained(mid, compute_dtype="float32"); break
+                _dtype = "bfloat16" if DEVICE == "cuda" else "float32"
+                try:
+                    inst = Dia.from_pretrained(mid, compute_dtype=_dtype, device=DEVICE); break
+                except TypeError:
+                    inst = Dia.from_pretrained(mid, compute_dtype=_dtype); break
             except Exception:
                 if mid == "nari-labs/Dia-1.6B": raise
         r.load_time_s = round(time.perf_counter() - t0, 3)
@@ -689,7 +708,7 @@ def bench_parler() -> BenchResult:
     try:
         model_id = "parler-tts/parler-tts-mini-v1"
         t0 = time.perf_counter()
-        model     = ParlerTTSForConditionalGeneration.from_pretrained(model_id)
+        model     = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(DEVICE)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         r.load_time_s = round(time.perf_counter() - t0, 3)
 
@@ -698,8 +717,8 @@ def bench_parler() -> BenchResult:
             "An elderly man with a slow, warm, slightly confused voice speaks gently "
             "and unhurriedly, with natural pauses between sentences."
         )
-        input_ids  = tokenizer(description, return_tensors="pt").input_ids
-        prompt_ids = tokenizer(TEST_PHRASE, return_tensors="pt").input_ids
+        input_ids  = tokenizer(description, return_tensors="pt").input_ids.to(DEVICE)
+        prompt_ids = tokenizer(TEST_PHRASE, return_tensors="pt").input_ids.to(DEVICE)
 
         rb = _ram_mb()
         t0 = time.perf_counter()
@@ -746,11 +765,11 @@ def bench_chatterbox() -> BenchResult:
         t0 = time.perf_counter()
         # Try turbo variant first, fall back to base
         try:
-            model = ChatterboxTTS.from_pretrained("resemble-ai/chatterbox-turbo", device="cpu")
-            r.voice = "chatterbox-turbo (exaggeration=0.65)"
+            model = ChatterboxTTS.from_pretrained("resemble-ai/chatterbox-turbo", device=DEVICE)
+            r.voice = f"chatterbox-turbo (exaggeration=0.65, device={DEVICE})"
         except Exception:
-            model = ChatterboxTTS.from_pretrained(device="cpu")
-            r.voice = "chatterbox-base (exaggeration=0.65)"
+            model = ChatterboxTTS.from_pretrained(device=DEVICE)
+            r.voice = f"chatterbox-base (exaggeration=0.65, device={DEVICE})"
         r.load_time_s = round(time.perf_counter() - t0, 3)
 
         rb = _ram_mb()
@@ -799,8 +818,8 @@ def bench_fishspeech() -> BenchResult:
     try:
         import torch, soundfile as sf
         t0   = time.perf_counter()
-        inst = TTSInference.from_pretrained("fishaudio/fish-speech-1.5", device="cpu",
-                                             dtype=torch.float32)
+        inst = TTSInference.from_pretrained("fishaudio/fish-speech-1.5", device=DEVICE,
+                                             dtype=torch.bfloat16 if DEVICE=="cuda" else torch.float32)
         r.load_time_s = round(time.perf_counter() - t0, 3)
         rb = _ram_mb()
         t0 = time.perf_counter()
@@ -847,7 +866,7 @@ def bench_csm() -> BenchResult:
     try:
         import soundfile as sf
         t0  = time.perf_counter()
-        gen = load_csm_1b(device="cpu")
+        gen = load_csm_1b(device=DEVICE)
         r.load_time_s = round(time.perf_counter() - t0, 3)
         rb = _ram_mb()
         t0 = time.perf_counter()
@@ -890,9 +909,11 @@ def bench_qwen3tts() -> BenchResult:
         model_id  = "Qwen/Qwen3-TTS"
         t0        = time.perf_counter()
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        model     = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=torch.float32)
+        model     = AutoModel.from_pretrained(model_id, trust_remote_code=True,
+                        torch_dtype=torch.bfloat16 if DEVICE=="cuda" else torch.float32).to(DEVICE)
         r.load_time_s = round(time.perf_counter() - t0, 3)
-        inputs = processor(text=TEST_PHRASE, return_tensors="pt")
+        inputs = {k: v.to(DEVICE) if hasattr(v,'to') else v
+                  for k,v in processor(text=TEST_PHRASE, return_tensors="pt").items()}
         rb = _ram_mb()
         t0 = time.perf_counter()
         with torch.no_grad():
@@ -991,7 +1012,7 @@ def bench_indextts() -> BenchResult:
     model = None
     try:
         t0    = time.perf_counter()
-        model = IndexTTS(model_dir="IndexTeam/IndexTTS", device="cpu")
+        model = IndexTTS(model_dir="IndexTeam/IndexTTS", device=DEVICE)
         model.load_model()
         r.load_time_s = round(time.perf_counter() - t0, 3)
         rb = _ram_mb()
@@ -1031,7 +1052,7 @@ def bench_zonos() -> BenchResult:
     try:
         import torch, soundfile as sf
         t0    = time.perf_counter()
-        model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device="cpu")
+        model = Zonos.from_pretrained("Zyphra/Zonos-v0.1-transformer", device=DEVICE)
         r.load_time_s = round(time.perf_counter() - t0, 3)
         emotion    = [0.3, 0.05, 0.05, 0.05, 0.1, 0.05, 0.2, 0.2]
         cond       = make_cond_dict(text=TEST_PHRASE, language="en-us",
@@ -1080,9 +1101,9 @@ def bench_openvoice() -> BenchResult:
     try:
         import torch, soundfile as sf
         t0 = time.perf_counter()
-        converter  = ToneColorConverter(str(ov_dir / "converter" / "config.json"), device="cpu")
+        converter  = ToneColorConverter(str(ov_dir / "converter" / "config.json"), device=DEVICE)
         converter.load_ckpt(str(ov_dir / "converter" / "checkpoint.pth"))
-        tts_model  = MeloTTS(language="EN", device="cpu")
+        tts_model  = MeloTTS(language="EN", device=DEVICE)
         r.load_time_s = round(time.perf_counter() - t0, 3)
         sp_ids = tts_model.hps.data.spk2id
         rb = _ram_mb()
