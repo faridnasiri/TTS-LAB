@@ -252,6 +252,7 @@ def _load_piper(voice="en_US-ryan-high"):
     from piper.voice import PiperVoice
     mp = MODELS_DIR / f"{voice}.onnx"; cp = MODELS_DIR / f"{voice}.onnx.json"
     if not mp.exists(): raise FileNotFoundError(f"Piper voice not found: {mp}")
+    # Piper is a tiny ONNX model (~50 MB); CUDA EP overhead > GPU benefit — keep CPU.
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = _N_CORES; opts.inter_op_num_threads = max(1, _N_CORES // 2)
     try:    return PiperVoice.load(str(mp), config_path=str(cp) if cp.exists() else None, use_cuda=False, sess_options=opts)
@@ -288,13 +289,15 @@ def _load_kokoro():
     from kokoro_onnx import Kokoro
     mp = MODELS_DIR/"kokoro-v1.0.onnx"; vp = MODELS_DIR/"voices-v1.0.bin"
     if not mp.exists(): raise FileNotFoundError("kokoro-v1.0.onnx missing")
+    # Kokoro-ONNX (82 MB): CUDA EP latency > CPU for this model size — use CPU.
+    # True GPU speedup requires the PyTorch kokoro package (different install).
+    opts = ort.SessionOptions(); opts.intra_op_num_threads = _N_CORES
+    opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
     try:
         from kokoro_onnx.config import EspeakConfig
         return Kokoro(str(mp), str(vp), espeak_config=EspeakConfig(data_path=ESPEAK_DATA))
     except (ImportError, TypeError, AttributeError):
         pass
-    opts = ort.SessionOptions(); opts.intra_op_num_threads = _N_CORES
-    opts.execution_mode = ort.ExecutionMode.ORT_PARALLEL
     try:    return Kokoro(str(mp), str(vp), sess_options=opts)
     except TypeError: return Kokoro(str(mp), str(vp))
 
@@ -552,7 +555,8 @@ def _load_xtts():
     _patch_transformers_for_coqui()
     os.environ["COQUI_TOS_AGREED"] = "1"
     from TTS.api import TTS
-    return TTS("tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False)
+    return TTS("tts_models/multilingual/multi-dataset/xtts_v2",
+               progress_bar=False, gpu=(DEVICE == "cuda"))
 
 def _synth_xtts(inst, text, params):
     kw = dict(text=text, speaker=params.get("speaker","Torcull Diarmuid"), language=params.get("language","en"))
@@ -582,16 +586,22 @@ def _synth_cosyvoice(inst, text, params):
 
 # -- 12. Parler-TTS --
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
-    from parler_tts import ParlerTTSForConditionalGeneration
+    from parler_tts import ParlerTTSForConditionalGeneration, ParlerTTSConfig
     from transformers import AutoTokenizer
-    # Config version mismatch between parler-tts and transformers causes
-    # "Config initialisation error" on some installs. Silence it with
-    # ignore_mismatched_sizes so the model still loads with a warning.
+    # transformers >=4.51 instantiates config with no args first, then populates it,
+    # but ParlerTTSConfig.__init__ raises ValueError if text_encoder/audio_encoder/decoder
+    # are None.  Patch __init__ to allow the empty-args call during from_pretrained.
+    _orig_init = ParlerTTSConfig.__init__
+    def _permissive_init(self, text_encoder=None, audio_encoder=None, decoder=None, **kw):
+        if text_encoder is None and audio_encoder is None and decoder is None:
+            super(ParlerTTSConfig, self).__init__(**kw); return
+        _orig_init(self, text_encoder=text_encoder,
+                   audio_encoder=audio_encoder, decoder=decoder, **kw)
+    ParlerTTSConfig.__init__ = _permissive_init
     try:
-        mdl = ParlerTTSForConditionalGeneration.from_pretrained(
-            model_id, ignore_mismatched_sizes=True)
-    except TypeError:
         mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id)
+    finally:
+        ParlerTTSConfig.__init__ = _orig_init   # always restore
     mdl = mdl.to(DEVICE)
     tok = AutoTokenizer.from_pretrained(model_id)
     return (mdl, tok)
@@ -625,7 +635,6 @@ def _load_chatterbox():
     return ChatterboxTTS.from_pretrained(device=DEVICE)
 
 def _synth_chatterbox(inst, text, params):
-    import torchaudio as ta
     kw = dict(exaggeration=float(params.get("exaggeration",0.65)), cfg_weight=float(params.get("cfg_weight",0.5)))
     seed = params.get("seed")
     if seed and int(float(seed)) != 0: kw["seed"] = int(float(seed))
@@ -634,8 +643,10 @@ def _synth_chatterbox(inst, text, params):
         p = UPLOAD_DIR / f"{pid}.wav"
         if p.exists(): kw["audio_prompt_path"] = str(p)
     wav = inst.generate(text, **kw)
-    buf = io.BytesIO(); ta.save(buf, wav, inst.sr, format="wav"); buf.seek(0)
-    return buf.read(), inst.sr
+    # Avoid torchaudio.save() — it attempts to import torchcodec.encoders which
+    # fails when the torchcodec stub is active (libnvrtc.so.13 missing).
+    arr = wav.squeeze().cpu().numpy().astype(np.float32)
+    return _to_wav(arr, inst.sr), inst.sr
 
 # -- 14. Fish Speech --
 def _load_fishspeech(model_id="fishaudio/fish-speech-1.5"):
@@ -882,27 +893,16 @@ def _synth_zonos(inst, text, params):
     conditioning = inst.prepare_conditioning(cond)
     with torch.no_grad():
         codes = inst.generate(
-            conditioning,
+            prefix_conditioning=conditioning,
             max_new_tokens=int(float(params.get("max_new_tokens", 1024))),
+            cfg_scale=float(params.get("cfg_scale", 2.0)),
             disable_torch_compile=True,
         )
-    # Zonos 0.1.0 renamed/restructured the decode path.
-    # Try each known location before giving up.
-    _decoded = None
-    for _attr in ["autoregressive_model", "backbone", "codec", "model"]:
-        _obj = getattr(inst, _attr, None)
-        if _obj is not None and hasattr(_obj, "decode"):
-            _decoded = _obj.decode(codes); break
-    if _decoded is None:
-        if hasattr(inst, "decode"):
-            _decoded = inst.decode(codes)
-        else:
-            raise RuntimeError(
-                "Zonos API changed: no .decode() found on this version.\n"
-                "Update: pip install --upgrade git+https://github.com/Zyphra/Zonos"
-            )
-    arr  = _decoded[0].squeeze().cpu().numpy().astype(np.float32)
-    return _to_wav(arr, 44000), 44000
+    # Decode via autoencoder (Zonos 0.1.0 API)
+    wav_t    = inst.autoencoder.decode(codes)
+    sr       = inst.autoencoder.sampling_rate
+    arr      = wav_t[0].squeeze().cpu().numpy().astype(np.float32)
+    return _to_wav(arr, sr), sr
 
 # -- 21. OpenVoice v2 --
 def _load_openvoice():

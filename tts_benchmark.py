@@ -586,7 +586,8 @@ def bench_xtts() -> BenchResult:
     tts = None
     try:
         t0 = time.perf_counter()
-        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=False)
+        tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2",
+                  progress_bar=False, gpu=(DEVICE == "cuda"))
         r.load_time_s = round(time.perf_counter() - t0, 3)
 
         speakers = tts.speakers or []
