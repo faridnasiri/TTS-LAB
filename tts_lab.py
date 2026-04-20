@@ -586,23 +586,23 @@ def _synth_cosyvoice(inst, text, params):
 
 # -- 12. Parler-TTS --
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
-    from parler_tts import ParlerTTSForConditionalGeneration, ParlerTTSConfig
+    # parler-tts 0.2.x requires transformers==4.46.1 (hard pin in setup.py).
+    # The bench env uses transformers 4.57.6 (needed for vllm/Orpheus).
+    # These are fundamentally incompatible — parler needs its own venv.
+    # To use parler: create a separate venv with transformers==4.46.1 and
+    # run a dedicated parler server, or wait for a parler-tts release that
+    # supports transformers >=4.51.
+    import transformers
+    tv = tuple(int(x) for x in transformers.__version__.split(".")[:2])
+    if tv >= (4, 51):
+        raise RuntimeError(
+            f"Parler-TTS 0.2.x requires transformers<=4.46.1 "
+            f"(installed: {transformers.__version__}). "
+            "Install in a separate venv: pip install transformers==4.46.1"
+        )
+    from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
-    # transformers >=4.51 instantiates config with no args first, then populates it,
-    # but ParlerTTSConfig.__init__ raises ValueError if text_encoder/audio_encoder/decoder
-    # are None.  Patch __init__ to allow the empty-args call during from_pretrained.
-    _orig_init = ParlerTTSConfig.__init__
-    def _permissive_init(self, text_encoder=None, audio_encoder=None, decoder=None, **kw):
-        if text_encoder is None and audio_encoder is None and decoder is None:
-            super(ParlerTTSConfig, self).__init__(**kw); return
-        _orig_init(self, text_encoder=text_encoder,
-                   audio_encoder=audio_encoder, decoder=decoder, **kw)
-    ParlerTTSConfig.__init__ = _permissive_init
-    try:
-        mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id)
-    finally:
-        ParlerTTSConfig.__init__ = _orig_init   # always restore
-    mdl = mdl.to(DEVICE)
+    mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(DEVICE)
     tok = AutoTokenizer.from_pretrained(model_id)
     return (mdl, tok)
 
@@ -620,14 +620,20 @@ def _synth_parler(inst, text, params):
 
 # -- 13. Chatterbox --
 def _load_chatterbox():
-    import sys
-    # torchcodec hard-imports NVRTC/FFmpeg C-extension at import time regardless of device.
-    # Stub the namespace so chatterbox loads without FFmpeg being installed.
+    import sys, types, importlib.machinery
+    # torchcodec 0.11 was built for CUDA 13.x; we have CUDA 12.8.
+    # torchaudio 2.10 detects torchcodec via __spec__ — MagicMock breaks that check.
+    # Use real types.ModuleType stubs so __spec__ is a proper ModuleSpec.
     for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
-                "torchcodec.decoders._core", "torchcodec.decoders.video_decoder"]:
+                "torchcodec.decoders._core", "torchcodec.decoders.video_decoder",
+                "torchcodec.encoders"]:
         if _tc not in sys.modules:
-            from unittest.mock import MagicMock as _MM
-            sys.modules[_tc] = _MM()
+            _m = types.ModuleType(_tc)
+            _is_pkg = not "." in _tc.split("torchcodec.")[-1] or _tc == "torchcodec"
+            _m.__spec__ = importlib.machinery.ModuleSpec(
+                _tc, loader=None, is_package=_is_pkg)
+            _m.__path__ = []     # marks it as a package to submodule imports
+            sys.modules[_tc] = _m
     import perth
     if perth.PerthImplicitWatermarker is None:
         perth.PerthImplicitWatermarker = perth.DummyWatermarker
@@ -938,12 +944,14 @@ def _load_openvoice():
     en_dir  = OPENVOICE_MODELS_DIR / "base_speakers" / "EN"   # v1 layout
     if ses_dir.exists():
         for p in ses_dir.glob("*.pth"):
-            base_se[p.stem] = torch.load(str(p), map_location="cpu", weights_only=False)
+            t = torch.load(str(p), map_location=DEVICE, weights_only=False)
+            base_se[p.stem] = t.to(DEVICE) if hasattr(t, "to") else t
     elif en_dir.exists():
         for fname, key in [("en_default_se.pth", "en_default"), ("en_style_se.pth", "en_style")]:
             p = en_dir / fname
             if p.exists():
-                base_se[key] = torch.load(str(p), map_location="cpu", weights_only=False)
+                t = torch.load(str(p), map_location=DEVICE, weights_only=False)
+                base_se[key] = t.to(DEVICE) if hasattr(t, "to") else t
     return {"converter": converter, "base_tts": base_tts, "base_se": base_se}
 
 def _synth_openvoice(inst, text, params):
