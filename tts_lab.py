@@ -611,9 +611,14 @@ def _synth_parler(inst, text, params):
 # -- 13. Chatterbox --
 def _load_chatterbox():
     import sys
+    # torchcodec hard-imports NVRTC/FFmpeg C-extension at import time regardless of device.
+    # Stub the namespace so chatterbox loads without FFmpeg being installed.
+    for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
+                "torchcodec.decoders._core", "torchcodec.decoders.video_decoder"]:
+        if _tc not in sys.modules:
+            from unittest.mock import MagicMock as _MM
+            sys.modules[_tc] = _MM()
     import perth
-    # perth 1.0.0 ships PerthImplicitWatermarker=None (proprietary stub).
-    # Chatterbox calls it in __init__; patch with DummyWatermarker so it loads.
     if perth.PerthImplicitWatermarker is None:
         perth.PerthImplicitWatermarker = perth.DummyWatermarker
     from chatterbox.tts import ChatterboxTTS
