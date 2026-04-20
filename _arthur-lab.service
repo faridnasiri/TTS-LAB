@@ -1,0 +1,29 @@
+[Unit]
+Description=Arthur TTS Lab (interactive web UI on port 8001)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/arthur
+ExecStart=/opt/arthur-bench-env/bin/uvicorn tts_lab:app --host 0.0.0.0 --port 8001 --workers 1
+Restart=always
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=OMP_NUM_THREADS=12
+Environment=MKL_NUM_THREADS=12
+Environment=OPENBLAS_NUM_THREADS=12
+Environment=ORT_NUM_THREADS=12
+Environment=NUMEXPR_NUM_THREADS=12
+Environment=CPU_THREADS=12
+Environment=HF_HOME=/opt/models/huggingface
+Environment=TRANSFORMERS_CACHE=/opt/models/huggingface/hub
+Environment=XDG_CACHE_HOME=/opt/models/cache
+Environment=SUNO_USE_SMALL_MODELS=True
+Environment=COQUI_TOS_AGREED=1
+Environment=CUDA_VISIBLE_DEVICES=0
+Environment=TOKENIZERS_PARALLELISM=false
+Environment=VLLM_WORKER_MULTIPROC_METHOD=spawn
+
+[Install]
+WantedBy=multi-user.target
