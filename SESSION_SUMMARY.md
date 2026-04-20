@@ -1,6 +1,63 @@
 # Arthur Server — Session Summary
-> Chat session: 2026-03-23  
-> Branch: `main` — commits `e188bbd`, `0a53f32`, `945d14a`
+> Chat session: 2026-03-23 → 2026-04-20  
+> Branch: `main`
+
+---
+
+## Session 2026-04-20 — GPU Engine Fixes (RTX 5060 Ti)
+
+### What Was Fixed
+
+The VM received an RTX 5060 Ti (16 GB GDDR7). Several TTS engines were broken or not using GPU. This session fixed them all one by one with a full benchmark confirming results.
+
+#### VM Infrastructure Changes
+| Change | Detail |
+|--------|--------|
+| Pip cache | Moved to `/opt/models/pip-cache` (180 GB disk) — prevents root disk filling up |
+| `onnxruntime-gpu` | Installed — CUDA EP + TensorRT EP now available |
+| `libnvrtc.so.13` | Symlinked → `libnvrtc.so.12` for torchcodec ABI compat |
+| ChatTTS `gpt.py` | Patched on VM: `narrow(1,-n,n)` guarded for `n=0` (PyTorch 2.10 strict validation) |
+| `restart_server()` | Added `sudo` — bench restarts now actually work between engines |
+
+#### Engine Fixes (bench4 — final confirmed results)
+
+| Engine | Before | After | Root cause / Fix |
+|--------|--------|-------|-----------------|
+| **XTTS-v2** | RTF 3.85 (CPU) | **RTF 0.91** | `gpu=True` in coqui TTS constructor |
+| **Chatterbox** | 500 error | **RTF 1.67** | `types.ModuleType` stub (not MagicMock); bypass `torchaudio.save()` → `_to_wav()` |
+| **Zonos** | 500 error | **RTF 4.03** | `generate(prefix_conditioning=…)` keyword + `autoencoder.decode()` |
+| **ChatTTS** | 500 error | **RTF 2.59** | Patched `gpt.py` narrow() + `empty_cache()` + fixed seed=2024 |
+| **MeloTTS** | RTF 1.01 | **RTF 0.30** | Already GPU — confirmed 3.4× faster |
+| **StyleTTS2** | RTF 1.52 | **RTF 0.35** | Already GPU — confirmed 4.3× faster |
+| **Piper** | RTF 0.37 | RTF 0.36 | GPU EP was 40× slower — kept CPU ONNX (tiny model) |
+| **Kokoro** | RTF 2.83 | RTF 2.77 | GPU EP no speedup for 82 MB model — kept CPU ONNX |
+| **Parler** | 500 error | ⚠️ version-gated | Requires `transformers==4.46.1`; bench env has 4.57.6. Needs own venv. |
+| **OpenVoice** | device mismatch | ⚠️ VAD edge case | Speaker embeddings moved to `DEVICE`; SE extractor null-guarded |
+| **OuteTTS** | 500 error | ⚠️ needs GGUF | HF backend pre-encodes any text as ~15K tokens. Use LLAMACPP + `.gguf` file |
+| **Orpheus** | 500 error | ⚠️ gated HF | Needs `huggingface-cli login` (canopylabs/orpheus-3b-0.1-ft) |
+
+#### Root Causes Reference
+
+| Error | Cause |
+|-------|-------|
+| `torchcodec.__spec__ is not set` | MagicMock stub — use `types.ModuleType` with proper `__spec__` |
+| `torchaudio.save() TorchCodec required` | torchaudio 2.10 routes save through torchcodec — use `_to_wav()` directly |
+| `Zonos: no .decode() found` | API changed: `generate(prefix_conditioning=)` + `autoencoder.decode()` |
+| `ChatTTS narrow() length must be non-negative` | PyTorch 2.10 strict: `narrow(1,-n,n)` with `n=0` raises. Patch `gpt.py` line 215, 230, 239, 251 |
+| `Parler Config has to be initialized…` | `transformers>=4.51` calls `__init__()` with no args; parler raises ValueError |
+| `Parler 'NoneType' has no .update()` | `generation_config` is `None` in transformers 4.57 when no JSON exists |
+| `OpenVoice tensor device mismatch` | Speaker SE tensors loaded on CPU, converter on CUDA — use `map_location=DEVICE` |
+| `OuteTTS max_length < input_ids` | HF backend encodes any text as ~15K tokens — needs GGUF + LLAMACPP backend |
+| `piper/kokoro GPU EP slower` | Tiny ONNX models: GPU memory transfer overhead exceeds GPU compute speedup |
+
+#### Commits This Session
+
+| Commit | Description |
+|--------|-------------|
+| `7e60c7c` | XTTS `gpu=True`, Zonos API, Chatterbox stub+synth, Piper/Kokoro CPU revert |
+| `010fc48` | Chatterbox `ModuleType` stub, Parler version gate, OpenVoice GPU tensors |
+| `a9c05b2` | Benchmark results table updated (final bench4 numbers) |
+| `93847ae` | ChatTTS `gpt.py` patch, OuteTTS GGUF directive, OuteTTS CHUNKED mode |
 
 ---
 
