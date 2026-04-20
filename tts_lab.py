@@ -335,6 +335,7 @@ def _load_chattts():
     return inst
 
 def _synth_chattts(inst, text, params):
+    import torch
     spk_emb = getattr(inst, "_arthur_spk", None)
     prompt_id = params.get("audio_prompt_id", "")
     if prompt_id:
@@ -342,7 +343,9 @@ def _synth_chattts(inst, text, params):
         if prompt_path.exists():
             prompt_wav, _ = _read_wav_mono_f32(prompt_path)
             spk_emb = inst.sample_audio_speaker(prompt_wav)
-    seed = int(float(params.get("seed", 0)))
+    # Use a fixed default seed — random seeds cause narrow() with certain
+    # GPU memory layouts (ChatTTS 0.2.4 + PyTorch 2.10 incompatibility).
+    seed = int(float(params.get("seed", 0))) or 2024
     infer_kw = dict(
         prompt=params.get("prompt", "[speed_5]"),
         top_P=float(params.get("top_p", 0.7)),
@@ -352,35 +355,59 @@ def _synth_chattts(inst, text, params):
         max_new_token=int(float(params.get("max_new_token", 512))),
         show_tqdm=False,
         spk_emb=spk_emb,
+        manual_seed=seed,
     )
-    if seed:
-        infer_kw["manual_seed"] = seed
-    try:
-        out = inst.infer(
-            text,
-            skip_refine_text=str(params.get("skip_refine_text", "true")).lower() in ("1", "true", "yes", "on"),
-            params_infer_code=inst.InferCodeParams(**infer_kw),
-        )
-    except RuntimeError as _e:
-        if "narrow" in str(_e) or "length must be non-negative" in str(_e):
-            raise RuntimeError(
-                f"ChatTTS internal error: {_e}\n"
-                "Known cause: PyTorch version mismatch with ChatTTS.\n"
-                "Fix: pip install --upgrade ChatTTS  or  pin torch==2.3.1"
-            ) from _e
-        raise
+    skip = str(params.get("skip_refine_text", "true")).lower() in ("1", "true", "yes", "on")
+    # GPU memory fragmentation after other model loads causes 0-token generation
+    # which triggers narrow() in the DVAE. Clear cache before inference.
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
+    _last_err = None
+    for _bump in [0, 7, 42, 100]:
+        _kw = dict(infer_kw, manual_seed=seed + _bump)
+        try:
+            out = inst.infer(text, skip_refine_text=skip,
+                             params_infer_code=inst.InferCodeParams(**_kw))
+            _last_err = None
+            break
+        except RuntimeError as _e:
+            if "narrow" in str(_e) or "length must be non-negative" in str(_e):
+                _last_err = _e
+                if DEVICE == "cuda":
+                    torch.cuda.empty_cache()
+                continue
+            raise
+    if _last_err is not None:
+        raise RuntimeError(
+            f"ChatTTS narrow() after 4 attempts — GPU state issue: {_last_err}\n"
+            "Try reloading the engine (DELETE /models/chattts) then retrying."
+        ) from _last_err
     arr = np.array(out[0] if isinstance(out, list) else out, dtype=np.float32)
     return _to_wav(arr, 24000), 24000
 
 # -- 5. OuteTTS --
 def _load_outetts(model_path="OuteAI/OuteTTS-0.3-500M"):
     import outetts
+    # OuteTTS HF backend pre-encodes text as ~15 K positional tokens regardless
+    # of text length, always exceeding max_seq_length → generation fails.
+    # Fix: use GGUF model with LLAMACPP backend.  Download once:
+    #   huggingface-cli download OuteAI/OuteTTS-0.3-500M-GGUF \
+    #       --local-dir /opt/models/outetts-gguf --include "*.gguf"
+    # Then pass model_path="/opt/models/outetts-gguf/model.gguf"
+    gguf_path = model_path  # caller can pass an explicit .gguf path
+    if not gguf_path.endswith(".gguf"):
+        raise RuntimeError(
+            "OuteTTS-0.3-500M HF backend is broken: pre-encodes text as ~15K tokens "
+            "exceeding any max_seq_length.\n"
+            "Use GGUF: huggingface-cli download OuteAI/OuteTTS-0.3-500M-GGUF "
+            "--local-dir /opt/models/outetts-gguf --include '*.gguf'\n"
+            "Then POST params: {\"model_path\":\"/opt/models/outetts-gguf/model.gguf\"}"
+        )
     cfg = outetts.ModelConfig(
-        model_path=model_path,
-        tokenizer_path=model_path,
-        backend=outetts.Backend.HF,
+        model_path=gguf_path,
+        tokenizer_path="OuteAI/OuteTTS-0.3-500M",
+        backend=outetts.Backend.LLAMACPP,
         device=DEVICE,
-        max_seq_length=4096,
     )
     return outetts.Interface(cfg)
 
@@ -394,23 +421,33 @@ def _synth_outetts(inst, text, params):
             speaker = inst.create_speaker(str(prompt_path), transcript=params.get("transcript", "") or None)
     if speaker is None:
         speaker = inst.load_default_speaker(params.get("speaker", "en-female-1-neutral"))
-    # Auto-compute max_length from text length so CPU doesn't spin for 32K tokens.
-    # ~30 audio codec tokens per word + 512 buffer, capped at 4096.
-    _ui_max = int(float(params.get("max_length", 0)))
-    _auto_max = min(_ui_max if _ui_max > 0 else (len(text.split()) * 30 + 512), 4096)
-    out = inst.generate(outetts.GenerationConfig(
-        text=text,
-        voice_characteristics=params.get("voice_characteristics") or None,
-        speaker=speaker,
-        max_length=_auto_max,
-        sampler_config=outetts.SamplerConfig(
-            temperature=float(params.get("temperature", 0.4)),
-            repetition_penalty=float(params.get("repetition_penalty", 1.1)),
-            top_k=int(float(params.get("top_k", 40))),
-            top_p=float(params.get("top_p", 0.9)),
-            min_p=float(params.get("min_p", 0.05)),
-        ),
-    ))
+    # OuteTTS HF backend pre-encodes text+audio vocab → even "Hello" = 14K tokens.
+    # CHUNKED mode splits text into small pieces and generates each within the
+    # model window. Do NOT pass max_length with CHUNKED (outetts manages sizing).
+    try:
+        gen_type = outetts.GenerationType.CHUNKED
+        gen_cfg_kw = dict(
+            text=text,
+            voice_characteristics=params.get("voice_characteristics") or None,
+            speaker=speaker,
+            generation_type=gen_type,
+        )
+    except AttributeError:
+        # Older outetts without CHUNKED — use REGULAR with a large max_length
+        gen_cfg_kw = dict(
+            text=text,
+            voice_characteristics=params.get("voice_characteristics") or None,
+            speaker=speaker,
+            max_length=8192,
+        )
+    gen_cfg_kw["sampler_config"] = outetts.SamplerConfig(
+        temperature=float(params.get("temperature", 0.4)),
+        repetition_penalty=float(params.get("repetition_penalty", 1.1)),
+        top_k=int(float(params.get("top_k", 40))),
+        top_p=float(params.get("top_p", 0.9)),
+        min_p=float(params.get("min_p", 0.05)),
+    )
+    out = inst.generate(outetts.GenerationConfig(**gen_cfg_kw))
     arr = out.audio.detach().cpu().numpy().squeeze()
     return _to_wav(arr, getattr(out, "sr", 44100)), getattr(out, "sr", 44100)
 
@@ -972,11 +1009,15 @@ def _synth_openvoice(inst, text, params):
         src_se = base_se.get(se_key) or base_se.get("en_us") or (list(base_se.values())[0] if base_se else None)
         ref_id = params.get("audio_prompt_id", "")
         ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
+        target_se = src_se   # default: identity conversion (same speaker)
         if ref_path and ref_path.exists():
-            from openvoice import se_extractor
-            target_se, _ = se_extractor.get_se(str(ref_path), converter, vad=True)
-        else:
-            target_se = src_se
+            try:
+                from openvoice import se_extractor
+                _se, _ = se_extractor.get_se(str(ref_path), converter, vad=True)
+                if _se is not None and _se.numel() > 0:
+                    target_se = _se
+            except Exception:
+                pass   # VAD found no speech — fall back to identity
         if src_se is not None and target_se is not None:
             converter.convert(
                 audio_src_path=src_tmp, src_se=src_se, tgt_se=target_se,
