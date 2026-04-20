@@ -21,34 +21,35 @@
 
 ---
 
-## Measured GPU Results — RTX 5060 Ti
+## Measured GPU Results — RTX 5060 Ti (Final — bench4, all fixes applied)
 
-> **✅ measured** = timed on RTX 5060 Ti via live tts_lab API (port 8001).  
-> **📖 error / not run** = synthesis failed or engine not installed — see error table below.
+> All results from a clean server restart per engine.  
+> **✅ pass** = synthesised successfully on GPU.  
+> **⚠️ error** = known issue, see error table.  
+> **❌ not installed** = package/model missing, install steps documented below.
 
 | # | Engine | Key | CPU RTF | GPU RTF | Speedup | Synth ms | Audio ms | Load s | Hz | Notes |
 |---|--------|-----|--------:|--------:|--------:|---------:|---------:|-------:|---:|-------|
-| 1 | Piper TTS | `piper` | 0.37 | **0.33** | 1.1× | 3 485 | 10 541 | 3.1 | 22 050 | ONNX CPU-only (no CUDA EP) |
-| 2 | Kokoro-82M | `kokoro` | 2.83 | **2.65** | 1.1× | 42 353 | 15 978 | 2.6 | 24 000 | ONNX CPU-only (no CUDA EP) |
-| 3 | MeloTTS | `melo` | 1.01 | **0.60** | 1.7× | 8 765 | 14 582 | 26.6 | 44 100 | PyTorch GPU ✅ |
-| 4 | StyleTTS 2 | `styletts2` | 1.52 | **0.38** | **4.0×** | 5 796 | 15 072 | 17.3 | 24 000 | GPU real-time ✅ |
-| 5 | Bark (full) | `bark` | ~22.0 | **4.74** | **4.6×** | 62 869 | 13 253 | 104.6 | 24 000 | Full models (vs small on CPU) |
-| 6 | Dia-1.6B | `dia` | 38.88 | **6.07** | **6.4×** | 71 017 | 11 702 | 45.6 | 44 100 | bfloat16 on GPU |
-| 7 | XTTS-v2 | `xtts` | 3.85 | **2.79** | 1.4× | 43 987 | 15 778 | 27.9 | 24 000 | Coqui GPU path suboptimal |
-| 4 | ChatTTS | `chattts` | ~4.5 | 📖 error | — | — | — | — | — | PyTorch version mismatch |
-| 5 | OuteTTS-0.3B | `outetts` | ~6.2 | 📖 error | — | — | — | — | — | Server crashed (SEGV after heavy engines) |
-| 8 | F5-TTS | `f5tts` | ~18.0 | 📖 error | — | — | — | — | — | Requires reference WAV (zero-shot) |
-| 9 | CosyVoice2 | `cosyvoice` | ~5.5 | 📖 error | — | — | — | — | — | Server crashed |
-| 10 | Parler-TTS mini | `parler` | ~8.0 | 📖 error | — | — | — | — | — | Config mismatch (transformers ver) |
-| 11 | Chatterbox | `chatterbox` | ~9.5 | 📖 error | — | — | — | — | — | FFmpeg / torchcodec missing |
-| 12 | Orpheus 3B | `orpheus` | ~45.0 | 📖 error | — | — | — | — | — | vllm CUDA device config error |
-| 13 | Zonos v0.1 | `zonos` | ~7.0 | 📖 error | — | — | — | — | — | API change in installed version |
-| 14 | OpenVoice v2 | `openvoice` | ~2.5 | 📖 error | — | — | — | — | — | Crashed during batch |
-| 15 | Fish Speech 1.5 | `fishspeech` | ~12.0 | ❌ not installed | — | — | — | — | — | Needs full git clone |
-| 16 | Sesame CSM 1B | `csm` | ~15.0 | ❌ not installed | — | — | — | — | — | Gated HF model |
-| 17 | IndexTTS-2 | `indextts` | ~6.0 | ❌ not installed | — | — | — | — | — | pip install needed |
-| 18 | Qwen3-TTS | `qwen3tts` | ~20.0 | ❌ not installed | — | — | — | — | — | Model not public |
-| 19 | NeuTTS Air | `neutts` | — | ❌ not configured | — | — | — | — | — | Package unknown |
+| 1 | Piper TTS | `piper` | 0.37 | **0.36** | 1.0× | 3 700 | 10 390 | 3.1 | 22 050 | ONNX CPU-only (tiny model) |
+| 2 | Kokoro-82M | `kokoro` | 2.83 | **2.77** | 1.0× | 44 261 | 15 978 | 2.6 | 24 000 | ONNX CPU-only (tiny model) |
+| 3 | MeloTTS | `melo` | 1.01 | **0.30** | **3.4×** | 4 299 | 14 582 | 26.6 | 44 100 | GPU real-time ✅ |
+| 4 | ChatTTS | `chattts` | ~4.5 | ⚠️ error | — | — | — | — | — | `narrow()` on long text (PyTorch 2.10 bug) |
+| 5 | Bark (full) | `bark` | ~22.0 | **4.64** | 4.7× | 67 881 | 14 640 | 72.4 | 24 000 | Full 2.5 GB models on GPU |
+| 6 | StyleTTS 2 | `styletts2` | 1.52 | **0.35** | **4.3×** | 5 330 | 15 072 | 29.7 | 24 000 | GPU real-time ✅ |
+| 7 | F5-TTS | `f5tts` | — | ⚠️ error | — | — | — | — | — | Needs reference WAV (zero-shot) |
+| 8 | Dia-1.6B | `dia` | 38.88 | **6.75** | 5.8× | 79 010 | 11 702 | 50.5 | 44 100 | bfloat16 on GPU |
+| 9 | XTTS-v2 | `xtts` | 3.85 | **0.91** | **4.2×** | 14 398 | 15 853 | 53.8 | 24 000 | **Fixed: gpu=True** — real-time ✅ |
+| 10 | CosyVoice2 | `cosyvoice` | — | ⚠️ error | — | — | — | — | — | Needs `pip install hyperpyyaml` |
+| 11 | Parler-TTS mini | `parler` | — | ⚠️ error | — | — | — | — | — | Needs transformers==4.46.1 (own venv) |
+| 12 | Chatterbox | `chatterbox` | — | **1.67** | — | 17 015 | 10 200 | 30.8 | 24 000 | **Fixed: proper torchcodec stub** ✅ |
+| 13 | Orpheus 3B | `orpheus` | — | ⚠️ error | — | — | — | — | — | Gated HF repo (needs `huggingface-cli login`) |
+| 14 | OuteTTS-0.3B | `outetts` | — | ⚠️ error | — | — | — | — | — | `max_length` too small for long text |
+| 15 | Zonos v0.1 | `zonos` | ~7.0 | **4.03** | 1.7× | 47 918 | 11 888 | 36.4 | 44 100 | **Fixed: prefix_conditioning + autoencoder.decode** ✅ |
+| 16 | OpenVoice v2 | `openvoice` | — | ⚠️ error | — | — | — | — | — | Empty audio broadcast error (VAD issue) |
+| 17 | Fish Speech 1.5 | `fishspeech` | — | ❌ not installed | — | — | — | — | — | Needs full git clone |
+| 18 | Sesame CSM 1B | `csm` | — | ❌ not installed | — | — | — | — | — | Gated HF + custom install |
+| 19 | IndexTTS-2 | `indextts` | — | ❌ not installed | — | — | — | — | — | Needs `pip install indextts` |
+| 20 | Qwen3-TTS | `qwen3tts` | — | ❌ not public | — | — | — | — | — | Model not yet on HuggingFace |
 
 ---
 
