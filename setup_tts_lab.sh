@@ -124,8 +124,14 @@ ok "kokoro-onnx installed"
 step "7 — MeloTTS"
 pip install --quiet "git+https://github.com/myshell-ai/MeloTTS.git" \
   || { warn "MeloTTS git install failed — trying alternate"; pip install --quiet MeloTTS 2>/dev/null || warn "MeloTTS skipped"; }
-# MeloTTS needs NLTK + unidic data on first run
-python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True)" 2>/dev/null || true
+# MeloTTS needs NLTK data. Download to /usr/share/nltk_data so root can find it
+# (the service runs as root; user-level ~/nltk_data is not searched by root).
+python -c "
+import nltk
+for corpus in ['averaged_perceptron_tagger_eng', 'averaged_perceptron_tagger', 'cmudict']:
+    nltk.download(corpus, download_dir='/usr/share/nltk_data', quiet=True)
+print('NLTK data ready')
+" 2>/dev/null || warn "NLTK download failed — MeloTTS/OpenVoice may not work"
 python -c "import unidic; unidic.download()" 2>/dev/null || true
 ok "MeloTTS installed"
 

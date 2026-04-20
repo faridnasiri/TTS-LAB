@@ -976,10 +976,15 @@ def _load_openvoice():
     """
     import sys
     # wavmark is an optional audio-watermarking dep that openvoice imports at module level.
-    # It is not needed for inference; stub it so CPU-only installs don't abort.
+    # We stub it so construction succeeds, then null watermark_model to avoid the
+    # shape (0,) → (16000,) numpy broadcast crash that the mock causes in add_watermark().
     if "wavmark" not in sys.modules:
-        from unittest.mock import MagicMock as _MM
-        sys.modules["wavmark"] = _MM()
+        import types as _t
+        _wm = _t.ModuleType("wavmark")
+        # load_model must return an object with .to(device) — returns None so watermark
+        # model is a no-op; we null it out after construction anyway.
+        _wm.load_model = lambda: type("_NoopWM", (), {"to": lambda s, d: None})()
+        sys.modules["wavmark"] = _wm
     import torch
     from openvoice.api import ToneColorConverter
     from melo.api import TTS as MeloTTS
@@ -991,6 +996,9 @@ def _load_openvoice():
             f"Run: sudo ln -sfn <hf_snapshot>/checkpoints /opt/models/openvoice_v2"
         )
     converter = ToneColorConverter(str(ckpt_dir / "config.json"), device=DEVICE)
+    # Null out watermark model — our stub would return None from encode() which
+    # squeezes to shape (0,) and crashes numpy broadcast in add_watermark()
+    converter.watermark_model = None
     converter.load_ckpt(str(ckpt_dir / "checkpoint.pth"))
     base_tts  = MeloTTS(language="EN", device=DEVICE)
 
@@ -1022,12 +1030,23 @@ def _synth_openvoice(inst, text, params):
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f: src_tmp = f.name
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f: out_tmp = f.name
     try:
-        base_tts.tts_to_file(text, sp_id, src_tmp, speed=float(params.get("speed", 0.85)))
-        # Guard: MeloTTS can return empty audio for very short text
+        try:
+            base_tts.tts_to_file(text, sp_id, src_tmp, speed=float(params.get("speed", 0.85)))
+        except (ValueError, LookupError) as _e:
+            _msg = str(_e)
+            if "averaged_perceptron_tagger" in _msg or "broadcast" in _msg or "nltk" in _msg.lower():
+                raise RuntimeError(
+                    "OpenVoice/MeloTTS: NLTK tagger missing for root user.\n"
+                    "Fix: sudo python3 -c \"import nltk; "
+                    "nltk.download('averaged_perceptron_tagger_eng', "
+                    "download_dir='/usr/share/nltk_data')\""
+                ) from _e
+            raise
+        # Guard: empty WAV (< 44 bytes = header only) means no audio was generated
         src_size = Path(src_tmp).stat().st_size
-        if src_size < 100:
+        if src_size <= 44:
             raise RuntimeError(
-                f"OpenVoice base TTS produced no audio (file={src_size}B). "
+                f"OpenVoice base TTS produced no audio (file={src_size}B — WAV header only). "
                 "Try longer text or a different speaker."
             )
         se_key = spk_key.lower().replace("-", "_")
