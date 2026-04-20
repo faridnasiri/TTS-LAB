@@ -13,7 +13,7 @@ import asyncio, base64, gc, io, json, os, shutil, sys, tempfile, threading, time
 from pathlib import Path
 from typing import Any, Dict, Tuple
 import numpy as np
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
@@ -123,27 +123,27 @@ INDEXTTS_DIR         = Path("/opt/models/indextts")
 
 # -- Model registry --
 MODEL_INFO = {
-    "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"RTF 0.08 (GPU)", "ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only (GPU: CUDA EP). Real-time on any hardware. Best for production.","arthur_fit":2},
-    "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"RTF 0.06 (GPU)","ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice. GPU: real-time at RTF ~0.06.","arthur_fit":5},
-    "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"RTF 0.05 (GPU)","ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older. GPU: blazing fast RTF ~0.05.","arthur_fit":3},
-    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"RTF ~0.18 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts, speaker sampling, and optional reference-speaker extraction. GPU: real-time.","arthur_fit":4},
-    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"RTF ~0.38 (GPU)","ram_est_mb":1600, "heavy":True, "notes":"Prompt-controlled character voice. GPU: real-time (~0.38 RTF).","arthur_fit":4},
-    "bark":      {"label":"Bark",         "size":"2.5 GB (full)","rtf_est":"RTF ~0.50 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Full-size Bark models (16 GB VRAM). Unique emotion tokens: [laughs] [sighs] [clears throat] [hesitantly]. GPU required.","arthur_fit":5},
-    "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 0.06 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fastest high-quality neural TTS. Style transfer from reference WAV. Alpha/beta control. GPU: very fast.","arthur_fit":4},
-    "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"RTF ~0.08 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Flow matching. Upload 5-15s reference WAV. GPU: real-time.","arthur_fit":4},
-    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF ~0.95 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. GPU: borderline real-time.","arthur_fit":5},
-    "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"RTF ~0.12 (GPU)","ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. Best multi-speaker quality. GPU: real-time.","arthur_fit":5},
-    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"RTF ~0.28 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Chinese-first with English zero-shot support. GPU: real-time.","arthur_fit":3},
-    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"RTF ~0.42 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Voice controlled entirely by natural language description. GPU: real-time.","arthur_fit":4},
-    "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"RTF ~0.38 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Most controllable confusion. GPU: real-time.","arthur_fit":5},
-    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"RTF ~0.14 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning (VQ-VAE codec). Upload 5-30s reference WAV. GPU: real-time.","arthur_fit":4},
-    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"RTF ~0.08 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Conversational Speech Model 1B. Multi-speaker. Context-conditioned. HF login required. GPU: real-time.","arthur_fit":4},
-    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"RTF ~0.32 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Alibaba Qwen3-based TTS. GPU: real-time.","arthur_fit":3},
-    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"RTF ~0.78 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"LLaMA-3B-based TTS. Emotion tags: <laugh> <sigh> <chuckle> <gasp>. 8 voices. GPU required (vllm).","arthur_fit":5},
+    "piper":     {"label":"Piper TTS",    "size":"61-116 MB","rtf_est":"RTF 0.36 (GPU)", "ram_est_mb":200,  "heavy":False,"notes":"6 voices. ONNX CPU-only (GPU EP adds overhead for tiny model). Real-time on any hardware.","arthur_fit":2},
+    "kokoro":    {"label":"Kokoro-82M",   "size":"89 MB",    "rtf_est":"RTF 2.77 (GPU)","ram_est_mb":500,  "heavy":False,"notes":"54 voices, 9 languages. bm_lewis is the best Arthur voice. ONNX CPU-only (tiny model).","arthur_fit":5},
+    "melo":      {"label":"MeloTTS",      "size":"200 MB",   "rtf_est":"RTF 0.30 (GPU)","ram_est_mb":1200, "heavy":False,"notes":"5 English accents. EN-BR sounds slightly older. GPU: 3.4× faster than CPU.","arthur_fit":3},
+    "chattts":   {"label":"ChatTTS",      "size":"1.2-2.3 GB","rtf_est":"RTF 2.59 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Conversational TTS with speed prompts and speaker sampling. gpt.py patched for PyTorch 2.10 compat.","arthur_fit":4},
+    "outetts":   {"label":"OuteTTS",      "size":"1.0-2.4 GB","rtf_est":"needs GGUF",   "ram_est_mb":1600, "heavy":True, "notes":"HF backend broken (15K tokens for any text). Needs GGUF file via LLAMACPP backend.","arthur_fit":4},
+    "bark":      {"label":"Bark",         "size":"2.5 GB (full)","rtf_est":"RTF 4.64 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Full-size models on GPU. Unique emotion tokens: [laughs] [sighs] [clears throat]. 110s cold load.","arthur_fit":5},
+    "styletts2": {"label":"StyleTTS 2",   "size":"0.7 GB",   "rtf_est":"RTF 0.35 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fast high-quality TTS. Style transfer from reference WAV. GPU: real-time.","arthur_fit":4},
+    "f5tts":     {"label":"F5-TTS",       "size":"1.2 GB",   "rtf_est":"needs ref WAV", "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Upload 5-15s reference WAV first.","arthur_fit":4},
+    "dia":       {"label":"Dia-1.6B",     "size":"3 GB",     "rtf_est":"RTF 6.75 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + [laughs] [sighs] emotion tags. 50s cold load.","arthur_fit":5},
+    "xtts":      {"label":"XTTS-v2",      "size":"1.8 GB",   "rtf_est":"RTF 0.91 (GPU)","ram_est_mb":3200, "heavy":True, "notes":"58 speakers, 17 languages. Voice cloning. gpu=True. 54s cold load. Near real-time.","arthur_fit":5},
+    "cosyvoice": {"label":"CosyVoice2",   "size":"2 GB",     "rtf_est":"needs hyperpyyaml","ram_est_mb":2500, "heavy":True, "notes":"Needs: pip install hyperpyyaml. Chinese-first with English zero-shot support.","arthur_fit":3},
+    "parler":    {"label":"Parler-TTS",   "size":"2.5-3.3 GB","rtf_est":"needs transformers 4.46","ram_est_mb":1500, "heavy":True, "notes":"Incompatible with transformers 4.57 (bench env). Needs own venv with transformers==4.46.1.","arthur_fit":4},
+    "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"RTF 1.67 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Torchcodec stub active. GPU: above real-time.","arthur_fit":5},
+    "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"not installed", "ram_est_mb":1500, "heavy":True, "notes":"Needs full git clone: cd /tmp && git clone https://github.com/fishaudio/fish-speech","arthur_fit":4},
+    "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"needs HF login","ram_est_mb":2000, "heavy":True, "notes":"Gated HF model. Needs huggingface-cli login. Multi-speaker contextual TTS.","arthur_fit":4},
+    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"not public yet","ram_est_mb":2000, "heavy":True, "notes":"Not yet on HuggingFace. Check https://huggingface.co/Qwen for release.","arthur_fit":3},
+    "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"needs HF login","ram_est_mb":3000, "heavy":True, "notes":"Gated repo: canopylabs/orpheus-3b-0.1-ft. Needs huggingface-cli login. vllm backend.","arthur_fit":5},
     "neutts":     {"label":"NeuTTS Air",   "size":"TBD",      "rtf_est":"TBD",           "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
-    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"RTF ~0.10 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning from IndexTeam. Reference WAV required. GPU: real-time.","arthur_fit":4},
-    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"RTF ~0.06 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate control. 44 kHz output. GPU: very fast.","arthur_fit":4},
-    "openvoice":  {"label":"OpenVoice v2", "size":"~600 MB",  "rtf_est":"RTF ~0.10 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Zero-shot voice cloning. GPU: real-time.","arthur_fit":3},
+    "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"not installed", "ram_est_mb":2000, "heavy":True, "notes":"Needs: pip install indextts. Zero-shot voice cloning from IndexTeam.","arthur_fit":4},
+    "zonos":      {"label":"Zonos v0.1",   "size":"~1.2 GB",  "rtf_est":"RTF 4.03 (GPU)","ram_est_mb":2500, "heavy":True, "notes":"Hybrid/Transformer from Zyphra. Emotion vector + speaking-rate. 44 kHz. 36s cold load.","arthur_fit":4},
+    "openvoice":  {"label":"OpenVoice v2", "size":"~600 MB",  "rtf_est":"RTF ~0.5 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion. Identity conversion works without reference WAV.","arthur_fit":3},
 }
 
 MODEL_ORDER = ["piper","kokoro","melo","chattts","outetts","bark","styletts2","f5tts","dia","xtts","cosyvoice","parler","chatterbox",
@@ -1128,7 +1128,8 @@ def _check_available(name: str) -> Tuple[bool, str]:
             return False, "pip install git+https://github.com/index-tts/IndexTTS"
     return True, ""
 
-def _do_synth(name, text, params):
+def _ensure_loaded(name, params):
+    """Load the model for `name` into VRAM if not already loaded. Thread-safe."""
     st = _state[name]
     with st["lock"]:
         if name == "piper":
@@ -1171,6 +1172,10 @@ def _do_synth(name, text, params):
                 if name == "zonos":   st["loaded_model"] = params.get("variant", "transformer")
             except Exception as e:
                 st["status"] = "error"; st["error"] = str(e); raise
+
+def _do_synth(name, text, params):
+    _ensure_loaded(name, params)
+    st = _state[name]
     t0 = time.perf_counter()
     wav, sr = SYNTHERS[name](st["instance"], text, params)
     synth_s = time.perf_counter() - t0
@@ -1293,6 +1298,26 @@ async def unload_model(model):
     if st and st["instance"] is not None:
         _safe_del(st["instance"]); st["instance"] = None; st["status"] = "unloaded"
     return {"unloaded": model}
+
+@app.post("/models/{model}/load")
+async def preload_model(model: str, request: Request):
+    """Load a model into VRAM without synthesising. Returns immediately if already loaded."""
+    st = _state.get(model)
+    if st is None:
+        raise HTTPException(404, f"Unknown engine: {model}")
+    if st["status"] == "loaded":
+        return {"status": "already_loaded", "model": model, "load_time_s": st["load_time_s"]}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    params = body.get("params", {})
+    loop = asyncio.get_event_loop()
+    try:
+        await loop.run_in_executor(None, lambda: _ensure_loaded(model, params))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+    return {"status": "loaded", "model": model, "load_time_s": st["load_time_s"]}
 
 @app.post("/refresh")
 async def refresh_availability():
@@ -1730,6 +1755,37 @@ async function unload(model) {
   await refreshStatus();
 }
 
+async function preload(model) {
+  const spin = document.getElementById('spin-' + model);
+  const btn  = document.querySelector(`#tab-${model} .btn-synth`);
+  if (spin) spin.style.display = 'inline-block';
+  if (btn) btn.disabled = true;
+  try {
+    const params = getParams(model);
+    const res = await fetch(`${API}/models/${model}/load`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({params})
+    });
+    const d = await res.json();
+    if (d.error) { showError(model, d.error); }
+    else {
+      const card = document.getElementById('result-' + model);
+      if (card) {
+        card.style.display = 'block';
+        card.querySelector('.m-load').textContent = d.load_time_s + ' s';
+        card.querySelector('.error-msg').textContent = d.status === 'already_loaded'
+          ? '✅ Already loaded' : `✅ Loaded in ${d.load_time_s}s`;
+      }
+    }
+  } catch(e) { showError(model, e.toString()); }
+  finally {
+    if (spin) spin.style.display = 'none';
+    if (btn) btn.disabled = false;
+    await refreshStatus();
+  }
+}
+
 async function uploadPrompt(fileId, statusId, hiddenId) {
   const input = document.getElementById(fileId);
   const status = document.getElementById(statusId);
@@ -1825,6 +1881,7 @@ async function refreshAvailability() {
             +(f'<p class="text-warning mt-2">⚠ Not available: {reason}</p>' if not ok else '')
             +f'<div class="d-flex gap-2 align-items-center mt-3">'
             +f'<button id="btn-{n}" class="btn btn-primary btn-synth" onclick="synth(\'{n}\')">▶ Synthesise</button>'
+            +f'<button class="btn btn-outline-info btn-sm" onclick="preload(\'{n}\')" title="Load model into VRAM without synthesising">⬇ Preload</button>'
             +f'<button class="btn btn-outline-secondary btn-sm" onclick="unload(\'{n}\')">⏏ Unload</button>'
             +f'<span id="spin-{n}" class="spinner"></span>'
             +f'</div>'
