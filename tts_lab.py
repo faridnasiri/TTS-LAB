@@ -37,6 +37,127 @@ try:
 except Exception:
     DEVICE = "cpu"; DEVICE_NAME = "CPU"; VRAM_TOTAL_MB = 0
 
+# -- Transformers 5.x compatibility shims (applied at startup, before any TTS import) --
+# Coqui TTS / indextts do `from transformers.X import Y` at module level.
+# These symbols were removed in transformers 5.x; stub them now so the imports succeed.
+try:
+    import transformers.pytorch_utils as _tpu
+    import transformers as _tf
+    import torch as _torch
+
+    # isin_mps_friendly: removed from pytorch_utils in transformers 5.x
+    if not hasattr(_tpu, "isin_mps_friendly"):
+        def _isin_mps_friendly(*args, **kwargs):
+            # transformers 5.x calls this as isin_mps_friendly(elements=..., test_elements=...)
+            if "elements" in kwargs:
+                kwargs["input"] = kwargs.pop("elements")
+            return _torch.isin(*args, **kwargs)
+        _tpu.isin_mps_friendly = _isin_mps_friendly
+        _tf.pytorch_utils.isin_mps_friendly = _isin_mps_friendly
+
+    # is_torch_greater_or_equal: moved out of import_utils in some 5.x builds
+    import transformers.utils.import_utils as _tiu
+    if not hasattr(_tiu, "is_torch_greater_or_equal"):
+        from packaging.version import Version as _V
+        _tiu.is_torch_greater_or_equal = lambda v: _V(_torch.__version__) >= _V(v)
+    if not hasattr(_tiu, "is_torchcodec_available"):
+        _tiu.is_torchcodec_available = lambda: False
+
+    # ExtensionsTrie + related tokenization helpers removed in transformers 5.x
+    # indextts / coqui TTS import these from tokenization_utils at module level.
+    try:
+        import transformers.tokenization_utils as _tku
+        _REMOVED_TOK_CLASSES = ["ExtensionsTrie", "AddedToken"]
+        for _cls_name in _REMOVED_TOK_CLASSES:
+            if not hasattr(_tku, _cls_name):
+                _stub_cls = type(_cls_name, (), {
+                    "__init__": lambda self, *a, **kw: None,
+                    "__doc__": f"Removed in transformers 5.x — stubbed for compatibility.",
+                })
+                setattr(_tku, _cls_name, _stub_cls)
+                if not hasattr(_tf, _cls_name):
+                    setattr(_tf, _cls_name, _stub_cls)
+    except Exception:
+        pass
+
+    # Sub-modules removed/reorganised in transformers 5.x that older TTS packages
+    # import at module level (e.g. coqui TTS does `from transformers.generation.beam_constraints import ...`).
+    # Inject empty stub modules into sys.modules so the imports silently succeed.
+    import types as _types
+    _REMOVED_SUBMODULES = [
+        "transformers.generation.beam_constraints",
+        "transformers.generation.beam_search",
+        "transformers.generation.logits_process",
+        "transformers.generation.stopping_criteria",
+    ]
+    for _mod_name in _REMOVED_SUBMODULES:
+        if _mod_name not in sys.modules:
+            try:
+                __import__(_mod_name)   # try real import first
+            except ImportError:
+                _stub_mod = _types.ModuleType(_mod_name)
+                _stub_mod.__doc__ = f"Removed in transformers 5.x — stubbed for compatibility."
+                # Make any attribute access return a no-op class so `from X import Y` works
+                _stub_mod.__getattr__ = lambda name: type(name, (), {
+                    "__init__": lambda self, *a, **kw: None,
+                    "__call__": lambda self, *a, **kw: None,
+                })
+                sys.modules[_mod_name] = _stub_mod
+
+    # Functions / constants removed from existing (still-present) transformers.generation
+    # modules. These modules exist but are missing specific symbols that coqui TTS
+    # imports at module level. Add them back as stubs so imports silently succeed.
+    _GENERATION_MODULE_STUBS = {
+        # module_path: {name: stub_value}
+        "transformers.generation.candidate_generator": {
+            # KV-cache utility removed in 5.x; stub as pass-through
+            "_crop_past_key_values": lambda model, past_key_values, max_length: past_key_values,
+        },
+        "transformers.generation.configuration_utils": {
+            # Dict mapping cache class names to setup requirements; removed in 5.x.
+            # coqui TTS iterates/looks up values — empty dict is safe.
+            "NEED_SETUP_CACHE_CLASSES_MAPPING": {},
+            # Related constant also removed:
+            "ALL_CACHE_IMPLEMENTATIONS": [],
+        },
+        "transformers.generation.utils": {
+            # GenerateOutput was split into subclasses in 5.x; re-export as alias if missing.
+            # Use object as base so isinstance() checks don't crash.
+            "GenerateOutput": type("GenerateOutput", (object,), {}),
+        },
+    }
+    for _mod_path, _stubs in _GENERATION_MODULE_STUBS.items():
+        try:
+            import importlib as _il
+            _mod = _il.import_module(_mod_path)
+            for _sym, _val in _stubs.items():
+                if not hasattr(_mod, _sym):
+                    setattr(_mod, _sym, _val)
+        except Exception:
+            pass
+
+except Exception:
+    pass
+
+# -- torchaudio compatibility shims --
+# torchaudio 2.x removed list_audio_backends(); fish-speech 1.5 calls it at import.
+try:
+    import torchaudio as _ta
+    if not hasattr(_ta, 'list_audio_backends'):
+        _ta.list_audio_backends = lambda: ['soundfile']
+except Exception:
+    pass
+
+# -- Fish Speech source path (permanent install at /opt/models/fish-speech) --
+try:
+    import sys as _sys, importlib.util as _ilu2
+    if not _ilu2.find_spec('fish_speech'):
+        _fs_path = '/opt/models/fish-speech'
+        if _fs_path not in _sys.path:
+            _sys.path.insert(0, _fs_path)
+except Exception:
+    pass
+
 # -- Paths --
 MODELS_DIR    = Path(__file__).parent / "models"
 COSYVOICE_DIR = Path("/opt/CosyVoice")
@@ -324,6 +445,16 @@ def _synth_melo(inst, text, params):
 
 # -- 4. ChatTTS --
 def _load_chattts():
+    # transformers 5.x removed BertTokenizer.encode_plus — patch it back
+    try:
+        from transformers import BertTokenizer as _BT
+        if not hasattr(_BT, "encode_plus"):
+            def _encode_plus(self, text, **kwargs):
+                # encode_plus is just __call__ with return_tensors etc.
+                return self(text, **kwargs)
+            _BT.encode_plus = _encode_plus
+    except Exception:
+        pass
     import ChatTTS
     inst = ChatTTS.Chat()
     if not inst.load(source="huggingface", device=DEVICE):
@@ -587,19 +718,9 @@ def _synth_dia(inst, text, params):
 
 # -- 10. XTTS-v2 --
 def _patch_transformers_for_coqui():
-    try:
-        import transformers.utils.import_utils as iu
-        if not hasattr(iu,"is_torch_greater_or_equal"):
-            from packaging.version import Version; import torch
-            iu.is_torch_greater_or_equal = lambda v: Version(torch.__version__)>=Version(v)
-        if not hasattr(iu,"is_torchcodec_available"):
-            iu.is_torchcodec_available = lambda: False
-    except Exception: pass
-    try:
-        import transformers.pytorch_utils as pu
-        if not hasattr(pu,"isin_mps_friendly"):
-            import torch; pu.isin_mps_friendly = lambda e,t: torch.isin(e,t)
-    except Exception: pass
+    # All transformers 5.x shims are applied at module startup (see top of file).
+    # This function is kept as a call-site marker in _load_xtts() for clarity.
+    pass
 
 def _load_xtts():
     _patch_transformers_for_coqui()
@@ -706,75 +827,121 @@ def _synth_chatterbox(inst, text, params):
 
 # -- 14. Fish Speech --
 def _load_fishspeech(model_id="fishaudio/fish-speech-1.5"):
-    """Fish Speech — uses fish_speech.inference_engine.TTSInferenceEngine.
-    PyPI package provides the engine; full model-loading code lives in the GitHub repo.
-    Install (full): cd /tmp && git clone https://github.com/fishaudio/fish-speech
-                    pip install -e /tmp/fish-speech/
-    Weights auto-download from HuggingFace: fishaudio/fish-speech-1.5
+    """Fish Speech 1.5.1 — text2semantic (LLAMA) + VQ-GAN codec.
+    Source: /opt/models/fish-speech  (git clone --branch v1.5.1).
+    Weights: fishaudio/fish-speech-1.5 (auto-cached in HF_HOME).
     """
-    import torch
-    try:
-        from fish_speech.inference_engine import TTSInferenceEngine  # noqa: F401
-        from fish_speech.utils.schema import ServeTTSRequest          # noqa: F401
-    except ImportError as e:
-        raise ImportError(f"pip install fish-speech (or git clone the full repo): {e}") from e
-    try:
-        from fish_speech.models.vqgan.inference import load_model as _load_codec
-        from fish_speech.models.text2semantic.inference import launch_thread_safe_queue as _llm
-    except ImportError:
-        raise ImportError(
-            "Fish Speech model-loading code missing.\n"
-            "The PyPI package only ships the inference engine framework.\n"
-            "Full install: cd /tmp && git clone https://github.com/fishaudio/fish-speech\n"
-            "              pip install -e /tmp/fish-speech/"
-        )
-    from huggingface_hub import snapshot_download as _dl
+    import sys as _sys, torch
     from pathlib import Path as _P
+
+    # Ensure source root on sys.path (.pth may not be active in all envs)
+    _fs_root = "/opt/models/fish-speech"
+    if _fs_root not in _sys.path:
+        _sys.path.insert(0, _fs_root)
+
+    try:
+        from fish_speech.models.text2semantic.inference import load_model as _load_llm
+        from fish_speech.models.vqgan.inference import load_model as _load_codec
+    except ImportError as e:
+        raise ImportError(
+            f"Fish Speech 1.5.1 code not found: {e}\n"
+            f"Expected source at {_fs_root}.\n"
+            f"Run: sudo git clone --depth=1 --branch v1.5.1 "
+            f"https://github.com/fishaudio/fish-speech {_fs_root}"
+        ) from e
+
+    from huggingface_hub import snapshot_download as _dl
     model_dir = _P(_dl(model_id, ignore_patterns=["*.md", "*.txt", "*.gitignore"]))
-    codec_pth = next((p for pat in ["firefly-gan*.pth", "*.pth"]
-                      for p in model_dir.glob(pat)), None)
+
+    llama_pth = next((p for p in model_dir.glob("model*.pth")), None)
+    if llama_pth is None:
+        raise FileNotFoundError(f"No model.pth in {model_dir}")
+    codec_pth = next((p for p in model_dir.glob("firefly-gan*.pth")), None)
     if codec_pth is None:
-        raise FileNotFoundError(f"No .pth codec file in {model_dir}")
+        raise FileNotFoundError(f"No firefly-gan*.pth in {model_dir}")
+
     _precision = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-    decoder  = _load_codec(config_name="firefly_gan_vq", checkpoint_path=str(codec_pth), device=DEVICE)
-    llama_q  = _llm(checkpoint_path=str(model_dir), device=DEVICE,
-                    precision=_precision, compile=False)
-    return TTSInferenceEngine(llama_queue=llama_q, decoder_model=decoder,
-                               precision=torch.float32, compile=False)
+    llm     = _load_llm(checkpoint_path=str(model_dir), device=DEVICE,
+                        precision=_precision, compile=False)
+    _model, _ = llm
+    with torch.device(DEVICE):
+        _model.setup_caches(max_batch_size=1, max_seq_len=_model.config.max_seq_len,
+                            dtype=next(_model.parameters()).dtype)
+    decoder = _load_codec(config_name="firefly_gan_vq",
+                          checkpoint_path=str(codec_pth), device=DEVICE)
+    return {"llm": llm, "decoder": decoder, "precision": _precision}
 
 def _synth_fishspeech(inst, text, params):
-    from fish_speech.utils.schema import ServeTTSRequest, ServeReferenceAudio
-    refs   = []
-    ref_id = params.get("audio_prompt_id", "")
-    if ref_id:
-        p = UPLOAD_DIR / f"{ref_id}.wav"
-        if p.exists():
-            refs = [ServeReferenceAudio(audio=p.read_bytes(), text="")]
-    req   = ServeTTSRequest(text=text, references=refs)
-    final = None
-    for result in inst.inference(req):
-        if result.code == "final":
-            final = result
-        elif result.code == "error" and result.error:
-            raise RuntimeError(f"Fish Speech error: {result.error}")
-    if final is None or final.audio is None:
-        raise RuntimeError("Fish Speech: no audio generated")
-    sr, audio_np = final.audio
-    return _to_wav(audio_np.astype(np.float32), int(sr)), int(sr)
+    """Fish Speech 1.5.1 — direct generate_long + VQ-GAN decode."""
+    import torch
+    from fish_speech.models.text2semantic.inference import generate_long, GenerateResponse
+
+    model, decode_one_token = inst["llm"]   # load_model returns (model, decode_one_token)
+    decoder = inst["decoder"]
+
+    chunks = list(generate_long(
+        model=model,
+        device=DEVICE,
+        decode_one_token=decode_one_token,
+        text=text,
+        num_samples=1,
+        max_new_tokens=int(float(params.get("max_new_tokens", 1024))),
+        top_p=float(params.get("top_p", 0.7)),
+        repetition_penalty=float(params.get("rep_penalty", 1.5)),
+        temperature=float(params.get("temperature", 0.7)),
+        iterative_prompt=True,
+        chunk_length=100,
+    ))
+
+    codes = [c.codes for c in chunks if isinstance(c, GenerateResponse) and c.codes is not None]
+    if not codes:
+        raise RuntimeError("Fish Speech: generate_long produced no codes")
+
+    codes_t = torch.cat(codes, dim=1)          # (n_codebooks, T)
+    indices = codes_t.unsqueeze(0).to(DEVICE)
+    feature_lengths = torch.tensor([indices.shape[2]], device=DEVICE, dtype=torch.long)
+    with torch.no_grad():
+        # VQ-GAN decode: indices shape (batch, n_codebooks, T)
+        audio_t = decoder.decode(indices=indices, feature_lengths=feature_lengths
+        )
+    audio_tensor, _ = audio_t
+    audio = audio_tensor[0, 0].cpu().float().numpy()
+    sr = getattr(getattr(decoder, "spec_transform", None), "sample_rate", 24000)
+    return _to_wav(audio.astype(np.float32), int(sr)), int(sr)
+
 
 # -- 15. Sesame CSM 1B --
 def _load_csm():
     """Sesame Conversational Speech Model (1B).
     Clone: git clone https://github.com/SesameAILabs/csm /opt/models/csm
     Path:  echo /opt/models/csm > <venv>/lib/python3.11/site-packages/csm_sesame.pth
-    Model: sesame/csm-1b — public on HuggingFace, no login required.
+    Model: sesame/csm-1b — GATED on HuggingFace. Requires: huggingface-cli login + access approval.
     """
     import sys
     _csm_dir = "/opt/models/csm"
     if _csm_dir not in sys.path:
         sys.path.insert(0, _csm_dir)
     from generator import load_csm_1b
-    return load_csm_1b(device=DEVICE)
+    try:
+        return load_csm_1b(device=DEVICE)
+    except TypeError as _e:
+        # Newer CSM repo changed API: Model now requires config argument.
+        # Attempt to construct Generator manually via Model.from_pretrained.
+        if "config" not in str(_e):
+            raise
+        try:
+            import torch
+            from generator import Generator
+            from models import Model
+            _model = Model.from_pretrained("sesame/csm-1b")
+            _model = _model.to(device=DEVICE, dtype=torch.bfloat16)
+            return Generator(_model)
+        except Exception as _e2:
+            raise RuntimeError(
+                f"CSM load failed with both APIs.\n"
+                f"Original: {_e}\nFallback: {_e2}\n"
+                "Ensure /opt/models/csm is the latest SesameAILabs/csm clone."
+            ) from _e2
 
 def _synth_csm(inst, text, params):
     speaker = int(float(params.get("speaker_id", 0)))
@@ -881,9 +1048,34 @@ def _synth_neutts(inst, text, params):
 # -- 19. IndexTTS-2 --
 def _load_indextts(model_dir=None):
     """IndexTTS-2 — zero-shot voice cloning from IndexTeam/Bilibili.
-    Install: pip install git+https://github.com/index-tts/IndexTTS
+    Install: pip install git+https://github.com/index-tts/index-tts
     Model auto-downloads to HF cache on first load.
     """
+    # transformers 5.x removed several cache classes from cache_utils that indextts
+    # imports at module level. Stub them all so the import succeeds — none are used
+    # at TTS inference time (they're KV-cache management classes for generation).
+    _REMOVED_CACHE_CLASSES = [
+        "OffloadedCache",
+        "QuantizedCacheConfig",
+        "QuantizedCache",
+        "QuantoQuantizedCache",
+        "HQQQuantizedCache",
+        "SlidingWindowCache",
+        "StaticCacheConfig",
+    ]
+    try:
+        import transformers.cache_utils as _cu
+        import transformers as _tf
+        for _cls_name in _REMOVED_CACHE_CLASSES:
+            if not hasattr(_cu, _cls_name):
+                _stub = type(_cls_name, (), {
+                    "__doc__": f"Removed in transformers 5.x — stubbed for indextts compatibility."
+                })
+                setattr(_cu, _cls_name, _stub)
+            if not hasattr(_tf, _cls_name):
+                setattr(_tf, _cls_name, getattr(_cu, _cls_name))
+    except Exception:
+        pass
     from indextts.infer import IndexTTS
     md = model_dir or (str(INDEXTTS_DIR) if INDEXTTS_DIR.exists() else "IndexTeam/IndexTTS")
     model = IndexTTS(model_dir=md, device=DEVICE)
@@ -1138,10 +1330,21 @@ def _check_available(name: str) -> Tuple[bool, str]:
                 return False, "CUDA GPU required — not available on this machine"
         except ImportError:
             pass  # torch not installed yet; loader will handle it
-    # ── Orpheus: canopylabs/orpheus-3b-0.1-ft is public — expired HF token
-    #    causes 401 on even public repos; strip any token for availability check
-    if name == "orpheus" and not ilu.find_spec("orpheus_tts"):
-        return False, "pip install orpheus-speech  (pip install git+https://github.com/canopylabs/orpheus-tts)"
+    # ── Orpheus: canopylabs/orpheus-3b-0.1-ft is gated=auto (requires HF login)
+    if name == "orpheus":
+        if not ilu.find_spec("orpheus_tts"):
+            return False, "pip install orpheus-speech"
+        # Probe model file access — 401 means gated
+        try:
+            import urllib.request, urllib.error
+            req = urllib.request.Request(
+                "https://huggingface.co/canopylabs/orpheus-3b-0.1-ft/resolve/main/config.json")
+            with urllib.request.urlopen(req, timeout=5): pass
+        except urllib.error.HTTPError as _e:
+            if _e.code in (401, 403):
+                return False, "canopylabs/orpheus-3b-0.1-ft is gated — run: huggingface-cli login"
+        except Exception:
+            pass  # network issue — assume OK, will fail at load time
     # ── 3. Engine-specific file / directory checks ─────────────────────────────
     if name == "piper":
         if not _piper_voices(): return False, "No .onnx voice found in models/"
@@ -1151,14 +1354,18 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not COSYVOICE_DIR.exists(): return False, "git clone FunAudioLLM/CosyVoice /opt/CosyVoice"
         if not (COSYVOICE_DIR/"pretrained_models"/"CosyVoice2-0.5B").exists():
             return False, "CosyVoice2-0.5B model not downloaded"
+        _yaml = COSYVOICE_DIR/"pretrained_models"/"CosyVoice2-0.5B"/"cosyvoice2.yaml"
+        if not _yaml.exists():
+            return False, ("CosyVoice2-0.5B yaml missing — run inside /opt/CosyVoice: "
+                           "python tools/download_model.py CosyVoice2-0.5B")
         if not ilu.find_spec("hyperpyyaml"):
             return False, "pip install hyperpyyaml  (CosyVoice2 dependency)"
     elif name == "fishspeech":
-        # Fish Speech 2.x uses models.text2semantic + models.dac (not vqgan from 1.x)
+        # Fish Speech 1.5.1 (vqgan) or 2.x (dac) — either text2semantic module suffices
         if not ilu.find_spec("fish_speech.models.text2semantic"):
             return False, (
-                "pip install -e /tmp/fish-speech  "
-                "(git clone https://github.com/fishaudio/fish-speech /tmp/fish-speech first)"
+                "Clone v1.5.1: git clone --branch v1.5.1 https://github.com/fishaudio/fish-speech /tmp/fish-speech\n"
+                "Install: pip install /tmp/fish-speech --no-build-isolation"
             )
     elif name == "neutts":
         return False, "NeuTTS Air: not configured — edit _load_neutts() in tts_lab.py"
@@ -1166,9 +1373,21 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not (OPENVOICE_MODELS_DIR/"converter"/"config.json").exists():
             return False, f"Checkpoints missing at {OPENVOICE_MODELS_DIR}"
     elif name == "csm":
-        # SesameAILabs/csm installs 'generator' and 'models' top-level modules
+        # sesame/csm-1b is gated (requires HF login + access agreement).
+        # The generator module exists from the repo clone, but model download needs a token.
         if not (ilu.find_spec("generator") or ilu.find_spec("csm_mlx")):
-            return False, "pip install git+https://github.com/SesameAILabs/csm  (sesame/csm-1b is public, no login needed)"
+            return False, "Clone: git clone SesameAILabs/csm /opt/models/csm + add .pth"
+        # Probe model accessibility (gated=auto on HF)
+        try:
+            import urllib.request, urllib.error
+            req = urllib.request.Request(
+                "https://huggingface.co/sesame/csm-1b/resolve/main/config.json")
+            with urllib.request.urlopen(req, timeout=5): pass
+        except urllib.error.HTTPError as _e:
+            if _e.code in (401, 403):
+                return False, "sesame/csm-1b is gated — run: huggingface-cli login (then request access)"
+        except Exception:
+            pass  # network unavailable — assume OK, will fail at load time
     elif name == "indextts":
         if not ilu.find_spec("indextts"):
             return False, "pip install git+https://github.com/index-tts/index-tts"
@@ -1730,6 +1949,17 @@ audio{width:100%;margin-top:8px;}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.85em;}
+
+.error-panel{display:none;margin-top:10px;border:1px solid #7f2a2a;border-radius:8px;overflow:hidden;}
+.error-panel-header{background:#3a1515;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;user-select:none;}
+.error-panel-header .error-title{color:#ff6b6b;font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
+.error-panel-header .error-actions{display:flex;gap:6px;flex-shrink:0;}
+.error-panel-body{background:#1a0a0a;padding:12px 14px;max-height:320px;overflow-y:auto;}
+.error-panel-body pre{color:#ff9999;font-size:.78rem;margin:0;white-space:pre-wrap;word-break:break-all;}
+.error-panel .err-toggle{font-size:.75rem;color:#aaa;border:1px solid #555;background:transparent;border-radius:3px;padding:1px 6px;cursor:pointer;}
+.error-panel .err-toggle:hover{color:#fff;}
+.err-copy-btn{font-size:.75rem;color:#aaa;border:1px solid #555;background:transparent;border-radius:3px;padding:1px 6px;cursor:pointer;}
+.err-copy-btn:hover{color:#fff;}
 </style>"""
 
     JS = r"""
@@ -1769,6 +1999,8 @@ async function synth(model) {
   const card = document.getElementById('result-' + model);
   if (btn) { btn.disabled = true; }
   if (spin) { spin.style.display = 'inline-block'; }
+  // Clear any previous error before a new attempt
+  clearError(model);
   const t0 = performance.now();
   try {
     const res = await fetch(`${API}/synthesize/${model}`, {
@@ -1782,6 +2014,7 @@ async function synth(model) {
     const url = URL.createObjectURL(blob);
     if (card) {
       card.style.display = 'block';
+      clearError(model);
       card.querySelector('.audio-player').src = url;
       card.querySelector('.audio-player').load();
       card.querySelector('.m-synth').textContent  = data.synth_time_ms + ' ms';
@@ -1801,10 +2034,57 @@ async function synth(model) {
 
 function showError(model, msg) {
   const card = document.getElementById('result-' + model);
-  if (card) {
-    card.style.display = 'block';
-    card.querySelector('.error-msg').textContent = msg;
-  } else { alert(msg); }
+  if (!card) { alert(msg); return; }
+  card.style.display = 'block';
+
+  // Split first line (short error) from full traceback
+  const lines = msg.split('\n');
+  const firstLine = lines[0].trim() || msg.substring(0, 120);
+
+  const panel = document.getElementById('errpanel-' + model);
+  const title = document.getElementById('errtitle-' + model);
+  const body  = document.getElementById('errmsg-' + model);
+  const toggle = document.getElementById('errtoggle-' + model);
+  const bodyEl = document.getElementById('errbody-' + model);
+
+  panel.style.display = 'block';
+  title.textContent = '❌ ' + firstLine;
+  body.textContent  = msg;
+
+  // Auto-expand if there's a traceback worth showing
+  if (lines.length > 3) {
+    bodyEl.style.display = 'block';
+    toggle.textContent = '▲ hide';
+  } else {
+    bodyEl.style.display = 'none';
+    toggle.textContent = '▼ show';
+  }
+
+  // Hide audio player when an error is shown
+  const audio = card.querySelector('.audio-player');
+  if (audio) audio.src = '';
+}
+
+function toggleErrBody(model) {
+  const body   = document.getElementById('errbody-' + model);
+  const toggle = document.getElementById('errtoggle-' + model);
+  const hidden = body.style.display === 'none';
+  body.style.display  = hidden ? 'block' : 'none';
+  toggle.textContent  = hidden ? '▲ hide' : '▼ show';
+}
+
+function copyErr(model, ev) {
+  ev.stopPropagation();
+  const msg = document.getElementById('errmsg-' + model);
+  if (msg) navigator.clipboard.writeText(msg.textContent).then(() => {
+    const btn = ev.target; btn.textContent = '✅ Copied';
+    setTimeout(() => btn.textContent = '📋 Copy', 1500);
+  });
+}
+
+function clearError(model) {
+  const panel = document.getElementById('errpanel-' + model);
+  if (panel) panel.style.display = 'none';
 }
 
 async function unload(model) {
@@ -1831,8 +2111,16 @@ async function preload(model) {
       if (card) {
         card.style.display = 'block';
         card.querySelector('.m-load').textContent = d.load_time_s + ' s';
-        card.querySelector('.error-msg').textContent = d.status === 'already_loaded'
-          ? '✅ Already loaded' : `✅ Loaded in ${d.load_time_s}s`;
+        clearError(model);
+        const panel = document.getElementById('errpanel-' + model);
+        if (panel) {
+          panel.style.display = 'block';
+          const title = document.getElementById('errtitle-' + model);
+          if (title) title.textContent = d.status === 'already_loaded'
+            ? '✅ Already loaded' : `✅ Loaded in ${d.load_time_s}s`;
+          panel.style.borderColor = '#2a7f2a';
+          panel.querySelector('.error-panel-header').style.background = '#153015';
+        }
       }
     }
   } catch(e) { showError(model, e.toString()); }
@@ -1913,7 +2201,18 @@ async function refreshAvailability() {
                 f'<span class="metric-pill">SR: <b class="m-sr">—</b></span>'
                 f'</div>'
                 f'<audio class="audio-player" controls preload="none"></audio>'
-                f'<pre class="error-msg text-danger small mt-2"></pre>'
+                f'<div class="error-panel" id="errpanel-{n}">'
+                f'  <div class="error-panel-header" onclick="toggleErrBody(\'{n}\')">'
+                f'    <span class="error-title" id="errtitle-{n}"></span>'
+                f'    <div class="error-actions">'
+                f'      <button class="err-copy-btn" onclick="copyErr(\'{n}\', event)" title="Copy full error">📋 Copy</button>'
+                f'      <button class="err-toggle" id="errtoggle-{n}">▼ show</button>'
+                f'    </div>'
+                f'  </div>'
+                f'  <div class="error-panel-body" id="errbody-{n}" style="display:none">'
+                f'    <pre class="error-msg" id="errmsg-{n}"></pre>'
+                f'  </div>'
+                f'</div>'
                 f'</div>')
 
     tabs = []; panes = []
