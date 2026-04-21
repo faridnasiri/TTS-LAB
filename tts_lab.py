@@ -1425,16 +1425,19 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not ilu.find_spec("indextts"):
             return False, "pip install git+https://github.com/index-tts/index-tts"
     elif name == "qwen3tts":
-        # Qwen/Qwen3-TTS is gated (requires HF login + approval)
-        # Strip any expired token before probing to avoid false 401 on public repos
-        import os, urllib.request
+        # Qwen/Qwen3-TTS is gated -- probe actual file download (not API metadata which returns 200 for gated repos)
+        import urllib.request
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN", "")
+        _hdrs = {"Authorization": "Bearer " + hf_token} if hf_token else {}
         try:
-            req = urllib.request.Request("https://huggingface.co/api/models/Qwen/Qwen3-TTS")
+            req = urllib.request.Request("https://huggingface.co/Qwen/Qwen3-TTS/resolve/main/config.json", headers=_hdrs)
             with urllib.request.urlopen(req, timeout=5): pass
         except Exception as _e:
-            code = getattr(getattr(_e, 'code', None), '__class__', type(_e)).__name__
             if "401" in str(_e) or "403" in str(_e):
-                return False, "Qwen/Qwen3-TTS is gated — run: huggingface-cli login"
+                return False, ("Qwen/Qwen3-TTS is gated -- 1) Visit https://huggingface.co/Qwen/Qwen3-TTS and accept licence  2) run: huggingface-cli login  3) restart service")
+            if "404" in str(_e):
+                return False, "Qwen/Qwen3-TTS not found on HuggingFace (model may not be released yet)"
+            # network unavailable -- assume OK, will fail at load time
     return True, ""
 
 def _ensure_loaded(name, params):
