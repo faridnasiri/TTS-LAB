@@ -114,16 +114,22 @@ try:
             "_crop_past_key_values": lambda model, past_key_values, max_length: past_key_values,
         },
         "transformers.generation.configuration_utils": {
-            # Dict mapping cache class names to setup requirements; removed in 5.x.
-            # coqui TTS iterates/looks up values — empty dict is safe.
+            # Dicts/lists removed in transformers 5.x — empty stubs are safe,
+            # indextts/coqui TTS only iterate or look up keys from these.
             "NEED_SETUP_CACHE_CLASSES_MAPPING": {},
-            # Related constant also removed:
+            "QUANT_BACKEND_CLASSES_MAPPING": {},
             "ALL_CACHE_IMPLEMENTATIONS": [],
         },
         "transformers.generation.utils": {
-            # GenerateOutput was split into subclasses in 5.x; re-export as alias if missing.
-            # Use object as base so isinstance() checks don't crash.
             "GenerateOutput": type("GenerateOutput", (object,), {}),
+        },
+        "transformers.modeling_utils": {
+            # SequenceSummary removed in transformers 5.x — indextts imports it at module level.
+            # Stub as a no-op class; indextts only instantiates it, never calls its methods.
+            "SequenceSummary": type("SequenceSummary", (object,), {
+                "__init__": lambda self, *a, **kw: None,
+                "__call__": lambda self, *a, **kw: None,
+            }),
         },
     }
     for _mod_path, _stubs in _GENERATION_MODULE_STUBS.items():
@@ -136,6 +142,23 @@ try:
         except Exception:
             pass
 
+except Exception:
+    pass
+
+# -- transformers cache_utils stubs (must run before any indextts import) --
+# indextts imports QuantizedCacheConfig etc. at module level; these were removed
+# in transformers 5.x. Stub them globally so the import succeeds at any point.
+try:
+    import transformers.cache_utils as _cu
+    import transformers as _tf2
+    for _cls_name in [
+        "QuantizedCacheConfig", "QuantizedCache", "QuantoQuantizedCache",
+        "HQQQuantizedCache", "OffloadedCache", "SlidingWindowCache", "StaticCacheConfig",
+    ]:
+        _stub = type(_cls_name, (object,), {"__init__": lambda self, *a, **kw: None})
+        for _target in (_cu, _tf2):
+            if not hasattr(_target, _cls_name):
+                setattr(_target, _cls_name, _stub)
 except Exception:
     pass
 
@@ -1077,8 +1100,18 @@ def _load_indextts(model_dir=None):
     except Exception:
         pass
     from indextts.infer import IndexTTS
-    md = model_dir or (str(INDEXTTS_DIR) if INDEXTTS_DIR.exists() else "IndexTeam/IndexTTS")
-    model = IndexTTS(model_dir=md, device=DEVICE)
+    from huggingface_hub import snapshot_download as _dl
+    from pathlib import Path as _P
+    if model_dir:
+        md = model_dir
+    elif INDEXTTS_DIR.exists():
+        md = str(INDEXTTS_DIR)
+    else:
+        # Download/resolve the snapshot directory — IndexTTS needs a local path,
+        # it cannot accept an HF repo ID directly.
+        md = _dl("IndexTeam/IndexTTS-2", ignore_patterns=["*.md", "*.txt"])
+    cfg = str(_P(md) / "config.yaml")
+    model = IndexTTS(cfg_path=cfg, model_dir=md, device=DEVICE)
     model.load_model()
     return model
 
