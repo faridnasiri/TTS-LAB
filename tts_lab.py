@@ -975,12 +975,12 @@ def _synth_csm(inst, text, params):
     return _to_wav(arr, sr), sr
 
 # -- 16. Qwen3-TTS --
-def _load_qwen3tts(model_id="Qwen/Qwen3-TTS"):
-    """Qwen3-TTS — Alibaba Qwen3-based TTS via transformers.
+QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"  # 0.6B public; use 1.7B-Base for higher quality
+def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
+    """Qwen3-TTS -- Alibaba Qwen3-based TTS via transformers.
     Install: transformers already installed (dep of parler-tts).
     Model auto-downloads from HuggingFace on first load.
-    Check https://huggingface.co/Qwen for latest model ID.
-    NOTE: Qwen/Qwen3-TTS was not yet public at initial benchmarking (March 2026).
+    Released models: Qwen/Qwen3-TTS-12Hz-0.6B-Base  Qwen/Qwen3-TTS-12Hz-1.7B-Base
     """
     import torch
     from transformers import AutoProcessor, AutoModel
@@ -1426,17 +1426,18 @@ def _check_available(name: str) -> Tuple[bool, str]:
             return False, "pip install git+https://github.com/index-tts/index-tts"
     elif name == "qwen3tts":
         # Qwen/Qwen3-TTS is gated -- probe actual file download (not API metadata which returns 200 for gated repos)
+        # Model is now publicly released -- just probe the API to verify reachability
         import urllib.request
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN", "")
         _hdrs = {"Authorization": "Bearer " + hf_token} if hf_token else {}
         try:
-            req = urllib.request.Request("https://huggingface.co/Qwen/Qwen3-TTS/resolve/main/config.json", headers=_hdrs)
+            req = urllib.request.Request("https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-0.6B-Base", headers=_hdrs)
             with urllib.request.urlopen(req, timeout=5): pass
         except Exception as _e:
             if "401" in str(_e) or "403" in str(_e):
-                return False, ("Qwen/Qwen3-TTS is gated -- 1) Visit https://huggingface.co/Qwen/Qwen3-TTS and accept licence  2) run: huggingface-cli login  3) restart service")
+                return False, "Qwen3-TTS: run huggingface-cli login"
             if "404" in str(_e):
-                return False, "Qwen/Qwen3-TTS not found on HuggingFace (model may not be released yet)"
+                return False, "Qwen/Qwen3-TTS-12Hz-0.6B-Base not found on HuggingFace"
             # network unavailable -- assume OK, will fail at load time
     return True, ""
 
