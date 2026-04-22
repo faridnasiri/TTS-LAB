@@ -32,7 +32,7 @@ ENGINE_PARAMS = {
     "chatterbox": {},
     "fishspeech": {},
     "csm":        None,          # gated: sesame/csm-1b requires HF login + access approval
-    "qwen3tts":   None,          # gated: Qwen/Qwen3-TTS requires Alibaba access request
+    "qwen3tts":   {"voice": "aiden"},  # CustomVoice model -- built-in speakers, no ref WAV needed
     "orpheus":    None,          # gated: canopylabs/orpheus-3b-0.1-ft requires HF login
     "neutts":     None,          # placeholder — package not yet identified
     "indextts":   None,          # needs ref WAV — skip
