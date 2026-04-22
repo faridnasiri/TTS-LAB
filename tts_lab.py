@@ -1000,7 +1000,7 @@ def _synth_qwen3tts(inst, text, params):
         # Built-in speaker mode
         speaker = params.get("voice", "aiden")
         wavs, sr = inst.generate_custom_voice(text=text, language=params.get("language","english"),
-                                               speaker_name=speaker)
+                                               speaker=speaker)
     arr = np.array(wavs[0], dtype=np.float32)
 
     return _to_wav(arr, sr), sr
