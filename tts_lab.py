@@ -282,7 +282,7 @@ MODEL_INFO = {
     "chatterbox": {"label":"Chatterbox",  "size":"3.0 GB",   "rtf_est":"RTF 1.67 (GPU)","ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Torchcodec stub active. GPU: above real-time.","arthur_fit":5},
     "fishspeech": {"label":"Fish Speech",  "size":"~1.1 GB",  "rtf_est":"RTF ~0.14 (GPU)","ram_est_mb":1500, "heavy":True, "notes":"Fish Speech 2.0 installed (pip install -e /tmp/fish-speech). Zero-shot voice cloning, ref WAV optional. text2semantic + DAC. GPU.","arthur_fit":4},
     "csm":        {"label":"Sesame CSM 1B","size":"~2 GB",    "rtf_est":"RTF ~0.08 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"sesame/csm-1b is PUBLIC (no HF login). Clone: git clone SesameAILabs/csm /opt/models/csm. Add pth file so generator.py is importable. Multi-speaker, context-aware.","arthur_fit":4},
-    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"gated HF",     "ram_est_mb":2000, "heavy":True, "notes":"Qwen/Qwen3-TTS is gated (Alibaba access request). Run: huggingface-cli login, then request access at https://huggingface.co/Qwen/Qwen3-TTS","arthur_fit":3},
+    "qwen3tts":   {"label":"Qwen3-TTS",   "size":"~1-3 GB",  "rtf_est":"~2-4x",     "ram_est_mb":2000, "heavy":True, "notes":"Qwen/Qwen3-TTS is gated (Alibaba access request). Run: huggingface-cli login, then request access at https://huggingface.co/Qwen/Qwen3-TTS","arthur_fit":3},
     "orpheus":    {"label":"Orpheus 3B",   "size":"~3 GB",    "rtf_est":"RTF ~0.8 (GPU)","ram_est_mb":3000, "heavy":True, "notes":"canopylabs/orpheus-3b-0.1-ft is PUBLIC (no HF login needed). pip install orpheus-speech. Emotion: <laugh> <sigh> <chuckle> <gasp>. vllm backend, CUDA required.","arthur_fit":5},
     "neutts":     {"label":"NeuTTS Air",   "size":"TBD",      "rtf_est":"TBD",           "ram_est_mb":1000, "heavy":True, "notes":"Not yet configured — edit _load_neutts() with the correct package import + install.","arthur_fit":3},
     "indextts":   {"label":"IndexTTS-2",   "size":"~1.5 GB",  "rtf_est":"RTF ~0.4 (GPU)","ram_est_mb":2000, "heavy":True, "notes":"Installed (pip install git+https://github.com/index-tts/index-tts). Zero-shot voice cloning. Reference WAV required.","arthur_fit":4},
@@ -975,51 +975,31 @@ def _synth_csm(inst, text, params):
     return _to_wav(arr, sr), sr
 
 # -- 16. Qwen3-TTS --
-QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"  # 0.6B public; use 1.7B-Base for higher quality
+QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"  # 0.6B public; swap to 1.7B-Base for higher quality
 def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
-    """Qwen3-TTS -- Alibaba Qwen3-based TTS via transformers.
-    Install: transformers already installed (dep of parler-tts).
-    Model auto-downloads from HuggingFace on first load.
+    """Qwen3-TTS -- Alibaba Qwen3 TTS via qwen-tts package.
+    Install: pip install -U qwen-tts
     Released models: Qwen/Qwen3-TTS-12Hz-0.6B-Base  Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    Supports voice cloning via ref audio upload (audio_prompt_id param).
     """
     import torch
-    from transformers import AutoProcessor, AutoModel
-    try:
-        proc = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        _dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-        mdl  = AutoModel.from_pretrained(model_id, trust_remote_code=True, torch_dtype=_dtype).to(DEVICE)
-    except Exception as _e:
-        _s = str(_e).lower()
-        if "not found" in _s or "404" in _s or "repository" in _s or "does not exist" in _s:
-            raise RuntimeError(
-                f"Qwen3-TTS model '{model_id}' not found on HuggingFace.\n"
-                "The model may not be public yet, or the ID has changed.\n"
-                "Check https://huggingface.co/Qwen for the current model name.\n"
-                f"Original error: {_e}"
-            ) from _e
-        raise
-    return (mdl, proc)
+    from qwen_tts import Qwen3TTSModel
+    _dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+    mdl = Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, dtype=_dtype)
+    return mdl
 
 def _synth_qwen3tts(inst, text, params):
-    import torch
-    model, proc = inst
-    inputs = {k: v.to(DEVICE) if hasattr(v, 'to') else v for k, v in proc(text=text, return_tensors="pt").items()}
-    ref_id = params.get("audio_prompt_id", "")
-    if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists():
-        inputs["reference_audio"] = str(UPLOAD_DIR / f"{ref_id}.wav")
-    with torch.no_grad():
-        output = model.generate(**inputs)
-    if hasattr(output, "audio"):
-        arr = output.audio.squeeze().cpu().numpy().astype(np.float32)
-    elif isinstance(output, (list, tuple)):
-        arr = np.array(output[0], dtype=np.float32).flatten()
+    ref_id  = params.get("audio_prompt_id", "")
+    ref_wav = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists() else None
+    ref_txt = params.get("ref_text", "")
+    if ref_wav and ref_txt:
+        wavs, sr = inst.generate_voice_clone(text=text, language=params.get("language","English"),
+                                              ref_audio=ref_wav, ref_text=ref_txt)
     else:
-        arr = output.cpu().numpy().flatten().astype(np.float32)
-    fe  = getattr(proc, "feature_extractor", None)
-    sr  = getattr(fe, "sampling_rate", None) or 22050
+        # No ref audio -- use default voice
+        wavs, sr = inst.generate(text=text, language=params.get("language","English"))
+    arr = np.array(wavs[0], dtype=np.float32)
     return _to_wav(arr, sr), sr
-
-# -- 17. Orpheus 3B --
 def _load_orpheus(model_name="canopylabs/orpheus-3b-0.1-ft"):
     """Orpheus TTS 3B — LLaMA-3B-based TTS with emotion tags.
     Install: pip install orpheus-speech
@@ -1346,7 +1326,7 @@ def _check_available(name: str) -> Tuple[bool, str]:
         "piper":"piper","kokoro":"kokoro_onnx","melo":"melo",
         "chattts":"ChatTTS","outetts":"outetts","bark":"bark","styletts2":"styletts2","f5tts":"f5_tts",
         "dia":"dia","xtts":"TTS","cosyvoice":None,"parler":"parler_tts","chatterbox":"chatterbox",
-        "fishspeech":"fish_speech","csm":None,"qwen3tts":"transformers",
+        "fishspeech":"fish_speech","csm":None,"qwen3tts":"qwen_tts",
         "orpheus":"orpheus_tts","neutts":None,"indextts":"indextts",
         "zonos":"zonos","openvoice":"openvoice",
     }
@@ -1425,6 +1405,8 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not ilu.find_spec("indextts"):
             return False, "pip install git+https://github.com/index-tts/index-tts"
     elif name == "qwen3tts":
+        if not __import__("importlib").util.find_spec("qwen_tts"):
+            return False, "pip install -U qwen-tts"
         # Qwen/Qwen3-TTS is gated -- probe actual file download (not API metadata which returns 200 for gated repos)
         # Model is now publicly released -- just probe the API to verify reachability
         import urllib.request
