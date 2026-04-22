@@ -975,7 +975,7 @@ def _synth_csm(inst, text, params):
     return _to_wav(arr, sr), sr
 
 # -- 16. Qwen3-TTS --
-QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"  # 0.6B public; swap to 1.7B-Base for higher quality
+QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"  # has built-in speakers; use 0.6B-Base for voice cloning
 def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
     """Qwen3-TTS -- Alibaba Qwen3 TTS via qwen-tts package.
     Install: pip install -U qwen-tts
@@ -993,12 +993,16 @@ def _synth_qwen3tts(inst, text, params):
     ref_wav = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists() else None
     ref_txt = params.get("ref_text", "")
     if ref_wav and ref_txt:
-        wavs, sr = inst.generate_voice_clone(text=text, language=params.get("language","English"),
+        # Voice clone mode: use uploaded reference audio
+        wavs, sr = inst.generate_voice_clone(text=text, language=params.get("language","english"),
                                               ref_audio=ref_wav, ref_text=ref_txt)
     else:
-        # No ref audio -- use default voice
-        wavs, sr = inst.generate(text=text, language=params.get("language","English"))
+        # Built-in speaker mode
+        speaker = params.get("voice", "aiden")
+        wavs, sr = inst.generate_custom_voice(text=text, language=params.get("language","english"),
+                                               speaker_name=speaker)
     arr = np.array(wavs[0], dtype=np.float32)
+
     return _to_wav(arr, sr), sr
 def _load_orpheus(model_name="canopylabs/orpheus-3b-0.1-ft"):
     """Orpheus TTS 3B — LLaMA-3B-based TTS with emotion tags.
@@ -1413,13 +1417,13 @@ def _check_available(name: str) -> Tuple[bool, str]:
         hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN", "")
         _hdrs = {"Authorization": "Bearer " + hf_token} if hf_token else {}
         try:
-            req = urllib.request.Request("https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-0.6B-Base", headers=_hdrs)
+            req = urllib.request.Request("https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", headers=_hdrs)
             with urllib.request.urlopen(req, timeout=5): pass
         except Exception as _e:
             if "401" in str(_e) or "403" in str(_e):
                 return False, "Qwen3-TTS: run huggingface-cli login"
             if "404" in str(_e):
-                return False, "Qwen/Qwen3-TTS-12Hz-0.6B-Base not found on HuggingFace"
+                return False, "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice not found on HuggingFace"
             # network unavailable -- assume OK, will fail at load time
     return True, ""
 
