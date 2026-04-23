@@ -421,7 +421,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .gpu-badge{padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:700;white-space:nowrap;}
 .gpu-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;}
 .gpu-badge.cpu{background:#3a1e1e;color:#f44336;border:1px solid #f44336;}
-.main-wrap{display:flex;height:calc(100vh - 57px);}
+.main-wrap{display:flex;height:calc(100vh - 93px);}
 .sidebar{width:240px;min-width:200px;background:var(--panel);border-right:1px solid var(--border);
          overflow-y:auto;display:flex;flex-direction:column;flex-shrink:0;}
 .sidebar-section{padding:8px 10px 4px;font-size:.68rem;font-weight:700;color:var(--muted);
@@ -508,12 +508,143 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
   .engine-btn{border-bottom:none;border-right:1px solid #1e2235;white-space:nowrap;width:auto;}
   .sidebar-section,.sidebar-search{display:none;}
 }
+
+/* ── Debug Log Drawer ───────────────────────────────────────────────────── */
+#log-drawer{
+  position:fixed;bottom:0;left:0;right:0;z-index:9999;
+  background:#0a0b12;border-top:2px solid #2a3561;
+  display:flex;flex-direction:column;
+  transition:height .2s ease;
+  height:36px; /* collapsed */
+  font-family:'Courier New',monospace;
+}
+#log-drawer.open{ height:320px; }
+#log-header{
+  display:flex;align-items:center;gap:10px;padding:0 12px;
+  height:36px;min-height:36px;cursor:pointer;user-select:none;
+  background:#0d0f1e;border-bottom:1px solid #1e2235;flex-shrink:0;
+}
+#log-header-title{font-size:.78rem;font-weight:700;color:#7c9de8;flex:1;}
+#log-badge{background:#2a3561;color:#8ab3f8;border-radius:10px;
+           padding:1px 8px;font-size:.70rem;font-weight:700;}
+#log-filter-bar{display:flex;gap:6px;align-items:center;}
+.log-filter-btn{font-size:.68rem;padding:2px 8px;border-radius:10px;border:1px solid #2a3561;
+                background:transparent;color:#888;cursor:pointer;transition:all .15s;}
+.log-filter-btn.active{background:#2a3561;color:#8ab3f8;border-color:#4a6aaa;}
+#log-clear-btn{font-size:.68rem;padding:2px 8px;border-radius:6px;border:1px solid #3a2a2a;
+               background:transparent;color:#887;cursor:pointer;}
+#log-clear-btn:hover{color:#f88;border-color:#884444;}
+#log-copy-btn{font-size:.68rem;padding:2px 8px;border-radius:6px;border:1px solid #2a3a2a;
+              background:transparent;color:#787;cursor:pointer;}
+#log-copy-btn:hover{color:#8f8;border-color:#448844;}
+#log-body{flex:1;overflow-y:auto;padding:6px 10px;font-size:.73rem;line-height:1.6;}
+.log-entry{display:flex;gap:8px;align-items:baseline;border-bottom:1px solid #12141f;padding:2px 0;}
+.log-entry:last-child{border-bottom:none;}
+.log-ts{color:#3a4a6a;white-space:nowrap;flex-shrink:0;font-size:.68rem;}
+.log-cat{font-weight:700;white-space:nowrap;flex-shrink:0;min-width:68px;font-size:.70rem;text-align:right;}
+.log-engine{color:#7c9de8;font-weight:700;white-space:nowrap;flex-shrink:0;}
+.log-msg{color:#ccd;word-break:break-word;flex:1;}
+/* category colours */
+.cat-REQUEST .log-cat{color:#5b9bd5;}   .cat-REQUEST .log-msg{color:#90c4f4;}
+.cat-LOAD    .log-cat{color:#e5a020;}   .cat-LOAD    .log-msg{color:#f0c060;}
+.cat-SYNTH   .log-cat{color:#4caf50;}   .cat-SYNTH   .log-msg{color:#90d890;}
+.cat-RESULT  .log-cat{color:#9b59b6;}   .cat-RESULT  .log-msg{color:#c890e8;}
+.cat-ERROR   .log-cat{color:#f44336;}   .cat-ERROR   .log-msg{color:#ff8a80;}
+.cat-UPLOAD  .log-cat{color:#00bcd4;}   .cat-UPLOAD  .log-msg{color:#80deea;}
+.cat-STATUS  .log-cat{color:#607d8b;}   .cat-STATUS  .log-msg{color:#90a4ae;}
+.cat-PARAMS  .log-cat{color:#ff7043;}   .cat-PARAMS  .log-msg{color:#ffab91;}
 </style>"""
 
 _JS = r"""
 <script>
 const API = '';
 
+/* ═══════════════════════════════════════════════════════════════
+   DEBUG LOG  — categories: REQUEST LOAD SYNTH RESULT ERROR UPLOAD STATUS PARAMS
+   ═══════════════════════════════════════════════════════════════ */
+const _logEntries = [];
+let   _logFilter  = 'ALL';
+
+function dbg(cat, engine, msg) {
+  const now  = new Date();
+  const ts   = now.toTimeString().slice(0,8) + '.' + String(now.getMilliseconds()).padStart(3,'0');
+  const entry = { ts, cat, engine: engine || '—', msg, show: true };
+  _logEntries.push(entry);
+  _applyFilter(entry);
+  _renderEntry(entry);
+  _updateBadge();
+  // auto-scroll only when drawer is open
+  const body = document.getElementById('log-body');
+  if (body) body.scrollTop = body.scrollHeight;
+}
+
+function _applyFilter(entry) {
+  entry.show = (_logFilter === 'ALL' || _logFilter === entry.cat);
+}
+
+function _renderEntry(entry) {
+  const body = document.getElementById('log-body');
+  if (!body) return;
+  if (!entry.show) return;
+  const row = document.createElement('div');
+  row.className = `log-entry cat-${entry.cat}`;
+  row.innerHTML =
+    `<span class="log-ts">${entry.ts}</span>` +
+    `<span class="log-cat">${entry.cat}</span>` +
+    `<span class="log-engine">${entry.engine}</span>` +
+    `<span class="log-msg">${_esc(entry.msg)}</span>`;
+  body.appendChild(row);
+}
+
+function _esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _updateBadge() {
+  const b = document.getElementById('log-badge');
+  if (b) b.textContent = _logEntries.length;
+}
+
+function _rebuildLog() {
+  const body = document.getElementById('log-body');
+  if (!body) return;
+  body.innerHTML = '';
+  _logEntries.forEach(e => { _applyFilter(e); _renderEntry(e); });
+  body.scrollTop = body.scrollHeight;
+}
+
+function setLogFilter(cat, btn) {
+  _logFilter = cat;
+  document.querySelectorAll('.log-filter-btn').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+  _rebuildLog();
+}
+
+function toggleLog() {
+  const d = document.getElementById('log-drawer');
+  d.classList.toggle('open');
+}
+
+function clearLog() {
+  _logEntries.length = 0;
+  document.getElementById('log-body').innerHTML = '';
+  _updateBadge();
+}
+
+function copyLog() {
+  const txt = _logEntries
+    .filter(e => e.show)
+    .map(e => `${e.ts}  [${e.cat.padEnd(7)}]  ${e.engine.padEnd(12)}  ${e.msg}`)
+    .join('\n');
+  navigator.clipboard.writeText(txt).then(() => {
+    const b = document.getElementById('log-copy-btn');
+    b.textContent = '✅ Copied'; setTimeout(() => b.textContent = '📋 Copy all', 1500);
+  });
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PARAM HELPERS
+   ═══════════════════════════════════════════════════════════════ */
 document.addEventListener('input', e => {
   if (e.target.type === 'range') {
     const span = e.target.closest('.param-group')?.querySelector('.range-val');
@@ -540,6 +671,7 @@ function selectEngine(name) {
   document.querySelectorAll('.engine-btn').forEach(b => b.classList.toggle('active', b.dataset.engine === name));
   document.querySelectorAll('.engine-pane').forEach(p => p.style.display = p.id === 'pane-' + name ? 'block' : 'none');
   activeEngine = name;
+  dbg('STATUS', name, `Engine selected`);
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -550,24 +682,42 @@ document.addEventListener('DOMContentLoaded', () => {
       b.style.display = b.dataset.label.toLowerCase().includes(q) ? '' : 'none';
     });
   });
+  dbg('STATUS', '—', 'UI ready — TTS Lab loaded');
 });
 
+/* ═══════════════════════════════════════════════════════════════
+   SYNTHESISE
+   ═══════════════════════════════════════════════════════════════ */
 async function synth(model) {
   const text = document.getElementById('text-input').value.trim();
   if (!text) { alert('Enter some text first'); return; }
+  const params = getParams(model);
   const btn  = document.getElementById('btn-' + model);
   const spin = document.getElementById('spin-' + model);
   const card = document.getElementById('result-' + model);
   if (btn)  btn.disabled = true;
   if (spin) spin.style.display = 'inline-block';
   clearError(model);
+
+  dbg('SYNTH',   model, `▶ Synthesise  text="${text.slice(0,60)}${text.length>60?'…':''}"`);
+  dbg('PARAMS',  model, 'Params → ' + JSON.stringify(params));
+  dbg('REQUEST', model, `POST /synthesize/${model}`);
+
+  const t0 = performance.now();
   try {
     const res = await fetch(`${API}/synthesize/${model}`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({text, params: getParams(model)})
+      body: JSON.stringify({text, params})
     });
+    const roundtrip = (performance.now() - t0).toFixed(0);
+    dbg('REQUEST', model, `← HTTP ${res.status}  roundtrip ${roundtrip} ms`);
     const data = await res.json();
-    if (data.error) { showError(model, data.error + (data.trace ? '\n\n' + data.trace : '')); return; }
+    if (data.error) {
+      dbg('ERROR', model, data.error);
+      if (data.trace) dbg('ERROR', model, '↳ ' + data.trace.trim().split('\n').slice(-3).join(' | '));
+      showError(model, data.error + (data.trace ? '\n\n' + data.trace : ''));
+      return;
+    }
     const blob = new Blob([Uint8Array.from(atob(data.audio_b64), c => c.charCodeAt(0))], {type:'audio/wav'});
     const url  = URL.createObjectURL(blob);
     if (card) {
@@ -583,13 +733,20 @@ async function synth(model) {
       const rtf = parseFloat(data.rtf);
       card.querySelector('.m-rtf').style.color = rtf <= 1 ? '#4caf50' : rtf <= 5 ? '#ff9800' : '#f44336';
     }
-  } catch(e) { showError(model, e.toString()); }
-  finally {
+    dbg('RESULT', model,
+      `✅ synth ${data.synth_time_ms} ms  |  dur ${data.audio_dur_ms} ms  |  RTF ${data.rtf}×  |  ${data.sample_rate} Hz  |  model load ${data.load_time_s} s`);
+  } catch(e) {
+    dbg('ERROR', model, '⚠ fetch exception: ' + e.toString());
+    showError(model, e.toString());
+  } finally {
     if (btn)  btn.disabled = false;
     if (spin) spin.style.display = 'none';
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   ERROR PANEL
+   ═══════════════════════════════════════════════════════════════ */
 function showError(model, msg) {
   const card = document.getElementById('result-' + model);
   if (card) card.style.display = 'block';
@@ -628,19 +785,34 @@ function copyErr(model, ev) {
   });
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   PRELOAD / UNLOAD
+   ═══════════════════════════════════════════════════════════════ */
 async function preload(model) {
+  const params = getParams(model);
   const spin = document.getElementById('spin-' + model);
   const btn  = document.getElementById('btn-'  + model);
   if (spin) spin.style.display = 'inline-block';
   if (btn)  btn.disabled = true;
+
+  dbg('LOAD',    model, `⬇ Preload requested`);
+  dbg('PARAMS',  model, 'Params → ' + JSON.stringify(params));
+  dbg('REQUEST', model, `POST /models/${model}/load`);
+
+  const t0 = performance.now();
   try {
     const res = await fetch(`${API}/models/${model}/load`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({params: getParams(model)})
+      body: JSON.stringify({params})
     });
+    const roundtrip = (performance.now() - t0).toFixed(0);
+    dbg('REQUEST', model, `← HTTP ${res.status}  roundtrip ${roundtrip} ms`);
     const d = await res.json();
-    if (d.error) { showError(model, d.error); }
-    else {
+    if (d.error) {
+      dbg('ERROR', model, d.error);
+      showError(model, d.error);
+    } else {
+      dbg('LOAD', model, `✅ ${d.status}  load_time ${d.load_time_s} s`);
       const card = document.getElementById('result-' + model);
       if (card) {
         card.style.display = 'block';
@@ -656,56 +828,102 @@ async function preload(model) {
         }
       }
     }
-  } catch(e) { showError(model, e.toString()); }
-  finally {
+  } catch(e) {
+    dbg('ERROR', model, '⚠ fetch exception: ' + e.toString());
+    showError(model, e.toString());
+  } finally {
     if (spin) spin.style.display = 'none';
     if (btn)  btn.disabled = false;
     refreshStatus();
   }
 }
+
 async function unload(model) {
-  await fetch(`${API}/models/${model}`, {method:'DELETE'});
+  dbg('LOAD',    model, `⏏ Unload requested`);
+  dbg('REQUEST', model, `DELETE /models/${model}`);
+  const res = await fetch(`${API}/models/${model}`, {method:'DELETE'});
+  dbg('REQUEST', model, `← HTTP ${res.status}`);
+  dbg('LOAD',    model, `Model unloaded`);
   refreshStatus();
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   UPLOAD
+   ═══════════════════════════════════════════════════════════════ */
 async function uploadPrompt(fileId, statusId, hiddenId) {
   const input  = document.getElementById(fileId);
   const status = document.getElementById(statusId);
   if (!input.files[0]) { status.textContent = 'No file selected'; return; }
+  const fname = input.files[0].name;
   status.textContent = 'Uploading...';
+  dbg('UPLOAD', '—', `Uploading "${fname}" (${(input.files[0].size/1024).toFixed(0)} KB)`);
+  dbg('REQUEST','—', `POST /upload`);
   const fd = new FormData(); fd.append('file', input.files[0]);
   try {
     const r = await fetch(`${API}/upload`, {method:'POST', body:fd});
+    dbg('REQUEST','—', `← HTTP ${r.status}`);
     const d = await r.json();
     document.getElementById(hiddenId).value = d.id;
-    status.textContent = `✅ ${input.files[0].name} (${(d.size/1024).toFixed(0)} KB)`;
-  } catch(e) { status.textContent = '❌ ' + e; }
+    status.textContent = `✅ ${fname} (${(d.size/1024).toFixed(0)} KB)`;
+    dbg('UPLOAD', '—', `✅ Uploaded → id=${d.id}  size=${d.size} B`);
+  } catch(e) {
+    status.textContent = '❌ ' + e;
+    dbg('ERROR', '—', 'Upload failed: ' + e.toString());
+  }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   STATUS POLLER
+   ═══════════════════════════════════════════════════════════════ */
+let _lastModelStatus = {};
 async function refreshStatus() {
-  const d = await (await fetch(`${API}/status`)).json();
-  const {total, used} = d.system;
-  const pct = (used/total*100).toFixed(1);
-  document.getElementById('ram-bar').style.width = pct + '%';
-  document.getElementById('ram-text').textContent = `RAM ${used}/${total} MB  (${pct}%)`;
-  if (d.gpu && d.gpu.vram_total) {
-    const gUsed = d.gpu.vram_used || 0, gTot = d.gpu.vram_total;
-    const gPct  = (gUsed/gTot*100).toFixed(1);
-    document.getElementById('vram-bar').style.width = gPct + '%';
-    document.getElementById('vram-text').textContent = `VRAM ${gUsed}/${gTot} MB  (${gPct}%)`;
+  try {
+    const d = await (await fetch(`${API}/status`)).json();
+    const {total, used} = d.system;
+    const pct = (used/total*100).toFixed(1);
+    document.getElementById('ram-bar').style.width = pct + '%';
+    document.getElementById('ram-text').textContent = `RAM ${used}/${total} MB  (${pct}%)`;
+    if (d.gpu && d.gpu.vram_total) {
+      const gUsed = d.gpu.vram_used || 0, gTot = d.gpu.vram_total;
+      const gPct  = (gUsed/gTot*100).toFixed(1);
+      document.getElementById('vram-bar').style.width = gPct + '%';
+      document.getElementById('vram-text').textContent = `VRAM ${gUsed}/${gTot} MB  (${gPct}%)`;
+    }
+    Object.entries(d.models).forEach(([n, m]) => {
+      const dot = document.getElementById('dot-' + n);
+      if (dot) dot.textContent = m.status==='loaded' ? '🟢' : m.status==='loading' ? '🟡' : m.status==='error' ? '🔴' : '⚫';
+      // log status transitions
+      const prev = _lastModelStatus[n];
+      if (prev !== undefined && prev !== m.status) {
+        const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
+        dbg('STATUS', n, `${icon} ${prev} → ${m.status}` + (m.error ? `  error: ${m.error}` : '') + (m.status==='loaded'?`  load_time ${m.load_time_s}s`:''));
+      }
+      _lastModelStatus[n] = m.status;
+    });
+    // first-run snapshot
+    if (Object.keys(_lastModelStatus).length === 0) {
+      Object.entries(d.models).forEach(([n,m]) => { _lastModelStatus[n] = m.status; });
+      const gpu = d.gpu ? `  VRAM ${d.gpu.vram_used}/${d.gpu.vram_total} MB` : '';
+      dbg('STATUS','—',`Poll — RAM ${used}/${total} MB${gpu}`);
+    }
+  } catch(e) {
+    dbg('ERROR','—','refreshStatus failed: ' + e.toString());
   }
-  Object.entries(d.models).forEach(([n, m]) => {
-    const dot = document.getElementById('dot-' + n);
-    if (!dot) return;
-    dot.textContent = m.status==='loaded' ? '🟢' : m.status==='loading' ? '🟡' : m.status==='error' ? '🔴' : '⚫';
-  });
 }
 
 async function refreshAvailability() {
   const btn = document.getElementById('btn-refresh');
   if (btn) btn.disabled = true;
-  try { await fetch(`${API}/refresh`, {method:'POST'}); await refreshStatus(); }
-  finally { if (btn) btn.disabled = false; }
+  dbg('STATUS','—','🔄 Refreshing availability…');
+  dbg('REQUEST','—','POST /refresh');
+  try {
+    const r = await fetch(`${API}/refresh`, {method:'POST'});
+    dbg('REQUEST','—',`← HTTP ${r.status}`);
+    await refreshStatus();
+    dbg('STATUS','—','✅ Availability refreshed');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 setInterval(refreshStatus, 6000);
@@ -841,4 +1059,28 @@ def build_page() -> str:
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-{_JS}</body></html>"""
+{_JS}
+
+<!-- ── Debug Log Drawer ─────────────────────────────────────────────────── -->
+<div id="log-drawer">
+  <div id="log-header" onclick="toggleLog()">
+    <span id="log-header-title">🐛 Debug Log</span>
+    <span id="log-badge">0</span>
+    <div id="log-filter-bar" onclick="event.stopPropagation()">
+      <button class="log-filter-btn active" onclick="setLogFilter('ALL',this)">ALL</button>
+      <button class="log-filter-btn" onclick="setLogFilter('SYNTH',this)">SYNTH</button>
+      <button class="log-filter-btn" onclick="setLogFilter('LOAD',this)">LOAD</button>
+      <button class="log-filter-btn" onclick="setLogFilter('REQUEST',this)">REQUEST</button>
+      <button class="log-filter-btn" onclick="setLogFilter('RESULT',this)">RESULT</button>
+      <button class="log-filter-btn" onclick="setLogFilter('PARAMS',this)">PARAMS</button>
+      <button class="log-filter-btn" onclick="setLogFilter('ERROR',this)">ERROR</button>
+      <button class="log-filter-btn" onclick="setLogFilter('UPLOAD',this)">UPLOAD</button>
+      <button class="log-filter-btn" onclick="setLogFilter('STATUS',this)">STATUS</button>
+      <button id="log-copy-btn" onclick="copyLog()">📋 Copy all</button>
+      <button id="log-clear-btn" onclick="clearLog()">🗑 Clear</button>
+    </div>
+  </div>
+  <div id="log-body"></div>
+</div>
+
+</body></html>"""
