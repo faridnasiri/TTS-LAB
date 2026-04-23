@@ -77,9 +77,9 @@ BARK_PRESETS = [
 
 CHATTTS_SPEEDS   = [(f"[speed_{i}]", f"speed_{i}") for i in range(1, 10)]
 OUTETTS_MODELS   = [
-    ("OuteAI/OuteTTS-0.3-500M", "OuteTTS 0.3 500M (default)"),
-    ("OuteAI/OuteTTS-1.0-0.6B", "OuteTTS 1.0 0.6B"),
-    ("OuteAI/Llama-OuteTTS-1.0-1B", "OuteTTS 1.0 1B"),
+    ("/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf", "OuteTTS 1.0 0.6B Q4 (default, ~400 MB)"),
+    ("/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q8_0.gguf",   "OuteTTS 1.0 0.6B Q8 (higher quality, ~650 MB)"),
+    ("/opt/models/outetts-gguf/OuteTTS-0.3-500M-Q4_K_M.gguf", "OuteTTS 0.3 500M Q4 (smaller, ~300 MB)"),
 ]
 OUTETTS_SPEAKERS = [("en-female-1-neutral", "en-female-1-neutral")]
 PARLER_MODELS    = [
