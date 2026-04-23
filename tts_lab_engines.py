@@ -197,11 +197,9 @@ def _load_outetts(model_path=OUTETTS_DEFAULT_GGUF):
     import outetts
     gguf_path = model_path
     if not gguf_path.endswith(".gguf"):
-        raise RuntimeError(
-            "OuteTTS HF backend is broken (pre-encodes text as ~15K tokens).\n"
-            f"Use GGUF: {OUTETTS_DEFAULT_GGUF}\n"
-            f'Then POST params: {{"model_path":"{OUTETTS_DEFAULT_GGUF}"}}'
-        )
+        # HF backend is permanently broken (pre-encodes text as ~15K tokens).
+        # Silently fall back to the default GGUF instead of raising.
+        gguf_path = OUTETTS_DEFAULT_GGUF
     tokenizer = OUTETTS_DEFAULT_TOKENIZER
     if "0.3" in gguf_path:
         tokenizer = "OuteAI/OuteTTS-0.3-500M"
