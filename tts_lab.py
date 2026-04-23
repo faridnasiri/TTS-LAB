@@ -148,8 +148,6 @@ async def preload_model(model: str, request: Request):
     st = _state.get(model)
     if st is None:
         raise HTTPException(404, f"Unknown engine: {model}")
-    if st["status"] == "loaded":
-        return {"status": "already_loaded", "model": model, "load_time_s": st["load_time_s"]}
     try:
         body = await request.json()
     except Exception:
