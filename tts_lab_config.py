@@ -163,7 +163,24 @@ _state: dict = {
     for n in MODEL_ORDER
 }
 
-# ── Synthesis timeouts (seconds) ──────────────────────────────────────────────
+# ── Server-side ring-buffer log (last 400 entries) ────────────────────────────
+import collections, datetime as _dt
+_server_log: collections.deque = collections.deque(maxlen=400)
+_server_log_seq = 0
+
+def slog(cat: str, engine: str, msg: str) -> None:
+    """Append a categorised entry to the server-side log ring-buffer."""
+    global _server_log_seq
+    _server_log_seq += 1
+    _server_log.append({
+        "seq": _server_log_seq,
+        "ts":  _dt.datetime.now().strftime("%H:%M:%S.") + f"{_dt.datetime.now().microsecond//1000:03d}",
+        "cat": cat,
+        "engine": engine,
+        "msg": msg,
+    })
+
+
 SYNTH_TIMEOUT: dict[str, int] = {
     "orpheus":  240,
     "dia":      180,
