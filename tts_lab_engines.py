@@ -404,27 +404,36 @@ def _load_cosyvoice():
     return CosyVoice2(str(md), load_jit=False, load_trt=False)
 
 def _synth_cosyvoice(inst, text, params):
-    import torchaudio
+    import numpy as _np
+    import torch as _torch
+
+    def _load_wav_16k(path):
+        """Load any WAV as mono float32 at 16 kHz using soundfile (no torchcodec)."""
+        import soundfile as _sf
+        data, sr = _sf.read(str(path), dtype="float32", always_2d=False)
+        if data.ndim == 2:
+            data = data.mean(axis=1)           # stereo → mono
+        if sr != 16000:
+            import torch, torchaudio
+            t = _torch.from_numpy(data).unsqueeze(0)
+            t = torchaudio.functional.resample(t, sr, 16000)
+            data = t.squeeze(0).numpy()
+        return _torch.from_numpy(data).unsqueeze(0)   # [1, T]
+
     prompt_id   = params.get("audio_prompt_id", "")
     prompt_path = UPLOAD_DIR / f"{prompt_id}.wav" if prompt_id else None
 
     if prompt_path and prompt_path.exists():
-        ref_path   = str(prompt_path)
-        ref_text   = params.get("transcript", "") or ""
+        ref_wav  = _load_wav_16k(prompt_path)
+        ref_text = params.get("transcript", "") or ""
     else:
-        # Fall back to the bundled zero-shot example prompt
-        ref_path   = str(COSYVOICE_DIR / "asset" / "zero_shot_prompt.wav")
-        ref_text   = "And then he said, the excitement in his voice unmistakable."
-
-    prompt_wav, sr_p = torchaudio.load(ref_path)
-    if sr_p != 16000:
-        prompt_wav = torchaudio.functional.resample(prompt_wav, sr_p, 16000)
-    prompt_wav = prompt_wav.mean(0, keepdim=True)   # mono [1, T]
+        ref_wav  = _load_wav_16k(COSYVOICE_DIR / "asset" / "zero_shot_prompt.wav")
+        ref_text = "And then he said, the excitement in his voice unmistakable."
 
     chunks = [c["tts_speech"].numpy().flatten()
-              for c in inst.inference_zero_shot(text, ref_text, prompt_wav)]
+              for c in inst.inference_zero_shot(text, ref_text, ref_wav)]
     sr = inst.sample_rate
-    return _to_wav(np.concatenate(chunks) if chunks else np.zeros(sr, np.float32), sr), sr
+    return _to_wav(_np.concatenate(chunks) if chunks else _np.zeros(sr, _np.float32), sr), sr
 
 
 # ── 12. Parler-TTS ────────────────────────────────────────────────────────────
