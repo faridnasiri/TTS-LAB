@@ -985,7 +985,11 @@ def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
     import torch
     from qwen_tts import Qwen3TTSModel
     _dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-    mdl = Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, dtype=_dtype)
+    # Use PyTorch built-in SDPA (supports SM 12.0 / Blackwell natively).
+    # flash-attn 2.x has no SM 12.0 wheel; SDPA gives equivalent fused-attention speed.
+    _attn = "sdpa" if DEVICE == "cuda" else "eager"
+    mdl = Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, dtype=_dtype,
+                                        attn_implementation=_attn)
     return mdl
 
 def _synth_qwen3tts(inst, text, params):
