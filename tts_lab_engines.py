@@ -399,9 +399,16 @@ def _load_cosyvoice():
     for p in [str(COSYVOICE_DIR), str(COSYVOICE_DIR / "third_party" / "Matcha-TTS")]:
         if p not in sys.path:
             sys.path.insert(0, p)
-    # Force soundfile backend so torchaudio never tries to load torchcodec
-    import torchaudio
-    torchaudio.set_audio_backend("soundfile")
+    # Force soundfile backend — torchcodec (default in 2.11+) needs FFmpeg/CUDA
+    # which isn't available; TORCHAUDIO_USE_BACKEND_DISPATCHER=0 disables it.
+    import os as _os
+    _os.environ.setdefault("TORCHAUDIO_USE_BACKEND_DISPATCHER", "0")
+    import torchaudio as _ta
+    # Monkey-patch _backend to soundfile if the dispatcher attr still exists
+    try:
+        _ta._backend.set_audio_backend("soundfile")
+    except Exception:
+        pass
     from cosyvoice.cli.cosyvoice import CosyVoice2
     md = COSYVOICE_DIR / "pretrained_models" / "CosyVoice2-0.5B"
     return CosyVoice2(str(md), load_jit=False, load_trt=False)
