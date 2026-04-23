@@ -407,7 +407,7 @@ _CSS = """
 :root{--bg:#13131f;--panel:#1a1a2e;--card:#1e2235;--card2:#141428;--border:#2d3050;
       --accent:#7eb8f7;--accent2:#4caf50;--text:#e0e0e0;--muted:#8899aa;}
 *{box-sizing:border-box;}
-body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;margin:0;min-height:100vh;}
+body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;margin:0;height:100vh;display:flex;flex-direction:column;overflow:hidden;}
 .top-header{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 20px;
             display:flex;align-items:center;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:100;}
 .top-header h1{margin:0;font-size:1.15rem;font-weight:700;color:var(--accent);white-space:nowrap;}
@@ -421,7 +421,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .gpu-badge{padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:700;white-space:nowrap;}
 .gpu-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;}
 .gpu-badge.cpu{background:#3a1e1e;color:#f44336;border:1px solid #f44336;}
-.main-wrap{display:flex;height:calc(100vh - 93px);}
+.main-wrap{display:flex;flex:1;min-height:0;}
 .sidebar{width:240px;min-width:200px;background:var(--panel);border-right:1px solid var(--border);
          overflow-y:auto;display:flex;flex-direction:column;flex-shrink:0;}
 .sidebar-section{padding:8px 10px 4px;font-size:.68rem;font-weight:700;color:var(--muted);
@@ -511,14 +511,14 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
 
 /* ── Debug Log Drawer ───────────────────────────────────────────────────── */
 #log-drawer{
-  position:fixed;bottom:0;left:0;right:0;z-index:9999;
   background:#0a0b12;border-top:2px solid #2a3561;
   display:flex;flex-direction:column;
-  transition:height .2s ease;
-  height:36px; /* collapsed */
+  transition:max-height .2s ease;
+  max-height:36px;overflow:hidden;
+  flex-shrink:0;
   font-family:'Courier New',monospace;
 }
-#log-drawer.open{ height:320px; }
+#log-drawer.open{ max-height:300px; }
 #log-header{
   display:flex;align-items:center;gap:10px;padding:0 12px;
   height:36px;min-height:36px;cursor:pointer;user-select:none;
@@ -537,7 +537,7 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
 #log-copy-btn{font-size:.68rem;padding:2px 8px;border-radius:6px;border:1px solid #2a3a2a;
               background:transparent;color:#787;cursor:pointer;}
 #log-copy-btn:hover{color:#8f8;border-color:#448844;}
-#log-body{flex:1;overflow-y:auto;padding:6px 10px;font-size:.73rem;line-height:1.6;}
+#log-body{flex:1;overflow-y:auto;padding:6px 10px;font-size:.73rem;line-height:1.6;min-height:0;}
 .log-entry{display:flex;gap:8px;align-items:baseline;border-bottom:1px solid #12141f;padding:2px 0;}
 .log-entry:last-child{border-bottom:none;}
 .log-ts{color:#3a4a6a;white-space:nowrap;flex-shrink:0;font-size:.68rem;}
@@ -962,8 +962,6 @@ async function pollServerLog() {
 setInterval(refreshStatus, 6000);
 setInterval(pollServerLog, 2000);
 window.addEventListener('load', () => {
-  // open log drawer by default so entries are immediately visible
-  document.getElementById('log-drawer').classList.add('open');
   refreshStatus();
   pollServerLog();
 });
