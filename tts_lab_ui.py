@@ -553,6 +553,8 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
 .cat-UPLOAD  .log-cat{color:#00bcd4;}   .cat-UPLOAD  .log-msg{color:#80deea;}
 .cat-STATUS  .log-cat{color:#607d8b;}   .cat-STATUS  .log-msg{color:#90a4ae;}
 .cat-PARAMS  .log-cat{color:#ff7043;}   .cat-PARAMS  .log-msg{color:#ffab91;}
+.cat-SERVER  .log-cat{color:#cddc39;}   .cat-SERVER  .log-msg{color:#e6ee9c;}
+.log-src-server{font-size:.60rem;color:#5a6a3a;margin-left:3px;}
 </style>"""
 
 _JS = r"""
@@ -588,10 +590,11 @@ function _renderEntry(entry) {
   if (!entry.show) return;
   const row = document.createElement('div');
   row.className = `log-entry cat-${entry.cat}`;
+  const srcTag = entry.src === 'server' ? '<span class="log-src-server">[srv]</span>' : '';
   row.innerHTML =
     `<span class="log-ts">${entry.ts}</span>` +
     `<span class="log-cat">${entry.cat}</span>` +
-    `<span class="log-engine">${entry.engine}</span>` +
+    `<span class="log-engine">${entry.engine}${srcTag}</span>` +
     `<span class="log-msg">${_esc(entry.msg)}</span>`;
   body.appendChild(row);
 }
@@ -904,7 +907,8 @@ async function refreshStatus() {
         const prev = _lastModelStatus[n];
         if (prev !== m.status) {
           const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
-          dbg('STATUS', n, `${icon} ${prev} → ${m.status}` + (m.error ? `  error: ${m.error}` : '') + (m.status==='loaded'?`  load_time ${m.load_time_s}s`:''));
+          const mdl  = m.loaded_model ? `  model=${m.loaded_model.split('/').pop()}` : '';
+          dbg('STATUS', n, `${icon} ${prev} → ${m.status}${mdl}` + (m.error ? `  error: ${m.error}` : '') + (m.status==='loaded'?`  load_time ${m.load_time_s}s`:''));
         }
         _lastModelStatus[n] = m.status;
       });
@@ -933,11 +937,35 @@ async function refreshAvailability() {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   SERVER LOG POLLER  — polls /logs every 2s, ingests new entries
+   ═══════════════════════════════════════════════════════════════ */
+let _srvSeq = 0;
+async function pollServerLog() {
+  try {
+    const d = await (await fetch(`${API}/logs?since=${_srvSeq}`)).json();
+    if (d.entries && d.entries.length) {
+      d.entries.forEach(e => {
+        const entry = { ts: e.ts, cat: e.cat, engine: e.engine, msg: e.msg, src: 'server', show: true };
+        _logEntries.push(entry);
+        _applyFilter(entry);
+        _renderEntry(entry);
+      });
+      _updateBadge();
+      const body = document.getElementById('log-body');
+      if (body) body.scrollTop = body.scrollHeight;
+    }
+    _srvSeq = d.seq;
+  } catch(_) {}
+}
+
 setInterval(refreshStatus, 6000);
+setInterval(pollServerLog, 2000);
 window.addEventListener('load', () => {
   // open log drawer by default so entries are immediately visible
   document.getElementById('log-drawer').classList.add('open');
   refreshStatus();
+  pollServerLog();
 });
 </script>"""
 
@@ -1087,6 +1115,7 @@ def build_page() -> str:
       <button class="log-filter-btn" onclick="setLogFilter('ERROR',this)">ERROR</button>
       <button class="log-filter-btn" onclick="setLogFilter('UPLOAD',this)">UPLOAD</button>
       <button class="log-filter-btn" onclick="setLogFilter('STATUS',this)">STATUS</button>
+      <button class="log-filter-btn" onclick="setLogFilter('SERVER',this)">SERVER</button>
       <button id="log-copy-btn" onclick="copyLog()">📋 Copy all</button>
       <button id="log-clear-btn" onclick="clearLog()">🗑 Clear</button>
     </div>
