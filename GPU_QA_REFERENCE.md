@@ -1,7 +1,6 @@
 # GPU Selection & Virtualisation — Full Q&A Reference
 > Arthur TTS Lab · Xeon D-1528 · Supermicro X10SDV-6C-TLN4F  
-> Discussion date: 2026-03-26  
-> Status: living document — all conclusions based on live data + bench results
+> Discussion date: 2026-03-26 · Updated: 2026-04-23 (flash-attn SM 12.0 verdict, SDPA solution)
 
 ---
 
@@ -131,6 +130,23 @@ RTX 5060 8GB with FP4:
 | RTX 5070 Ti | **16 GB** GDDR7 | 896 GB/s | ~1,406 | 300W | Gen 4 | ~$800 |
 | RTX 5080 | **16 GB** GDDR7 | 960 GB/s | ~1,801 | 360W | Gen 4 | ~$1,000 |
 | RTX 5090 | **32 GB** GDDR7 | 1,792 GB/s | 3,352 | 575W | **Gen 5** | ~$2,000 |
+
+### SM 12.0 (Blackwell) — Library Compatibility Notes (2026-04-23)
+
+| Library | SM 12.0 Support | Notes |
+|---|---|---|
+| PyTorch 2.11+cu128 | ✅ Full | CUDA 12.8, all ops |
+| `torch.compile` | ✅ | Triton backend works |
+| `scaled_dot_product_attention` (SDPA) | ✅ | cuDNN fused kernel — **use instead of flash-attn** |
+| flash-attn 2.x | ❌ | Max SM 9.0 (Hopper). No SM 12.0 support, no pre-built wheel for torch2.11 |
+| flash-attn 4 (FA4) | ⚠️ | Beta, pure Python, different API (`flash_attn.cute`). Not compatible with HF transformers yet |
+| bitsandbytes | ✅ | INT8/INT4 quantisation works |
+| xformers | ⚠️ | Pre-built wheels lag behind — may need source compile |
+| vllm | ✅ | Supports SM 12.0 as of recent releases |
+| onnxruntime-gpu | ✅ | CUDA EP works |
+
+**For any model using `attn_implementation="flash_attention_2"` on SM 12.0:**  
+→ Switch to `attn_implementation="sdpa"`. Same speed, no dependency needed.
 
 ### PCIe 3.0 x16 Riser — Does Bandwidth Matter?
 
