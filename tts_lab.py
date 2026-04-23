@@ -1851,11 +1851,21 @@ def _build_params(name):
 
     # -- 16. Qwen3-TTS --
     if name == "qwen3tts":
-        return (f'<div class="param-row">{_upload_widget("q3-file","q3-status","q3-prompt-id","Reference WAV (optional — for voice conditioning)")}</div>'
-               +'<div class="alert alert-warning py-2 small mt-2 mb-0">'
-               +'⚠ <strong>Qwen/Qwen3-TTS may not be public on HuggingFace yet.</strong> '
-               +'Load will fail with a 404 if the model is gated or the ID has changed. '
-               +'Check <a href="https://huggingface.co/Qwen" target="_blank" class="alert-link">huggingface.co/Qwen</a> for the current model name.</div>')
+        q3_speakers = [("aiden","Aiden"),("dylan","Dylan"),("eric","Eric"),
+                       ("ono_anna","Ono Anna"),("ryan","Ryan"),("serena","Serena"),
+                       ("sohee","Sohee"),("uncle_fu","Uncle Fu"),("vivian","Vivian")]
+        q3_langs    = [("english","English"),("chinese","Chinese"),("japanese","Japanese"),
+                       ("korean","Korean"),("french","French"),("german","German"),
+                       ("spanish","Spanish"),("portuguese","Portuguese")]
+        return ('<div class="alert alert-info py-2 small mb-2">'
+                '🎙 <strong>Qwen3-TTS 1.7B</strong> · 9 built-in speakers · voice clone via reference WAV · RTF ~4.4× on RTX 5060 Ti</div>'
+               +_row(_grp("Speaker", _sel("voice", q3_speakers, "aiden")),
+                     _grp("Language", _sel("language", q3_langs, "english")))
+               +'<div class="mt-2 mb-1 small text-muted">Voice clone mode — upload a reference WAV + transcript to override the built-in speaker:</div>'
+               +f'<div class="param-row">{_upload_widget("q3-file","q3-status","q3-prompt-id","Reference WAV (optional — overrides speaker; also fill transcript below)")}</div>'
+               +_row(_grp("Ref transcript (required for voice clone)",
+                          f'<input type="text" class="form-control form-control-sm bg-dark text-light border-secondary" '
+                          f'data-param="ref_text" placeholder="Exact words spoken in the reference audio...">')))
 
     # -- 17. Orpheus 3B --
     if name == "orpheus":
@@ -1928,73 +1938,140 @@ def _build_presets():
 def _build_page():
     CSS = """
 <style>
-:root{--bs-body-bg:#1a1a2e;--bs-body-color:#e0e0e0;}
-body{background:#1a1a2e;color:#e0e0e0;font-family:system-ui,sans-serif;}
-.container-fluid{max-width:1400px;margin:auto;}
-h2{color:#7eb8f7;font-weight:700;}
+:root{--bg:#13131f;--panel:#1a1a2e;--card:#1e2235;--card2:#141428;--border:#2d3050;
+      --accent:#7eb8f7;--accent2:#4caf50;--text:#e0e0e0;--muted:#8899aa;}
+*{box-sizing:border-box;}
+body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;margin:0;min-height:100vh;}
 
-.nav-tabs{border-bottom:1px solid #333;gap:2px;margin-bottom:0;}
-.nav-link{color:#aaa;border:1px solid #333;background:#1e2235;border-radius:6px 6px 0 0;font-size:.8rem;padding:5px 10px;transition:all .15s;}
-.nav-link:hover{color:#fff;background:#2a3050;}
-.nav-link.active{background:#2d3561;color:#7eb8f7;border-color:#4a5580;}
-.tab-content{border:1px solid #333;border-top:none;border-radius:0 0 10px 10px;padding:16px;background:#1e2235;}
+/* ── TOP HEADER ── */
+.top-header{background:var(--panel);border-bottom:1px solid var(--border);padding:10px 20px;
+            display:flex;align-items:center;gap:16px;flex-wrap:wrap;position:sticky;top:0;z-index:100;}
+.top-header h1{margin:0;font-size:1.15rem;font-weight:700;color:var(--accent);white-space:nowrap;}
+.bars-wrap{display:flex;gap:12px;flex-wrap:wrap;flex:1;min-width:0;}
+.bar-item{display:flex;flex-direction:column;gap:2px;min-width:180px;}
+.bar-track{background:#2a3050;border-radius:6px;height:12px;width:100%;}
+.bar-fill{height:100%;border-radius:6px;transition:width .6s;}
+.bar-fill.ram{background:linear-gradient(90deg,#4caf50,#7eb8f7);}
+.bar-fill.vram{background:linear-gradient(90deg,#4caf50,#39c0c0);}
+.bar-label{font-size:.7rem;color:var(--muted);}
+.gpu-badge{padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:700;white-space:nowrap;}
+.gpu-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;}
+.gpu-badge.cpu{background:#3a1e1e;color:#f44336;border:1px solid #f44336;}
 
-.model-header{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;margin-bottom:12px;}
-.model-title{font-size:1.15rem;font-weight:700;color:#7eb8f7;}
-.rtf-badge{background:#2a3561;color:#7eb8f7;border:1px solid #4a5580;border-radius:4px;padding:2px 7px;font-size:.75rem;margin-left:6px;}
+/* ── MAIN 2-COLUMN LAYOUT ── */
+.main-wrap{display:flex;height:calc(100vh - 57px);}
 
-.params-area{display:flex;flex-direction:column;gap:8px;}
-.param-row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;}
-.param-group{display:flex;flex-direction:column;gap:4px;min-width:160px;}
-.param-group label{font-size:.78rem;color:#aaa;margin:0;}
-.range-val{font-weight:700;color:#7eb8f7;margin-left:4px;}
-.form-range::-webkit-slider-thumb{background:#7eb8f7;}
+/* ── LEFT SIDEBAR ── */
+.sidebar{width:240px;min-width:200px;background:var(--panel);border-right:1px solid var(--border);
+         overflow-y:auto;display:flex;flex-direction:column;flex-shrink:0;}
+.sidebar-section{padding:8px 10px 4px;font-size:.68rem;font-weight:700;color:var(--muted);
+                 text-transform:uppercase;letter-spacing:.08em;border-bottom:1px solid var(--border);}
+.engine-btn{display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer;
+            border:none;background:transparent;color:var(--text);width:100%;text-align:left;
+            border-bottom:1px solid #1e2235;transition:background .12s;}
+.engine-btn:hover{background:#22253a;}
+.engine-btn.active{background:#2d3561;border-left:3px solid var(--accent);}
+.engine-btn .eng-name{font-size:.82rem;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.engine-btn .eng-rtf{font-size:.65rem;color:var(--muted);white-space:nowrap;}
+.engine-btn .eng-dot{font-size:.7rem;flex-shrink:0;}
+.engine-btn .eng-stars{font-size:.65rem;color:#f4b942;flex-shrink:0;}
+.sidebar-search{padding:8px 10px;border-bottom:1px solid var(--border);}
+.sidebar-search input{width:100%;background:#141428;color:var(--text);border:1px solid var(--border);
+                      border-radius:6px;padding:5px 9px;font-size:.8rem;}
+.sidebar-search input::placeholder{color:var(--muted);}
+.sidebar-search input:focus{outline:none;border-color:var(--accent);}
 
-.text-box{width:100%;height:120px;background:#141428;color:#e0e0e0;border:1px solid #444;border-radius:8px;padding:12px;font-size:.95rem;resize:vertical;}
-.preset-bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+/* ── RIGHT CONTENT ── */
+.content{flex:1;min-width:0;overflow-y:auto;display:flex;flex-direction:column;}
 
-.result-card{background:#141428;border:1px solid #333;border-radius:8px;padding:16px;margin-top:16px;display:none;}
-.metric-pill{background:#2a3561;border:1px solid #4a5580;border-radius:20px;padding:4px 14px;font-size:.82rem;color:#7eb8f7;}
-.metric-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0;}
+/* ── TEXT INPUT AREA ── */
+.text-panel{background:var(--card);border-bottom:1px solid var(--border);padding:14px 18px;}
+.text-panel label{font-size:.78rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;display:block;}
+.preset-bar{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;}
+.preset-btn{background:#242840;color:#aab8d0;border:1px solid var(--border);border-radius:14px;
+            font-size:.72rem;padding:3px 11px;cursor:pointer;transition:all .15s;}
+.preset-btn:hover{background:#2d3561;color:var(--accent);}
+.text-box{width:100%;height:88px;background:#0f0f1c;color:var(--text);border:1px solid var(--border);
+          border-radius:8px;padding:10px 12px;font-size:.9rem;resize:vertical;transition:border .15s;}
+.text-box:focus{outline:none;border-color:var(--accent);}
 
-.status-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:20px;}
-.status-card{background:#1e2235;border:1px solid #333;border-radius:8px;padding:12px 14px;font-size:.82rem;}
-.status-card .name{font-weight:700;color:#7eb8f7;}
-.dot-ok{color:#4caf50;} .dot-err{color:#f44336;} .dot-load{color:#ff9800;} .dot-off{color:#666;}
+/* ── ENGINE DETAIL PANEL ── */
+.engine-panel{flex:1;padding:18px;}
+.engine-header{display:flex;align-items:baseline;gap:10px;margin-bottom:4px;flex-wrap:wrap;}
+.engine-title{font-size:1.3rem;font-weight:800;color:var(--accent);}
+.rtf-badge{background:#2a3561;color:var(--accent);border:1px solid #4a5580;border-radius:4px;
+           padding:2px 8px;font-size:.72rem;font-weight:700;}
+.avail-badge{font-size:.72rem;padding:2px 9px;border-radius:12px;font-weight:700;}
+.avail-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #2a5a2a;}
+.avail-badge.missing{background:#3a1e1e;color:#f44336;border:1px solid #5a2a2a;}
+.engine-meta{font-size:.75rem;color:var(--muted);margin-bottom:14px;}
+.engine-meta span{margin-right:14px;}
 
-.ram-bar-wrap{background:#2a3050;border-radius:8px;overflow:hidden;height:16px;width:100%;max-width:400px;}
-.ram-bar{background:linear-gradient(90deg,#4caf50,#7eb8f7);height:100%;transition:width .6s;}
+.params-area{display:flex;flex-direction:column;gap:10px;margin-bottom:16px;}
+.param-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
+.param-group{display:flex;flex-direction:column;gap:4px;min-width:150px;}
+.param-group label{font-size:.75rem;color:var(--muted);margin:0;}
+.range-val{font-weight:700;color:var(--accent);}
+.form-range::-webkit-slider-thumb{background:var(--accent);}
+.form-control,.form-select{background:#0f0f1c !important;color:var(--text) !important;
+  border-color:var(--border) !important;font-size:.82rem;}
+.form-control:focus,.form-select:focus{outline:none;border-color:var(--accent) !important;box-shadow:none !important;}
 
-.alert-info{background:#1a2a3a;border-color:#4a6a8a;color:#8ab8e8;}
-.alert-warning{background:#2a2010;border-color:#6a5010;color:#d0a060;}
-
-.btn-synth{background:#3d5af1;border-color:#3d5af1;font-weight:700;letter-spacing:.03em;}
+.synth-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;}
+.btn-synth{background:#3d5af1;border:none;color:#fff;font-weight:700;padding:9px 22px;
+           border-radius:8px;font-size:.9rem;cursor:pointer;transition:background .15s;}
 .btn-synth:hover{background:#2d4ae1;}
-
-audio{width:100%;margin-top:8px;}
-.spinner{display:none;width:1.2rem;height:1.2rem;border:2px solid #7eb8f7;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-left:8px;}
+.btn-synth:disabled{background:#2a3050;cursor:not-allowed;}
+.btn-action{background:#1e2235;border:1px solid var(--border);color:var(--muted);
+            font-size:.78rem;padding:7px 13px;border-radius:7px;cursor:pointer;transition:all .15s;}
+.btn-action:hover{color:var(--text);border-color:var(--accent);}
+.spinner{display:none;width:1.1rem;height:1.1rem;border:2px solid var(--accent);
+         border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;}
 @keyframes spin{to{transform:rotate(360deg)}}
 
-code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.85em;}
+/* ── RESULT CARD ── */
+.result-card{background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:14px;display:none;margin-top:10px;}
+.metric-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;}
+.metric-pill{background:#2a3561;border:1px solid #4a5580;border-radius:16px;padding:3px 12px;font-size:.78rem;color:var(--accent);}
+audio{width:100%;border-radius:6px;}
 
+/* ── ERROR PANEL ── */
 .error-panel{display:none;margin-top:10px;border:1px solid #7f2a2a;border-radius:8px;overflow:hidden;}
-.error-panel-header{background:#3a1515;padding:8px 14px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;user-select:none;}
-.error-panel-header .error-title{color:#ff6b6b;font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}
-.error-panel-header .error-actions{display:flex;gap:6px;flex-shrink:0;}
-.error-panel-body{background:#1a0a0a;padding:12px 14px;max-height:320px;overflow-y:auto;}
-.error-panel-body pre{color:#ff9999;font-size:.78rem;margin:0;white-space:pre-wrap;word-break:break-all;}
-.error-panel .err-toggle{font-size:.75rem;color:#aaa;border:1px solid #555;background:transparent;border-radius:3px;padding:1px 6px;cursor:pointer;}
-.error-panel .err-toggle:hover{color:#fff;}
-.err-copy-btn{font-size:.75rem;color:#aaa;border:1px solid #555;background:transparent;border-radius:3px;padding:1px 6px;cursor:pointer;}
-.err-copy-btn:hover{color:#fff;}
+.error-panel-header{background:#3a1515;padding:7px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;cursor:pointer;user-select:none;}
+.error-title{color:#ff6b6b;font-weight:700;font-size:.85rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.error-actions{display:flex;gap:5px;flex-shrink:0;}
+.error-panel-body{background:#1a0a0a;padding:10px 12px;max-height:280px;overflow-y:auto;}
+.error-panel-body pre{color:#ff9999;font-size:.75rem;margin:0;white-space:pre-wrap;word-break:break-all;}
+.err-toggle,.err-copy-btn{font-size:.72rem;color:#aaa;border:1px solid #555;background:transparent;border-radius:3px;padding:1px 6px;cursor:pointer;}
+.err-toggle:hover,.err-copy-btn:hover{color:#fff;}
+
+/* ── ALERT OVERRIDES ── */
+.alert-info{background:#1a2a3a;border-color:#4a6a8a;color:#8ab8e8;}
+.alert-warning{background:#2a2010;border-color:#6a5010;color:#d0a060;}
+.alert-secondary{background:#1e2235;border-color:#3a4060;color:#aabbcc;}
+.alert-danger{background:#2a1010;border-color:#6a2020;color:#e08080;}
+code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
+
+/* ── SCROLLBARS ── */
+::-webkit-scrollbar{width:6px;height:6px;}
+::-webkit-scrollbar-track{background:var(--bg);}
+::-webkit-scrollbar-thumb{background:#2a3050;border-radius:3px;}
+::-webkit-scrollbar-thumb:hover{background:var(--accent);}
+
+/* ── RESPONSIVE: collapse sidebar on small screens ── */
+@media(max-width:680px){
+  .sidebar{width:100%;height:auto;flex-direction:row;overflow-x:auto;overflow-y:hidden;
+           border-right:none;border-bottom:1px solid var(--border);}
+  .main-wrap{flex-direction:column;height:auto;}
+  .engine-btn{border-bottom:none;border-right:1px solid #1e2235;white-space:nowrap;width:auto;}
+  .sidebar-section,.sidebar-search{display:none;}
+}
 </style>"""
 
     JS = r"""
 <script>
 const API = '';
-let lastAudio = null;
 
-// Range display update
 document.addEventListener('input', e => {
   if (e.target.type === 'range') {
     const span = e.target.closest('.param-group')?.querySelector('.range-val');
@@ -2002,11 +2079,11 @@ document.addEventListener('input', e => {
       e.target.step < 0.1 ? 3 : e.target.step < 1 ? 2 : 0);
   }
 });
-function rangeUpdate(el) {}  // handled by above
 
 function getParams(modelId) {
-  const pane = document.getElementById('tab-' + modelId);
+  const pane = document.getElementById('pane-' + modelId);
   const params = {};
+  if (!pane) return params;
   pane.querySelectorAll('[data-param]').forEach(el => {
     if (el.id && el.id.endsWith('-prompt-id') && !el.value) return;
     params[el.dataset.param] = el.value;
@@ -2014,122 +2091,115 @@ function getParams(modelId) {
   return params;
 }
 
-function setPreset(text) {
-  document.getElementById('text-input').value = text;
+function setPreset(text) { document.getElementById('text-input').value = text; }
+
+// ── Engine sidebar selection ──
+let activeEngine = null;
+function selectEngine(name) {
+  document.querySelectorAll('.engine-btn').forEach(b => b.classList.toggle('active', b.dataset.engine === name));
+  document.querySelectorAll('.engine-pane').forEach(p => p.style.display = p.id === 'pane-' + name ? 'block' : 'none');
+  activeEngine = name;
 }
 
+// ── Sidebar search ──
+document.addEventListener('DOMContentLoaded', () => {
+  const search = document.getElementById('sidebar-search');
+  if (search) search.addEventListener('input', () => {
+    const q = search.value.toLowerCase();
+    document.querySelectorAll('.engine-btn').forEach(b => {
+      b.style.display = b.dataset.label.toLowerCase().includes(q) ? '' : 'none';
+    });
+  });
+});
+
+// ── Synth ──
 async function synth(model) {
   const text = document.getElementById('text-input').value.trim();
   if (!text) { alert('Enter some text first'); return; }
-  const btn = document.getElementById('btn-' + model) || document.querySelector(`#tab-${model} .btn-synth`);
-  const spin = document.getElementById('spin-' + model) || document.createElement('span');
+  const btn  = document.getElementById('btn-' + model);
+  const spin = document.getElementById('spin-' + model);
   const card = document.getElementById('result-' + model);
-  if (btn) { btn.disabled = true; }
-  if (spin) { spin.style.display = 'inline-block'; }
-  // Clear any previous error before a new attempt
+  if (btn)  btn.disabled = true;
+  if (spin) spin.style.display = 'inline-block';
   clearError(model);
-  const t0 = performance.now();
   try {
     const res = await fetch(`${API}/synthesize/${model}`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
+      method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({text, params: getParams(model)})
     });
     const data = await res.json();
     if (data.error) { showError(model, data.error + (data.trace ? '\n\n' + data.trace : '')); return; }
     const blob = new Blob([Uint8Array.from(atob(data.audio_b64), c => c.charCodeAt(0))], {type:'audio/wav'});
-    const url = URL.createObjectURL(blob);
+    const url  = URL.createObjectURL(blob);
     if (card) {
       card.style.display = 'block';
       clearError(model);
       card.querySelector('.audio-player').src = url;
       card.querySelector('.audio-player').load();
-      card.querySelector('.m-synth').textContent  = data.synth_time_ms + ' ms';
-      card.querySelector('.m-dur').textContent    = data.audio_dur_ms  + ' ms';
-      card.querySelector('.m-rtf').textContent    = data.rtf + '×';
-      card.querySelector('.m-load').textContent   = data.load_time_s   + ' s';
-      card.querySelector('.m-sr').textContent     = data.sample_rate   + ' Hz';
+      card.querySelector('.m-synth').textContent = data.synth_time_ms + ' ms';
+      card.querySelector('.m-dur').textContent   = data.audio_dur_ms  + ' ms';
+      card.querySelector('.m-rtf').textContent   = data.rtf + '×';
+      card.querySelector('.m-load').textContent  = data.load_time_s   + ' s';
+      card.querySelector('.m-sr').textContent    = data.sample_rate   + ' Hz';
       const rtf = parseFloat(data.rtf);
       card.querySelector('.m-rtf').style.color = rtf <= 1 ? '#4caf50' : rtf <= 5 ? '#ff9800' : '#f44336';
     }
   } catch(e) { showError(model, e.toString()); }
   finally {
-    if (btn) btn.disabled = false;
+    if (btn)  btn.disabled = false;
     if (spin) spin.style.display = 'none';
   }
 }
 
+// ── Error helpers ──
 function showError(model, msg) {
   const card = document.getElementById('result-' + model);
-  if (!card) { alert(msg); return; }
-  card.style.display = 'block';
-
-  // Split first line (short error) from full traceback
+  if (card) card.style.display = 'block';
   const lines = msg.split('\n');
-  const firstLine = lines[0].trim() || msg.substring(0, 120);
-
-  const panel = document.getElementById('errpanel-' + model);
-  const title = document.getElementById('errtitle-' + model);
-  const body  = document.getElementById('errmsg-' + model);
-  const toggle = document.getElementById('errtoggle-' + model);
-  const bodyEl = document.getElementById('errbody-' + model);
-
+  const panel  = document.getElementById('errpanel-' + model);
+  const title  = document.getElementById('errtitle-' + model);
+  const body   = document.getElementById('errmsg-'   + model);
+  const toggle = document.getElementById('errtoggle-'+ model);
+  const bodyEl = document.getElementById('errbody-'  + model);
+  if (!panel) { alert(msg); return; }
   panel.style.display = 'block';
-  title.textContent = '❌ ' + firstLine;
+  title.textContent = '❌ ' + (lines[0].trim() || msg.substring(0, 120));
   body.textContent  = msg;
-
-  // Auto-expand if there's a traceback worth showing
-  if (lines.length > 3) {
-    bodyEl.style.display = 'block';
-    toggle.textContent = '▲ hide';
-  } else {
-    bodyEl.style.display = 'none';
-    toggle.textContent = '▼ show';
-  }
-
-  // Hide audio player when an error is shown
-  const audio = card.querySelector('.audio-player');
+  bodyEl.style.display = lines.length > 3 ? 'block' : 'none';
+  toggle.textContent   = lines.length > 3 ? '▲ hide' : '▼ show';
+  const audio = card?.querySelector('.audio-player');
   if (audio) audio.src = '';
 }
-
-function toggleErrBody(model) {
-  const body   = document.getElementById('errbody-' + model);
-  const toggle = document.getElementById('errtoggle-' + model);
-  const hidden = body.style.display === 'none';
-  body.style.display  = hidden ? 'block' : 'none';
-  toggle.textContent  = hidden ? '▲ hide' : '▼ show';
-}
-
-function copyErr(model, ev) {
-  ev.stopPropagation();
-  const msg = document.getElementById('errmsg-' + model);
-  if (msg) navigator.clipboard.writeText(msg.textContent).then(() => {
-    const btn = ev.target; btn.textContent = '✅ Copied';
-    setTimeout(() => btn.textContent = '📋 Copy', 1500);
-  });
-}
-
 function clearError(model) {
   const panel = document.getElementById('errpanel-' + model);
   if (panel) panel.style.display = 'none';
 }
-
-async function unload(model) {
-  await fetch(`${API}/models/${model}`, {method:'DELETE'});
-  await refreshStatus();
+function toggleErrBody(model) {
+  const body   = document.getElementById('errbody-'  + model);
+  const toggle = document.getElementById('errtoggle-'+ model);
+  const hidden = body.style.display === 'none';
+  body.style.display = hidden ? 'block' : 'none';
+  toggle.textContent = hidden ? '▲ hide' : '▼ show';
+}
+function copyErr(model, ev) {
+  ev.stopPropagation();
+  const msg = document.getElementById('errmsg-' + model);
+  if (msg) navigator.clipboard.writeText(msg.textContent).then(() => {
+    const btn = ev.target; btn.textContent = '✅';
+    setTimeout(() => btn.textContent = '📋 Copy', 1500);
+  });
 }
 
+// ── Preload / Unload ──
 async function preload(model) {
   const spin = document.getElementById('spin-' + model);
-  const btn  = document.querySelector(`#tab-${model} .btn-synth`);
+  const btn  = document.getElementById('btn-'  + model);
   if (spin) spin.style.display = 'inline-block';
-  if (btn) btn.disabled = true;
+  if (btn)  btn.disabled = true;
   try {
-    const params = getParams(model);
     const res = await fetch(`${API}/models/${model}/load`, {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({params})
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({params: getParams(model)})
     });
     const d = await res.json();
     if (d.error) { showError(model, d.error); }
@@ -2137,14 +2207,13 @@ async function preload(model) {
       const card = document.getElementById('result-' + model);
       if (card) {
         card.style.display = 'block';
-        card.querySelector('.m-load').textContent = d.load_time_s + ' s';
         clearError(model);
+        card.querySelector('.m-load').textContent = d.load_time_s + ' s';
         const panel = document.getElementById('errpanel-' + model);
         if (panel) {
           panel.style.display = 'block';
-          const title = document.getElementById('errtitle-' + model);
-          if (title) title.textContent = d.status === 'already_loaded'
-            ? '✅ Already loaded' : `✅ Loaded in ${d.load_time_s}s`;
+          document.getElementById('errtitle-' + model).textContent =
+            d.status === 'already_loaded' ? '✅ Already loaded' : `✅ Loaded in ${d.load_time_s}s`;
           panel.style.borderColor = '#2a7f2a';
           panel.querySelector('.error-panel-header').style.background = '#153015';
         }
@@ -2153,13 +2222,18 @@ async function preload(model) {
   } catch(e) { showError(model, e.toString()); }
   finally {
     if (spin) spin.style.display = 'none';
-    if (btn) btn.disabled = false;
-    await refreshStatus();
+    if (btn)  btn.disabled = false;
+    refreshStatus();
   }
 }
+async function unload(model) {
+  await fetch(`${API}/models/${model}`, {method:'DELETE'});
+  refreshStatus();
+}
 
+// ── Upload helper ──
 async function uploadPrompt(fileId, statusId, hiddenId) {
-  const input = document.getElementById(fileId);
+  const input  = document.getElementById(fileId);
   const status = document.getElementById(statusId);
   if (!input.files[0]) { status.textContent = 'No file selected'; return; }
   status.textContent = 'Uploading...';
@@ -2168,72 +2242,60 @@ async function uploadPrompt(fileId, statusId, hiddenId) {
     const r = await fetch(`${API}/upload`, {method:'POST', body:fd});
     const d = await r.json();
     document.getElementById(hiddenId).value = d.id;
-    status.textContent = `✅ Uploaded (id:${d.id}, ${(d.size/1024).toFixed(0)} KB)`;
+    status.textContent = `✅ ${input.files[0].name} (${(d.size/1024).toFixed(0)} KB)`;
   } catch(e) { status.textContent = '❌ ' + e; }
 }
 
+// ── Status polling ──
 async function refreshStatus() {
   const d = await (await fetch(`${API}/status`)).json();
-  // RAM bar
+  // RAM
   const {total, used, free} = d.system;
   const pct = (used/total*100).toFixed(1);
   document.getElementById('ram-bar').style.width = pct + '%';
-  document.getElementById('ram-text').textContent =
-    `RAM: ${used} / ${total} MB  (${free} MB free)  ${pct}%`;
-  // GPU bar
+  document.getElementById('ram-text').textContent = `RAM ${used}/${total} MB  (${pct}%)`;
+  // VRAM
   if (d.gpu && d.gpu.vram_total) {
-    const gUsed = d.gpu.vram_used || 0;
-    const gTot  = d.gpu.vram_total;
+    const gUsed = d.gpu.vram_used || 0, gTot = d.gpu.vram_total;
     const gPct  = (gUsed/gTot*100).toFixed(1);
-    const gFree = d.gpu.vram_free ?? (gTot - gUsed);
     document.getElementById('vram-bar').style.width = gPct + '%';
-    document.getElementById('vram-text').textContent =
-      `VRAM: ${gUsed} / ${gTot} MB  (${gFree} MB free)  ${gPct}%`;
+    document.getElementById('vram-text').textContent = `VRAM ${gUsed}/${gTot} MB  (${gPct}%)`;
   }
-  // Cards
-  const grid = document.getElementById('status-grid');
-  grid.innerHTML = Object.entries(d.models).map(([n,m]) => {
-    const dot = m.status==='loaded' ? '🟢' : m.status==='loading' ? '🟡' : m.status==='error' ? '🔴' : '⚫';
-    const av  = m.available ? `<span style="color:#4caf50">✓ available</span>` : `<span style="color:#f44336">✗ missing</span>`;
-    const err = m.error ? `<div style="color:#f44336;font-size:.75rem">${m.error.substring(0,80)}</div>` : '';
-    return `<div class="status-card">${dot} <span class="name">${m.label}</span> ${av}
-    <div class="text-muted" style="font-size:.75rem">${m.size} · ${m.rtf_est} · ${m.ram_est_mb} MB RAM · ${m.status}</div>
-    ${m.load_time_s>0?`<div class="text-muted" style="font-size:.75rem">Loaded in ${m.load_time_s}s</div>`:''}
-    ${err}</div>`;
-  }).join('');
+  // Sidebar dots
+  Object.entries(d.models).forEach(([n, m]) => {
+    const dot = document.getElementById('dot-' + n);
+    if (!dot) return;
+    dot.textContent = m.status==='loaded' ? '🟢' : m.status==='loading' ? '🟡' : m.status==='error' ? '🔴' : '⚫';
+  });
 }
-
-setInterval(refreshStatus, 6000);
-window.addEventListener('load', refreshStatus);
 
 async function refreshAvailability() {
   const btn = document.getElementById('btn-refresh');
   if (btn) btn.disabled = true;
-  try {
-    await fetch(`${API}/refresh`, {method: 'POST'});
-    await refreshStatus();
-  } finally {
-    if (btn) btn.disabled = false;
-  }
+  try { await fetch(`${API}/refresh`, {method:'POST'}); await refreshStatus(); }
+  finally { if (btn) btn.disabled = false; }
 }
+
+setInterval(refreshStatus, 6000);
+window.addEventListener('load', () => { refreshStatus(); });
 </script>"""
 
     def _result_card(n):
         return (f'<div class="result-card" id="result-{n}">'
                 f'<div class="metric-row">'
-                f'<span class="metric-pill">⏱ Synth: <b class="m-synth">—</b></span>'
-                f'<span class="metric-pill">🔊 Audio: <b class="m-dur">—</b></span>'
-                f'<span class="metric-pill">RTF: <b class="m-rtf">—</b></span>'
-                f'<span class="metric-pill">⬇ Load: <b class="m-load">—</b></span>'
-                f'<span class="metric-pill">SR: <b class="m-sr">—</b></span>'
+                f'<span class="metric-pill">⏱ <b class="m-synth">—</b></span>'
+                f'<span class="metric-pill">🔊 <b class="m-dur">—</b></span>'
+                f'<span class="metric-pill">RTF <b class="m-rtf">—</b></span>'
+                f'<span class="metric-pill">⬇ <b class="m-load">—</b></span>'
+                f'<span class="metric-pill">🎚 <b class="m-sr">—</b></span>'
                 f'</div>'
                 f'<audio class="audio-player" controls preload="none"></audio>'
                 f'<div class="error-panel" id="errpanel-{n}">'
                 f'  <div class="error-panel-header" onclick="toggleErrBody(\'{n}\')">'
                 f'    <span class="error-title" id="errtitle-{n}"></span>'
                 f'    <div class="error-actions">'
-                f'      <button class="err-copy-btn" onclick="copyErr(\'{n}\', event)" title="Copy full error">📋 Copy</button>'
-                f'      <button class="err-toggle" id="errtoggle-{n}">▼ show</button>'
+                f'      <button class="err-copy-btn" onclick="copyErr(\'{n}\', event)">📋 Copy</button>'
+                f'      <button class="err-toggle"   id="errtoggle-{n}">▼ show</button>'
                 f'    </div>'
                 f'  </div>'
                 f'  <div class="error-panel-body" id="errbody-{n}" style="display:none">'
@@ -2242,69 +2304,110 @@ async function refreshAvailability() {
                 f'</div>'
                 f'</div>')
 
-    tabs = []; panes = []
+    # ── Build sidebar + panes ──
+    sidebar_items = []
+    pane_items    = []
+    first = True
     for n in MODEL_ORDER:
-        info = MODEL_INFO[n]
+        info    = MODEL_INFO[n]
         ok, reason = _available(n)
-        stars = _stars(info["arthur_fit"])
-        badge = ('<span class="badge bg-success ms-1">available</span>' if ok else
-                 f'<span class="badge bg-danger ms-1">missing</span>')
-        tabs.append(f'<button class="nav-link{" active" if n==MODEL_ORDER[0] else ""}" '
-                    f'data-bs-toggle="tab" data-bs-target="#tab-{n}" type="button">'
-                    f'{info["label"]}{badge}</button>')
-        panes.append(
-            f'<div class="tab-pane fade{" show active" if n==MODEL_ORDER[0] else ""}" id="tab-{n}">'
-            f'<div class="model-header">'
-            f'<div><span class="model-title">{info["label"]}</span>'
-            f' <span class="rtf-badge">{info["rtf_est"]}</span> {stars}</div>'
-            f'<div class="model-meta text-muted small">Weights: <b>{info["size"]}</b> &nbsp;'
-            f' RAM: <b>~{info["ram_est_mb"]} MB</b> &nbsp; Arthur fit: {stars}</div>'
+        stars   = _stars(info["arthur_fit"])
+        dot_cls = '🟢' if ok else '⚫'
+        avail_badge = ('<span class="avail-badge ok">✓ available</span>' if ok else
+                       f'<span class="avail-badge missing">✗ missing</span>')
+        sidebar_items.append(
+            f'<button class="engine-btn{"  active" if first else ""}" data-engine="{n}" data-label="{info["label"]}" '
+            f'onclick="selectEngine(\'{n}\')">'
+            f'<span class="eng-dot" id="dot-{n}">{dot_cls}</span>'
+            f'<span class="eng-name">{info["label"]}</span>'
+            f'<span class="eng-rtf">{info["rtf_est"]}</span>'
+            f'<span class="eng-stars">{stars}</span>'
+            f'</button>'
+        )
+        pane_items.append(
+            f'<div class="engine-pane" id="pane-{n}" style="display:{"block" if first else "none"}">'
+            f'<div class="engine-header">'
+            f'  <span class="engine-title">{info["label"]}</span>'
+            f'  <span class="rtf-badge">{info["rtf_est"]}</span>'
+            f'  {avail_badge}'
+            f'</div>'
+            f'<div class="engine-meta">'
+            f'  <span>💾 {info["size"]}</span>'
+            f'  <span>🧠 ~{info["ram_est_mb"]} MB</span>'
+            f'  <span>🎭 Arthur fit: {stars}</span>'
             f'</div>'
             f'<div class="params-area">{_build_params(n)}</div>'
-            +(f'<p class="text-warning mt-2">⚠ Not available: {reason}</p>' if not ok else '')
-            +f'<div class="d-flex gap-2 align-items-center mt-3">'
-            +f'<button id="btn-{n}" class="btn btn-primary btn-synth" onclick="synth(\'{n}\')">▶ Synthesise</button>'
-            +f'<button class="btn btn-outline-info btn-sm" onclick="preload(\'{n}\')" title="Load model into VRAM without synthesising">⬇ Preload</button>'
-            +f'<button class="btn btn-outline-secondary btn-sm" onclick="unload(\'{n}\')">⏏ Unload</button>'
-            +f'<span id="spin-{n}" class="spinner"></span>'
-            +f'</div>'
-            +_result_card(n)
-            +f'</div>')
+            + (f'<p class="text-warning small mt-1">⚠ {reason}</p>' if not ok else '')
+            + f'<div class="synth-bar">'
+            + f'  <button id="btn-{n}" class="btn-synth" onclick="synth(\'{n}\')">▶ Synthesise</button>'
+            + f'  <button class="btn-action" onclick="preload(\'{n}\')" title="Load model into VRAM">⬇ Preload</button>'
+            + f'  <button class="btn-action" onclick="unload(\'{n}\')">⏏ Unload</button>'
+            + f'  <span id="spin-{n}" class="spinner"></span>'
+            + f'</div>'
+            + _result_card(n)
+            + f'</div>'
+        )
+        first = False
 
-    gpu_badge = (f'<span class="badge ms-2 px-2 py-1" style="background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;font-size:.75rem">'
-                 f'🟢 GPU: {DEVICE_NAME} · {VRAM_TOTAL_MB} MB VRAM</span>'
+    gpu_badge = (f'<span class="gpu-badge ok">🟢 {DEVICE_NAME} · {VRAM_TOTAL_MB} MB VRAM</span>'
                  if DEVICE == "cuda" else
-                 '<span class="badge ms-2 px-2 py-1" style="background:#3a1e1e;color:#f44336;border:1px solid #f44336;font-size:.75rem">🔴 CPU only</span>')
+                 '<span class="gpu-badge cpu">🔴 CPU only</span>')
+
+    presets_html = " ".join(
+        f'<button class="preset-btn" onclick="setPreset(this.dataset.txt)" data-txt="{t}">{l}</button>'
+        for l, t in ARTHUR_PRESETS)
 
     return f"""<!DOCTYPE html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Arthur TTS Lab — {len(MODEL_ORDER)} Engines</title>
+<title>🎙 Arthur TTS Lab</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
 {CSS}</head><body>
-<div class="container-fluid py-3">
-<h2 class="mb-1">🎙 Arthur TTS Lab <small class="text-muted fs-6">{len(MODEL_ORDER)} Engines</small>{gpu_badge}</h2>
-<div class="mb-2 d-flex align-items-center gap-3 flex-wrap">
-  <div>
-    <div class="ram-bar-wrap"><div class="ram-bar" id="ram-bar" style="width:0%"></div></div>
-    <small id="ram-text" class="text-muted">Loading RAM info...</small>
-  </div>
-  <div>
-    <div class="ram-bar-wrap"><div class="ram-bar" id="vram-bar" style="width:0%;background:linear-gradient(90deg,#4caf50,#39c0c0)"></div></div>
-    <small id="vram-text" class="text-muted">Loading VRAM info...</small>
-  </div>
-  <button id="btn-refresh" class="btn btn-sm btn-outline-secondary" onclick="refreshAvailability()" title="Re-check which packages are installed">🔄 Refresh availability</button>
-</div>
-<div class="status-grid" id="status-grid"></div>
 
-<div class="mb-2">
-  <label class="form-label fw-bold">Arthur text <small class="text-muted">(shared across all models)</small></label>
-  {_build_presets()}
-  <textarea id="text-input" class="text-box">{ARTHUR_PRESETS[0][1]}</textarea>
+<!-- TOP HEADER -->
+<div class="top-header">
+  <h1>🎙 Arthur TTS Lab <span style="font-size:.75rem;font-weight:400;color:var(--muted);">{len(MODEL_ORDER)} engines</span></h1>
+  <div class="bars-wrap">
+    <div class="bar-item">
+      <div class="bar-track"><div class="bar-fill ram" id="ram-bar" style="width:0%"></div></div>
+      <span class="bar-label" id="ram-text">Loading RAM…</span>
+    </div>
+    <div class="bar-item">
+      <div class="bar-track"><div class="bar-fill vram" id="vram-bar" style="width:0%"></div></div>
+      <span class="bar-label" id="vram-text">Loading VRAM…</span>
+    </div>
+  </div>
+  {gpu_badge}
+  <button id="btn-refresh" class="btn-action" onclick="refreshAvailability()" style="white-space:nowrap">🔄 Refresh</button>
 </div>
 
-<div class="nav nav-tabs flex-wrap" id="model-tabs">{"".join(tabs)}</div>
-<div class="tab-content">{"".join(panes)}</div>
+<!-- MAIN LAYOUT -->
+<div class="main-wrap">
+
+  <!-- LEFT SIDEBAR -->
+  <div class="sidebar">
+    <div class="sidebar-section">TTS Engines</div>
+    <div class="sidebar-search"><input id="sidebar-search" placeholder="🔍  Filter engines…"></div>
+    {"".join(sidebar_items)}
+  </div>
+
+  <!-- RIGHT CONTENT -->
+  <div class="content">
+
+    <!-- SHARED TEXT INPUT -->
+    <div class="text-panel">
+      <label>Arthur's text <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(shared across all engines)</span></label>
+      <div class="preset-bar">{presets_html}</div>
+      <textarea id="text-input" class="text-box">{ARTHUR_PRESETS[0][1]}</textarea>
+    </div>
+
+    <!-- ENGINE DETAIL PANELS -->
+    <div class="engine-panel">
+      {"".join(pane_items)}
+    </div>
+
+  </div>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 {JS}</body></html>"""
 
