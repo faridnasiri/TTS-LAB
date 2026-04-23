@@ -975,7 +975,7 @@ def _synth_csm(inst, text, params):
     return _to_wav(arr, sr), sr
 
 # -- 16. Qwen3-TTS --
-QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"  # has built-in speakers; use 0.6B-Base for voice cloning
+QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"  # has built-in speakers; 0.6B-CustomVoice same RTF but lower quality
 def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
     """Qwen3-TTS -- Alibaba Qwen3 TTS via qwen-tts package.
     Install: pip install -U qwen-tts
