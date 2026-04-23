@@ -229,10 +229,14 @@ def _build_params(name: str) -> str:
         )
 
     if name == "cosyvoice":
-        sp = [("English Female", "English Female"), ("English Male", "English Male")]
+        transcript = ('<input type="text" class="form-control form-control-sm bg-dark text-light border-secondary" '
+                      'data-param="transcript" placeholder="Optional: transcript of reference WAV (improves quality)">')
         return (
-            '<div class="alert alert-secondary py-2 small mb-2">SFT mode: English Female/Male pre-trained speakers.</div>'
-            + _row(_grp("Speaker", _sel("speaker", sp)))
+            '<div class="alert alert-secondary py-2 small mb-2">'
+            'CosyVoice2-0.5B is <b>zero-shot only</b> — upload a reference WAV to clone a voice, '
+            'or leave empty to use cross-lingual synthesis with the model\'s default voice.</div>'
+            + f'<div class="param-row">{_upload_widget("cv-file", "cv-status", "cv-prompt-id", "Reference WAV (optional — voice cloning)")}</div>'
+            + '<div class="param-row">' + _grp("Reference transcript (optional)", transcript) + '</div>'
         )
 
     if name == "parler":

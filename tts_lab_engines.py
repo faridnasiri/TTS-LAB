@@ -404,8 +404,24 @@ def _load_cosyvoice():
     return CosyVoice2(str(md), load_jit=False, load_trt=False)
 
 def _synth_cosyvoice(inst, text, params):
-    chunks = [c["tts_speech"].numpy().flatten()
-              for c in inst.inference_sft(text, params.get("speaker", "English Female"))]
+    import torchaudio, tempfile, os
+    prompt_id = params.get("audio_prompt_id", "")
+    prompt_path = UPLOAD_DIR / f"{prompt_id}.wav" if prompt_id else None
+
+    if prompt_path and prompt_path.exists():
+        # Zero-shot voice cloning from uploaded WAV
+        prompt_speech, sr_p = torchaudio.load(str(prompt_path))
+        if sr_p != 16000:
+            prompt_speech = torchaudio.functional.resample(prompt_speech, sr_p, 16000)
+        prompt_speech = prompt_speech.mean(0, keepdim=True)
+        prompt_text = params.get("transcript", "") or ""
+        chunks = [c["tts_speech"].numpy().flatten()
+                  for c in inst.inference_zero_shot(text, prompt_text, prompt_speech)]
+    else:
+        # Cross-lingual (no reference) — uses model's internal speaker embedding
+        chunks = [c["tts_speech"].numpy().flatten()
+                  for c in inst.inference_cross_lingual(text)]
+
     sr = inst.sample_rate
     return _to_wav(np.concatenate(chunks) if chunks else np.zeros(sr, np.float32), sr), sr
 
