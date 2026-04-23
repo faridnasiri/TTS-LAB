@@ -399,6 +399,9 @@ def _load_cosyvoice():
     for p in [str(COSYVOICE_DIR), str(COSYVOICE_DIR / "third_party" / "Matcha-TTS")]:
         if p not in sys.path:
             sys.path.insert(0, p)
+    # Force soundfile backend so torchaudio never tries to load torchcodec
+    import torchaudio
+    torchaudio.set_audio_backend("soundfile")
     from cosyvoice.cli.cosyvoice import CosyVoice2
     md = COSYVOICE_DIR / "pretrained_models" / "CosyVoice2-0.5B"
     return CosyVoice2(str(md), load_jit=False, load_trt=False)
