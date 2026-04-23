@@ -876,6 +876,7 @@ async function uploadPrompt(fileId, statusId, hiddenId) {
    STATUS POLLER
    ═══════════════════════════════════════════════════════════════ */
 let _lastModelStatus = {};
+let _firstPoll = true;
 async function refreshStatus() {
   try {
     const d = await (await fetch(`${API}/status`)).json();
@@ -889,23 +890,29 @@ async function refreshStatus() {
       document.getElementById('vram-bar').style.width = gPct + '%';
       document.getElementById('vram-text').textContent = `VRAM ${gUsed}/${gTot} MB  (${gPct}%)`;
     }
+    if (_firstPoll) {
+      _firstPoll = false;
+      const gpu = d.gpu ? `  VRAM ${d.gpu.vram_used}/${d.gpu.vram_total} MB` : '';
+      dbg('STATUS','—',`Server up — RAM ${used}/${total} MB${gpu}`);
+      Object.entries(d.models).forEach(([n, m]) => {
+        _lastModelStatus[n] = m.status;
+        const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
+        dbg('STATUS', n, `${icon} initial state: ${m.status}` + (m.error ? `  — ${m.error}` : ''));
+      });
+    } else {
+      Object.entries(d.models).forEach(([n, m]) => {
+        const prev = _lastModelStatus[n];
+        if (prev !== m.status) {
+          const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
+          dbg('STATUS', n, `${icon} ${prev} → ${m.status}` + (m.error ? `  error: ${m.error}` : '') + (m.status==='loaded'?`  load_time ${m.load_time_s}s`:''));
+        }
+        _lastModelStatus[n] = m.status;
+      });
+    }
     Object.entries(d.models).forEach(([n, m]) => {
       const dot = document.getElementById('dot-' + n);
       if (dot) dot.textContent = m.status==='loaded' ? '🟢' : m.status==='loading' ? '🟡' : m.status==='error' ? '🔴' : '⚫';
-      // log status transitions
-      const prev = _lastModelStatus[n];
-      if (prev !== undefined && prev !== m.status) {
-        const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
-        dbg('STATUS', n, `${icon} ${prev} → ${m.status}` + (m.error ? `  error: ${m.error}` : '') + (m.status==='loaded'?`  load_time ${m.load_time_s}s`:''));
-      }
-      _lastModelStatus[n] = m.status;
     });
-    // first-run snapshot
-    if (Object.keys(_lastModelStatus).length === 0) {
-      Object.entries(d.models).forEach(([n,m]) => { _lastModelStatus[n] = m.status; });
-      const gpu = d.gpu ? `  VRAM ${d.gpu.vram_used}/${d.gpu.vram_total} MB` : '';
-      dbg('STATUS','—',`Poll — RAM ${used}/${total} MB${gpu}`);
-    }
   } catch(e) {
     dbg('ERROR','—','refreshStatus failed: ' + e.toString());
   }
@@ -927,7 +934,11 @@ async function refreshAvailability() {
 }
 
 setInterval(refreshStatus, 6000);
-window.addEventListener('load', () => { refreshStatus(); });
+window.addEventListener('load', () => {
+  // open log drawer by default so entries are immediately visible
+  document.getElementById('log-drawer').classList.add('open');
+  refreshStatus();
+});
 </script>"""
 
 
