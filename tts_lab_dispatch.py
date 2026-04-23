@@ -8,6 +8,7 @@ from typing import Dict, Tuple
 from tts_lab_config  import (
     MODEL_ORDER, MODEL_INFO, HEAVY, _state,
     OUTETTS_DEFAULT_GGUF, COSYVOICE_DIR, INDEXTTS_DIR, OPENVOICE_MODELS_DIR,
+    slog,
 )
 from tts_lab_utils   import _safe_del, _evict_heavy, _wav_dur, _piper_voices, _require_gpu
 from tts_lab_engines import LOADERS, SYNTHERS
@@ -158,6 +159,7 @@ def _ensure_loaded(name: str, params: dict) -> None:
         if name == "piper":
             wanted = params.get("voice", "en_US-ryan-high")
             if st["instance"] and st.get("loaded_voice") != wanted:
+                slog("LOAD", name, f"Voice change: {st.get('loaded_voice')!r} → {wanted!r} — evicting")
                 _safe_del(st["instance"]); st["instance"] = None
         if name in ("outetts", "parler", "zonos"):
             key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
@@ -165,12 +167,15 @@ def _ensure_loaded(name: str, params: dict) -> None:
                         "parler": "parler-tts/parler-tts-mini-v1",
                         "zonos": "transformer"}
             wanted = params.get(key, defaults[name])
+            slog("LOAD", name, f"Wanted model: {wanted!r}  |  currently loaded: {st.get('loaded_model')!r}")
             if st["instance"] and st.get("loaded_model") != wanted:
+                slog("LOAD", name, f"Model change detected — evicting current instance")
                 _safe_del(st["instance"]); st["instance"] = None
 
         if st["instance"] is None:
             ok, reason = _available(name)
             if not ok:
+                slog("ERROR", name, f"Not available: {reason}")
                 raise RuntimeError(f"Not available: {reason}")
             if MODEL_INFO[name]["heavy"]:
                 _evict_heavy(keep=name)
@@ -178,13 +183,18 @@ def _ensure_loaded(name: str, params: dict) -> None:
             t0 = time.perf_counter()
             try:
                 if name == "piper":
-                    st["instance"] = LOADERS["piper"](params.get("voice", "en_US-ryan-high"))
+                    model_arg = params.get("voice", "en_US-ryan-high")
                 elif name == "outetts":
-                    st["instance"] = LOADERS["outetts"](params.get("model_path", OUTETTS_DEFAULT_GGUF))
+                    model_arg = params.get("model_path", OUTETTS_DEFAULT_GGUF)
                 elif name == "parler":
-                    st["instance"] = LOADERS["parler"](params.get("model_id", "parler-tts/parler-tts-mini-v1"))
+                    model_arg = params.get("model_id", "parler-tts/parler-tts-mini-v1")
                 elif name == "zonos":
-                    st["instance"] = LOADERS["zonos"](params.get("variant", "transformer"))
+                    model_arg = params.get("variant", "transformer")
+                else:
+                    model_arg = None
+                slog("LOAD", name, f"Loading{'  arg=' + repr(model_arg) if model_arg else ''}  …")
+                if model_arg is not None:
+                    st["instance"] = LOADERS[name](model_arg)
                 else:
                     st["instance"] = LOADERS[name]()
                 st["load_time_s"] = round(time.perf_counter() - t0, 2)
@@ -198,19 +208,26 @@ def _ensure_loaded(name: str, params: dict) -> None:
                                 "parler": "parler-tts/parler-tts-mini-v1",
                                 "zonos": "transformer"}
                     st["loaded_model"] = params.get(key, defaults[name])
+                slog("LOAD", name, f"✅ Loaded in {st['load_time_s']}s  loaded_model={st.get('loaded_model')!r}")
             except Exception as e:
                 st["status"] = "error"
                 st["error"]  = str(e)
+                slog("ERROR", name, f"Load failed: {e}")
                 raise
+        else:
+            slog("LOAD", name, f"Already loaded ({st.get('loaded_model') or st.get('loaded_voice') or 'default'}) — skipping reload")
 
 
 def _do_synth(name: str, text: str, params: dict) -> dict:
+    slog("SYNTH", name, f"▶ text={text[:60]!r}{'…' if len(text)>60 else ''}")
+    slog("PARAMS", name, f"params={params}")
     _ensure_loaded(name, params)
     st = _state[name]
     t0 = time.perf_counter()
     wav, sr = SYNTHERS[name](st["instance"], text, params)
     synth_s = time.perf_counter() - t0
     dur = _wav_dur(wav)
+    slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms  dur {int(dur*1000)} ms  RTF {round(synth_s/dur,3) if dur>0 else 0}×  {sr} Hz")
     return {
         "audio_b64":    base64.b64encode(wav).decode(),
         "sample_rate":  sr,
