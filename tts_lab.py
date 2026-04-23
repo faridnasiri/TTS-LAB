@@ -26,6 +26,7 @@ from tts_lab_config import (
     MODEL_ORDER, MODEL_INFO, _state, UPLOAD_DIR,
     SYNTH_TIMEOUT, DEFAULT_SYNTH_TIMEOUT,
     ALL_KOKORO_VOICES, ALL_XTTS_SPEAKERS, BARK_PRESETS, OUTETTS_SPEAKERS,
+    _server_log, _server_log_seq, slog,
 )
 from tts_lab_shims import DEVICE, DEVICE_NAME, VRAM_TOTAL_MB
 from tts_lab_utils import _ram_mb, _piper_voices, _safe_del
@@ -63,11 +64,12 @@ async def status():
         st = _state[n]
         models[n] = {
             **MODEL_INFO[n],
-            "available":   ok,
-            "reason":      reason,
-            "status":      st["status"],
-            "load_time_s": st["load_time_s"],
-            "error":       st["error"],
+            "available":    ok,
+            "reason":       reason,
+            "status":       st["status"],
+            "load_time_s":  st["load_time_s"],
+            "error":        st["error"],
+            "loaded_model": st.get("loaded_model") or st.get("loaded_voice"),
         }
         if sweep_running and n not in _import_cache:
             models[n]["available"] = False
@@ -92,6 +94,13 @@ async def status():
         "gpu":    gpu_info,
         "device": DEVICE,
     })
+
+
+@app.get("/logs")
+async def get_logs(since: int = 0):
+    """Return server-side log entries with seq > since."""
+    entries = [e for e in _server_log if e["seq"] > since]
+    return JSONResponse({"entries": entries, "seq": _server_log_seq})
 
 
 @app.get("/voices/{model}")
