@@ -399,49 +399,47 @@ def _load_cosyvoice():
     for p in [str(COSYVOICE_DIR), str(COSYVOICE_DIR / "third_party" / "Matcha-TTS")]:
         if p not in sys.path:
             sys.path.insert(0, p)
-    # Force soundfile backend — torchcodec (default in 2.11+) needs FFmpeg/CUDA
-    # which isn't available; TORCHAUDIO_USE_BACKEND_DISPATCHER=0 disables it.
-    import os as _os
-    _os.environ.setdefault("TORCHAUDIO_USE_BACKEND_DISPATCHER", "0")
-    import torchaudio as _ta
-    # Monkey-patch _backend to soundfile if the dispatcher attr still exists
-    try:
-        _ta._backend.set_audio_backend("soundfile")
-    except Exception:
-        pass
     from cosyvoice.cli.cosyvoice import CosyVoice2
     md = COSYVOICE_DIR / "pretrained_models" / "CosyVoice2-0.5B"
     return CosyVoice2(str(md), load_jit=False, load_trt=False)
 
 def _synth_cosyvoice(inst, text, params):
-    import numpy as _np
-    import torch as _torch
+    import soundfile as _sf
+    import numpy as _np2
+    import tempfile, os
 
-    def _load_wav_16k(path):
-        """Load any WAV as mono float32 at 16 kHz using soundfile (no torchcodec)."""
-        import soundfile as _sf
+    def _read_wav_16k(path):
+        """Read WAV as mono float32 tensor at 16 kHz via soundfile (no torchcodec)."""
+        import torch as _t
         data, sr = _sf.read(str(path), dtype="float32", always_2d=False)
         if data.ndim == 2:
-            data = data.mean(axis=1)           # stereo → mono
+            data = data.mean(axis=1)
         if sr != 16000:
-            import torch, torchaudio
-            t = _torch.from_numpy(data).unsqueeze(0)
-            t = torchaudio.functional.resample(t, sr, 16000)
-            data = t.squeeze(0).numpy()
-        return _torch.from_numpy(data).unsqueeze(0)   # [1, T]
+            import torchaudio as _ta
+            t = _t.from_numpy(data).unsqueeze(0)
+            data = _ta.functional.resample(t, sr, 16000).squeeze(0).numpy()
+        return data  # numpy float32 mono
 
     prompt_id   = params.get("audio_prompt_id", "")
     prompt_path = UPLOAD_DIR / f"{prompt_id}.wav" if prompt_id else None
 
     if prompt_path and prompt_path.exists():
-        ref_wav  = _load_wav_16k(prompt_path)
-        ref_text = params.get("transcript", "") or ""
+        ref_numpy = _read_wav_16k(prompt_path)
+        ref_text  = params.get("transcript", "") or ""
     else:
-        ref_wav  = _load_wav_16k(COSYVOICE_DIR / "asset" / "zero_shot_prompt.wav")
-        ref_text = "And then he said, the excitement in his voice unmistakable."
+        ref_numpy = _read_wav_16k(COSYVOICE_DIR / "asset" / "zero_shot_prompt.wav")
+        ref_text  = "And then he said, the excitement in his voice unmistakable."
 
-    chunks = [c["tts_speech"].numpy().flatten()
-              for c in inst.inference_zero_shot(text, ref_text, ref_wav)]
+    # CosyVoice's load_wav() expects a file path — write tensor to a temp WAV
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        _sf.write(tmp_path, ref_numpy, 16000)
+        chunks = [c["tts_speech"].numpy().flatten()
+                  for c in inst.inference_zero_shot(text, ref_text, tmp_path)]
+    finally:
+        os.unlink(tmp_path)
+
     sr = inst.sample_rate
     return _to_wav(_np.concatenate(chunks) if chunks else _np.zeros(sr, _np.float32), sr), sr
 
