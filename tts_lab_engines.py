@@ -405,7 +405,6 @@ def _load_cosyvoice():
 
 def _synth_cosyvoice(inst, text, params):
     import soundfile as _sf
-    import numpy as _np2
     import tempfile, os
 
     def _read_wav_16k(path):
@@ -441,7 +440,7 @@ def _synth_cosyvoice(inst, text, params):
         os.unlink(tmp_path)
 
     sr = inst.sample_rate
-    return _to_wav(_np.concatenate(chunks) if chunks else _np.zeros(sr, _np.float32), sr), sr
+    return _to_wav(np.concatenate(chunks) if chunks else np.zeros(sr, np.float32), sr), sr
 
 
 # ── 12. Parler-TTS ────────────────────────────────────────────────────────────
