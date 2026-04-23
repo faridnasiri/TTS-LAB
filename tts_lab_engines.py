@@ -200,9 +200,11 @@ def _load_outetts(model_path=OUTETTS_DEFAULT_GGUF):
         # HF backend is permanently broken (pre-encodes text as ~15K tokens).
         # Silently fall back to the default GGUF instead of raising.
         gguf_path = OUTETTS_DEFAULT_GGUF
-    tokenizer = OUTETTS_DEFAULT_TOKENIZER
+    # Pick the matching HF tokenizer for each GGUF variant
     if "0.3" in gguf_path:
         tokenizer = "OuteAI/OuteTTS-0.3-500M"
+    else:
+        tokenizer = OUTETTS_DEFAULT_TOKENIZER   # "OuteAI/OuteTTS-1.0-0.6B" covers both Q4 and Q8
     cfg = outetts.ModelConfig(
         model_path=gguf_path,
         tokenizer_path=tokenizer,
