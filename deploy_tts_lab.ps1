@@ -79,7 +79,15 @@ Write-Host "  ✅ /opt/arthur ready" -ForegroundColor Green
 hdr "3 — Copy files"
 
 $files = @(
-    @{ L = "tts_lab.py";                        R = "/opt/arthur/tts_lab.py" },
+    # ── modular TTS lab (7 files) ─────────────────────────────────────────────
+    @{ L = "tts_lab.py";           R = "/opt/arthur/tts_lab.py" },
+    @{ L = "tts_lab_shims.py";     R = "/opt/arthur/tts_lab_shims.py" },
+    @{ L = "tts_lab_config.py";    R = "/opt/arthur/tts_lab_config.py" },
+    @{ L = "tts_lab_utils.py";     R = "/opt/arthur/tts_lab_utils.py" },
+    @{ L = "tts_lab_engines.py";   R = "/opt/arthur/tts_lab_engines.py" },
+    @{ L = "tts_lab_dispatch.py";  R = "/opt/arthur/tts_lab_dispatch.py" },
+    @{ L = "tts_lab_ui.py";        R = "/opt/arthur/tts_lab_ui.py" },
+    # ── benchmarks + support ──────────────────────────────────────────────────
     @{ L = "tts_benchmark.py";                  R = "/opt/arthur/tts_benchmark.py" },
     @{ L = "bench_all.py";                      R = "/opt/arthur/bench_all.py" },
     @{ L = "bench_warm.py";                     R = "/opt/arthur/bench_warm.py" },
@@ -109,11 +117,11 @@ Write-Host "  ✅ All files deployed" -ForegroundColor Green
 
 # ── 4. syntax check ───────────────────────────────────────────────────────────
 hdr "4 — Syntax check tts_lab.py"
-$chk = vm "/opt/arthur-bench-env/bin/python -c `"import ast; ast.parse(open('/opt/arthur/tts_lab.py').read()); print('SYNTAX_OK')`"" -nocheck
+$chk = vm "/opt/arthur-bench-env/bin/python -c `"import ast, sys; files=['tts_lab.py','tts_lab_shims.py','tts_lab_config.py','tts_lab_utils.py','tts_lab_engines.py','tts_lab_dispatch.py','tts_lab_ui.py']; [ast.parse(open('/opt/arthur/'+f).read()) for f in files]; print('SYNTAX_OK')`"" -nocheck
 if ($chk -match "SYNTAX_OK") {
-    Write-Host "  ✅ tts_lab.py syntax is clean" -ForegroundColor Green
+    Write-Host "  ✅ All 7 tts_lab_*.py modules syntax is clean" -ForegroundColor Green
 } else {
-    Write-Host "  ❌ tts_lab.py SYNTAX ERROR — aborting" -ForegroundColor Red
+    Write-Host "  ❌ SYNTAX ERROR in one of the tts_lab modules — aborting" -ForegroundColor Red
     Write-Host ($chk | Out-String)
     exit 1
 }
