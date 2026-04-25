@@ -445,8 +445,21 @@ def _synth_cosyvoice(inst, text, params):
 
 # ── 12. Parler-TTS ────────────────────────────────────────────────────────────
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
+    import torch
     from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
+    from transformers.generation.configuration_utils import GenerationConfig
+    # parler_tts uses _pad_token_tensor/_bos_token_tensor/_eos_token_tensor which were
+    # removed from transformers GenerationConfig after 4.46. Shim them back as properties.
+    if not hasattr(GenerationConfig, "_pad_token_tensor"):
+        def _make_tensor_prop(id_attr):
+            def _prop(self):
+                val = getattr(self, id_attr, None)
+                return torch.tensor(val) if val is not None else None
+            return property(_prop)
+        GenerationConfig._pad_token_tensor = _make_tensor_prop("pad_token_id")
+        GenerationConfig._bos_token_tensor = _make_tensor_prop("bos_token_id")
+        GenerationConfig._eos_token_tensor = _make_tensor_prop("eos_token_id")
     mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(DEVICE)
     tok = AutoTokenizer.from_pretrained(model_id)
     return (mdl, tok)
@@ -703,7 +716,7 @@ def _load_indextts(model_dir=None):
                 setattr(_tf, _cls_name, getattr(_cu, _cls_name))
     except Exception:
         pass
-    from indextts.infer import IndexTTS
+    from indextts.infer_v2 import IndexTTS
     from huggingface_hub import snapshot_download as _dl
     if model_dir:
         md = model_dir
