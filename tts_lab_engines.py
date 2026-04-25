@@ -445,14 +445,6 @@ def _synth_cosyvoice(inst, text, params):
 
 # ── 12. Parler-TTS ────────────────────────────────────────────────────────────
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
-    import transformers
-    tv = tuple(int(x) for x in transformers.__version__.split(".")[:2])
-    if tv >= (4, 51):
-        raise RuntimeError(
-            f"Parler-TTS 0.2.x requires transformers<=4.46.1 "
-            f"(installed: {transformers.__version__}). "
-            "Install in a separate venv: pip install transformers==4.46.1"
-        )
     from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
     mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(DEVICE)
