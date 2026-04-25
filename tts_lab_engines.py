@@ -445,8 +445,17 @@ def _synth_cosyvoice(inst, text, params):
 
 # ── 12. Parler-TTS ────────────────────────────────────────────────────────────
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
+    import os
     from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
+    # Resolve local cached path to avoid HF hub permission issues
+    _hf_home = os.environ.get("HF_HOME", "/opt/models/huggingface")
+    _slug = model_id.replace("/", "--")
+    _snap_dir = os.path.join(_hf_home, "hub", f"models--{_slug}", "snapshots")
+    if os.path.isdir(_snap_dir):
+        snaps = sorted(os.listdir(_snap_dir))
+        if snaps:
+            model_id = os.path.join(_snap_dir, snaps[-1])
     mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(DEVICE)
     tok = AutoTokenizer.from_pretrained(model_id)
     return (mdl, tok)
