@@ -61,9 +61,19 @@ for path, code in stubs.items():
 mu_path = f'{TRANSFORMERS}/modeling_utils.py'
 with open(mu_path) as f:
     mu = f.read()
+appends = []
 if 'ALL_ATTENTION_FUNCTIONS' not in mu:
+    appends.append('ALL_ATTENTION_FUNCTIONS = {}')
+if 'class SequenceSummary' not in mu:
+    appends.append(
+        'class SequenceSummary:\n'
+        '    """Stub removed in transformers 4.51+. IndexTTS multiple_choice_head only."""\n'
+        '    def __init__(self, config=None, **kwargs): pass\n'
+        '    def __call__(self, *a, **kw): return None\n'
+    )
+if appends:
     with open(mu_path, 'a') as f:
-        f.write('\nALL_ATTENTION_FUNCTIONS = {}\n')
-    print('Added ALL_ATTENTION_FUNCTIONS to modeling_utils.py')
+        f.write('\n' + '\n'.join(appends) + '\n')
+    print(f'Added to modeling_utils: {appends}')
 else:
-    print('ALL_ATTENTION_FUNCTIONS already in modeling_utils.py')
+    print('modeling_utils.py already has all required symbols')
