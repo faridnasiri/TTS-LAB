@@ -154,3 +154,52 @@ try:
             sys.path.insert(0, _fs_path)
 except Exception:
     pass
+
+# ── transformers.masking_utils (added in 4.54, needed by qwen_tts) ───────────
+try:
+    import transformers.masking_utils  # noqa — exists on 4.54+
+except ImportError:
+    _mu = types.ModuleType("transformers.masking_utils")
+    _mu.create_causal_mask = lambda *a, **kw: None
+    _mu.create_sliding_window_causal_mask = lambda *a, **kw: None
+    _mu.create_causal_4d_mask = lambda *a, **kw: None
+    _mu.prepare_4d_causal_attention_mask = lambda *a, **kw: None
+    sys.modules["transformers.masking_utils"] = _mu
+    try:
+        import transformers as _tf3
+        _tf3.masking_utils = _mu
+    except Exception:
+        pass
+
+# ── transformers.modeling_layers (added in 4.54, needed by qwen_tts) ─────────
+try:
+    import transformers.modeling_layers  # noqa
+except ImportError:
+    import torch.nn as _nn2
+    _ml = types.ModuleType("transformers.modeling_layers")
+    class _GradCkptLayer(_nn2.Module):
+        _supports_gradient_checkpointing = True
+    _ml.GradientCheckpointingLayer = _GradCkptLayer
+    sys.modules["transformers.modeling_layers"] = _ml
+
+# ── indextts.infer_v2: alias IndexTTS -> IndexTTS2 ───────────────────────────
+try:
+    import indextts.infer_v2 as _iv2
+    if not hasattr(_iv2, "IndexTTS") and hasattr(_iv2, "IndexTTS2"):
+        _iv2.IndexTTS = _iv2.IndexTTS2
+except Exception:
+    pass
+
+# ── parler_tts: shim _pad/bos/eos_token_tensor on GenerationConfig ────────────
+try:
+    from transformers.generation.configuration_utils import GenerationConfig as _GC
+    import torch as _torch2
+    if not hasattr(_GC, "_pad_token_tensor"):
+        _GC._pad_token_tensor = property(lambda s: _torch2.tensor(s.pad_token_id)
+            if getattr(s, "pad_token_id", None) is not None else None)
+        _GC._bos_token_tensor = property(lambda s: _torch2.tensor(s.bos_token_id)
+            if getattr(s, "bos_token_id", None) is not None else None)
+        _GC._eos_token_tensor = property(lambda s: _torch2.tensor(s.eos_token_id)
+            if getattr(s, "eos_token_id", None) is not None else None)
+except Exception:
+    pass
