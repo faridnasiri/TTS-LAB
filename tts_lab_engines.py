@@ -445,21 +445,8 @@ def _synth_cosyvoice(inst, text, params):
 
 # ── 12. Parler-TTS ────────────────────────────────────────────────────────────
 def _load_parler(model_id="parler-tts/parler-tts-mini-v1"):
-    import torch
     from parler_tts import ParlerTTSForConditionalGeneration
     from transformers import AutoTokenizer
-    from transformers.generation.configuration_utils import GenerationConfig
-    # parler_tts uses _pad_token_tensor/_bos_token_tensor/_eos_token_tensor which were
-    # removed from transformers GenerationConfig after 4.46. Shim them back as properties.
-    if not hasattr(GenerationConfig, "_pad_token_tensor"):
-        def _make_tensor_prop(id_attr):
-            def _prop(self):
-                val = getattr(self, id_attr, None)
-                return torch.tensor(val) if val is not None else None
-            return property(_prop)
-        GenerationConfig._pad_token_tensor = _make_tensor_prop("pad_token_id")
-        GenerationConfig._bos_token_tensor = _make_tensor_prop("bos_token_id")
-        GenerationConfig._eos_token_tensor = _make_tensor_prop("eos_token_id")
     mdl = ParlerTTSForConditionalGeneration.from_pretrained(model_id).to(DEVICE)
     tok = AutoTokenizer.from_pretrained(model_id)
     return (mdl, tok)
@@ -716,7 +703,7 @@ def _load_indextts(model_dir=None):
                 setattr(_tf, _cls_name, getattr(_cu, _cls_name))
     except Exception:
         pass
-    from indextts.infer_v2 import IndexTTS
+    from indextts.infer_v2 import IndexTTS2 as IndexTTS
     from huggingface_hub import snapshot_download as _dl
     if model_dir:
         md = model_dir
@@ -816,6 +803,18 @@ def _load_openvoice():
         )
     converter = ToneColorConverter(str(ckpt_dir / "config.json"), device=DEVICE)
     converter.watermark_model = None
+    # Some OpenVoice builds initialise sub-modules on the "meta" device then
+    # call .to(device) which raises "Cannot copy out of meta tensor".
+    # Migrate any meta parameters to empty tensors first.
+    if hasattr(converter, "model") and converter.model is not None:
+        for m in converter.model.modules():
+            for name, param in list(m.named_parameters(recurse=False)):
+                if param.is_meta:
+                    setattr(m, name, torch.nn.Parameter(
+                        torch.empty_like(param, device=DEVICE)))
+            for name, buf in list(m.named_buffers(recurse=False)):
+                if buf.is_meta:
+                    m.register_buffer(name, torch.empty_like(buf, device=DEVICE))
     converter.load_ckpt(str(ckpt_dir / "checkpoint.pth"))
     base_tts = MeloTTS(language="EN", device=DEVICE)
     base_se: dict = {}
