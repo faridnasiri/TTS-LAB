@@ -190,24 +190,33 @@ try:
 except Exception:
     pass
 
-# ── parler_tts: shim _pad/bos/eos_token_tensor on GenerationConfig ────────────
-# NOTE: parler_tts source is already patched by patch_parler_tts.py to use
-# torch.tensor() directly, so this shim is only a safety net.
-# Must include a setter to avoid breaking engines (e.g. XTTS) that assign
-# these attributes directly on GenerationConfig instances.
+# ── parler_tts: _pad/bos/eos_token_tensor are patched directly in
+# patch_parler_tts.py — no runtime shim needed here. ─────────────────────────
+
+# ── parler_tts: fix _prepare_attention_mask_for_generation signature ──────────
+# transformers 4.50+ changed the signature from (inputs, pad_id, eos_id) to
+# (inputs, tokenizer=None, generation_config=None). Patch the parler class to
+# use the correct new-style call after the class is imported.
 try:
-    from transformers.generation.configuration_utils import GenerationConfig as _GC
-    import torch as _torch2
-    if not hasattr(_GC, "_pad_token_tensor"):
-        def _make_tok_prop(attr):
-            store = f"__{attr}_cached"
-            return property(
-                lambda s: getattr(s, store, None) or (
-                    _torch2.tensor(getattr(s, attr)) if getattr(s, attr, None) is not None else None),
-                lambda s, v: setattr(s, store, v),
-            )
-        _GC._pad_token_tensor = _make_tok_prop("pad_token_id")
-        _GC._bos_token_tensor = _make_tok_prop("bos_token_id")
-        _GC._eos_token_tensor = _make_tok_prop("eos_token_id")
+    from parler_tts.modeling_parler_tts import ParlerTTSForConditionalGeneration as _PTTSFCG
+    from transformers.generation.utils import GenerationMixin as _GM
+    import torch as _t2
+
+    _orig_prep_attn = _GM._prepare_attention_mask_for_generation.__func__ if hasattr(
+        _GM._prepare_attention_mask_for_generation, '__func__') else _GM._prepare_attention_mask_for_generation
+
+    def _parler_prep_attn(self, inputs_tensor, pad_token_id=None, eos_token_id=None, **kwargs):
+        """Shim: convert old-style (inputs, pad_id, eos_id) call to new-style."""
+        if isinstance(pad_token_id, _t2.Tensor):
+            # Old-style call — build a minimal generation_config stand-in
+            class _FakeCfg:
+                pass
+            cfg = _FakeCfg()
+            cfg._pad_token_tensor = pad_token_id
+            cfg._eos_token_tensor = eos_token_id if isinstance(eos_token_id, _t2.Tensor) else None
+            return _orig_prep_attn(self, inputs_tensor, generation_config=cfg)
+        return _orig_prep_attn(self, inputs_tensor, pad_token_id, eos_token_id, **kwargs)
+
+    _PTTSFCG._prepare_attention_mask_for_generation = _parler_prep_attn
 except Exception:
     pass
