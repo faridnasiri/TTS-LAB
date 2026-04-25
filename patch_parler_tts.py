@@ -21,6 +21,9 @@ if 'parler_tts_patched_token_tensors' not in src:
         (r'generation_config\._pad_token_tensor', 'torch.tensor(generation_config.pad_token_id)'),
         (r'generation_config\._bos_token_tensor', 'torch.tensor(generation_config.bos_token_id)'),
         (r'generation_config\._eos_token_tensor', 'torch.tensor(generation_config.eos_token_id)'),
+        # transformers 4.51+: generation_config.update() returns None, not model_kwargs
+        (r'model_kwargs = generation_config\.update\(\*\*kwargs\)',
+         'generation_config.update(**kwargs); model_kwargs = kwargs'),
     ]
     new_src = src
     for pattern, repl in replacements:
