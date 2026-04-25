@@ -193,33 +193,6 @@ except Exception:
 # ── parler_tts: _pad/bos/eos_token_tensor are patched directly in
 # patch_parler_tts.py — no runtime shim needed here. ─────────────────────────
 
-# ── parler_tts: fix _prepare_attention_mask_for_generation signature ──────────
-# transformers 4.50+ changed signature from (inputs, pad_id, eos_id) to
-# (inputs, generation_config, model_kwargs). Override on parler class at startup.
-try:
-    from parler_tts.modeling_parler_tts import ParlerTTSForConditionalGeneration as _PTTSFCG
-    import torch as _t2
-
-    def _parler_prep_attn(self, inputs_tensor, pad_token_id_or_cfg=None, eos_token_id=None, **kwargs):
-        """Accept old (inputs, pad_tensor, eos_tensor) call from parler's generate()."""
-        pad_token_id = pad_token_id_or_cfg
-        default_mask = _t2.ones(inputs_tensor.shape[:2], dtype=_t2.long, device=inputs_tensor.device)
-        if pad_token_id is None or not isinstance(pad_token_id, _t2.Tensor):
-            return default_mask
-        # Only mask if inputs are int ids and pad token appears
-        if inputs_tensor.dtype not in (_t2.int, _t2.long):
-            return default_mask
-        is_pad = inputs_tensor.eq(pad_token_id.item())
-        if not is_pad.any():
-            return default_mask
-        # First pad position onwards → 0
-        mask = default_mask.clone()
-        for i, row in enumerate(is_pad):
-            first_pad = row.nonzero(as_tuple=False)
-            if first_pad.numel():
-                mask[i, first_pad[0].item():] = 0
-        return mask
-
-    _PTTSFCG._prepare_attention_mask_for_generation = _parler_prep_attn
-except Exception:
-    pass
+# ── parler_tts compatibility shims ────────────────────────────────────────────
+# parler_tts 0.2.3 has its own complete generate() method. No MRO or
+# attention-mask shims needed — all API fixes are in patch_parler_tts.py.

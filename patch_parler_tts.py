@@ -24,16 +24,21 @@ if 'parler_tts_patched_token_tensors' not in src:
         # transformers 4.51+: generation_config.update() returns None, not model_kwargs
         (r'model_kwargs = generation_config\.update\(\*\*kwargs\)',
          'generation_config.update(**kwargs); model_kwargs = kwargs'),
-        # transformers 4.50+: PreTrainedModel no longer inherits GenerationMixin;
-        # add GenerationMixin import and fix ParlerTTSForConditionalGeneration inheritance.
-        (r'from transformers\.modeling_utils import PreTrainedModel',
-         'from transformers.modeling_utils import PreTrainedModel\n'
-         'try:\n'
-         '    from transformers import GenerationMixin as _GenMixin\n'
-         'except ImportError:\n'
-         '    from transformers.generation.utils import GenerationMixin as _GenMixin'),
-        (r'class ParlerTTSForConditionalGeneration\(PreTrainedModel\):',
-         'class ParlerTTSForConditionalGeneration(PreTrainedModel, _GenMixin):'),
+        # transformers 4.50+: _prepare_attention_mask_for_generation signature changed.
+        # parler calls it as (inputs, pad_tensor, eos_tensor); new signature is
+        # (inputs, generation_config, model_kwargs). Replace the call to avoid
+        # signature mismatch — just build a default all-ones mask instead.
+        (r'model_kwargs\["attention_mask"\] = self\._prepare_attention_mask_for_generation\(\s*'
+         r'inputs_tensor, torch\.tensor\(generation_config\.pad_token_id\), '
+         r'torch\.tensor\(generation_config\.eos_token_id\)\s*\)',
+         'model_kwargs["attention_mask"] = torch.ones('
+         'inputs_tensor.shape[:2], dtype=torch.long, device=inputs_tensor.device)'),
+        # transformers 4.50+: _get_initial_cache_position signature changed from
+        # (input_ids, model_kwargs) to (seq_length, device, model_kwargs).
+        # Replace parler's call sites to use the correct new signature.
+        (r'model_kwargs = self\._get_initial_cache_position\(input_ids, model_kwargs\)',
+         'model_kwargs = self._get_initial_cache_position('
+         'input_ids.shape[-1], input_ids.device, model_kwargs)'),
     ]
     new_src = src
     for pattern, repl in replacements:
