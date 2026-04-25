@@ -24,6 +24,16 @@ if 'parler_tts_patched_token_tensors' not in src:
         # transformers 4.51+: generation_config.update() returns None, not model_kwargs
         (r'model_kwargs = generation_config\.update\(\*\*kwargs\)',
          'generation_config.update(**kwargs); model_kwargs = kwargs'),
+        # transformers 4.50+: PreTrainedModel no longer inherits GenerationMixin;
+        # add GenerationMixin import and fix ParlerTTSForConditionalGeneration inheritance.
+        (r'from transformers\.modeling_utils import PreTrainedModel',
+         'from transformers.modeling_utils import PreTrainedModel\n'
+         'try:\n'
+         '    from transformers import GenerationMixin as _GenMixin\n'
+         'except ImportError:\n'
+         '    from transformers.generation.utils import GenerationMixin as _GenMixin'),
+        (r'class ParlerTTSForConditionalGeneration\(PreTrainedModel\):',
+         'class ParlerTTSForConditionalGeneration(PreTrainedModel, _GenMixin):'),
     ]
     new_src = src
     for pattern, repl in replacements:
