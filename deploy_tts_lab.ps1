@@ -87,6 +87,10 @@ $files = @(
     @{ L = "tts_lab_engines.py";   R = "/opt/arthur/tts_lab_engines.py" },
     @{ L = "tts_lab_dispatch.py";  R = "/opt/arthur/tts_lab_dispatch.py" },
     @{ L = "tts_lab_ui.py";        R = "/opt/arthur/tts_lab_ui.py" },
+    # ── compatibility patches ──────────────────────────────────────────────────
+    @{ L = "patch_transformers_stubs.py"; R = "/opt/arthur/patch_transformers_stubs.py" },
+    @{ L = "fix_transformers_shims.py";   R = "/opt/arthur/fix_transformers_shims.py" },
+    @{ L = "patch_parler_tts.py";         R = "/opt/arthur/patch_parler_tts.py" },
     # ── benchmarks + support ──────────────────────────────────────────────────
     @{ L = "tts_benchmark.py";                  R = "/opt/arthur/tts_benchmark.py" },
     @{ L = "bench_all.py";                      R = "/opt/arthur/bench_all.py" },
@@ -124,6 +128,23 @@ if ($chk -match "SYNTAX_OK") {
     Write-Host "  ❌ SYNTAX ERROR in one of the tts_lab modules — aborting" -ForegroundColor Red
     Write-Host ($chk | Out-String)
     exit 1
+}
+
+# ── 4.5. re-apply site-packages patches (survive pip upgrades) ────────────────
+hdr "4.5 — Re-apply site-packages compatibility patches"
+$patches = @"
+source /opt/arthur-bench-env/bin/activate
+python3 /opt/arthur/patch_transformers_stubs.py
+python3 /opt/arthur/fix_transformers_shims.py
+python3 /opt/arthur/patch_parler_tts.py
+echo PATCHES_DONE
+"@
+$patchResult = vm $patches -nocheck
+if ($patchResult -match "PATCHES_DONE") {
+    Write-Host "  ✅ Site-packages patches applied" -ForegroundColor Green
+} else {
+    Write-Host "  ⚠️  Patch step had warnings (non-fatal)" -ForegroundColor Yellow
+    Write-Host ($patchResult | Out-String)
 }
 
 # ── 5. install new engine packages ────────────────────────────────────────────
