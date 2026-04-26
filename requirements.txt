@@ -9,6 +9,15 @@ psutil>=5.9.0
 faster-whisper>=1.0.1
 soundfile>=0.12.1
 
+# ── VERSION PINS — must survive every vllm/transformers upgrade ───────────────
+# vllm pulls in numpy 2.x → breaks numpy.core.multiarray in many TTS engines
+# vllm pulls in protobuf 4-6.x → breaks "Descriptors cannot be created directly"
+# torchcodec pulled by vllm nightly but requires FFmpeg — use shim instead
+numpy>=1.24,<2.0
+protobuf>=3.20,<4.0
+# NOTE: torchcodec must NOT be installed — _remote_install_new_engines.sh removes it
+#       tts_lab_shims.py provides soundfile-based torchaudio.load_with_torchcodec fallback
+
 # ── Shared / utilities ────────────────────────────────────────────────────────
 numpy>=1.26.0
 httpx>=0.27.0

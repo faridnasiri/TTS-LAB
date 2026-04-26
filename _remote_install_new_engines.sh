@@ -109,6 +109,35 @@ else
     ok "OpenVoice v2 checkpoints already present"
 fi
 
+# ── Pin versions broken by vllm upgrades ─────────────────────────────────────
+# vllm installs incompatible numpy 2.x and protobuf 4/5/6.x which breaks
+# many TTS engines (numpy.core.multiarray removed; protobuf descriptor errors).
+# Also uninstall torchcodec — it requires FFmpeg and is not needed.
+echo ""
+echo "▶ [PIN] Pinning numpy + protobuf; removing torchcodec..."
+${PIP} install --quiet "numpy>=1.24,<2.0" "protobuf>=3.20,<4.0" \
+  && ok "numpy<2.0 + protobuf<4.0 pinned" \
+  || warn "Pin failed — numpy/protobuf versions may be wrong after vllm installs"
+${PIP} uninstall -y torchcodec 2>/dev/null \
+  && ok "torchcodec removed (FFmpeg not available; tts_lab_shims.py provides fallback)" \
+  || ok "torchcodec not installed — nothing to remove"
+
+# ── HF_TOKEN in systemd service ───────────────────────────────────────────────
+# Required for gated models (orpheus etc.) — the service runs as root
+# and won't find the arthur-user's ~/.cache/huggingface/token otherwise.
+echo ""
+echo "▶ [HF] Injecting HF_TOKEN into arthur-lab.service..."
+HF_TOKEN=$(cat /home/arthur/.cache/huggingface/token /root/.cache/huggingface/token 2>/dev/null | head -1)
+if [ -n "$HF_TOKEN" ]; then
+    sudo grep -q "^Environment=HF_TOKEN" /etc/systemd/system/arthur-lab.service \
+      || sudo sed -i "/^Environment=HF_HOME/a Environment=HF_TOKEN=${HF_TOKEN}" \
+           /etc/systemd/system/arthur-lab.service
+    sudo systemctl daemon-reload
+    ok "HF_TOKEN injected into arthur-lab.service"
+else
+    warn "No HF token found — run: huggingface-cli login  (needed for orpheus/csm)"
+fi
+
 # ── Syntax check ──────────────────────────────────────────────────────────────
 echo ""
 echo "━━━━  Syntax check  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
