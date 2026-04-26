@@ -613,10 +613,12 @@ def _synth_csm(inst, text, params):
 def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
     import torch
     from qwen_tts import Qwen3TTSModel
+    # qwen_tts forwards **kwargs into AutoModel.from_pretrained — use torch_dtype
+    # (the standard transformers key), not dtype, which leaks into __init__.
+    # attn_implementation is also not supported by Qwen3TTSForConditionalGeneration.__init__,
+    # so omit it and let transformers pick the default (eager/sdpa auto-selected).
     _dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-    _attn  = "sdpa" if DEVICE == "cuda" else "eager"
-    return Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, dtype=_dtype,
-                                         attn_implementation=_attn)
+    return Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, torch_dtype=_dtype)
 
 def _synth_qwen3tts(inst, text, params):
     ref_id  = params.get("audio_prompt_id", "")

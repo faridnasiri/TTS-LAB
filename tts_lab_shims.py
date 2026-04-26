@@ -196,6 +196,24 @@ try:
 except Exception:
     pass
 
+# ── qwen3tts: Qwen3TTSTokenizerV1/V2Model.config_class is None
+# transformers auto_factory.py line 619 does:
+#   model_class.config_class.__name__  → AttributeError: 'NoneType' has no '__name__'
+# Fix: set config_class to the matching config type on each tokenizer model class.
+try:
+    from qwen_tts.inference.qwen3_tts_tokenizer import (
+        Qwen3TTSTokenizerV1Model  as _TokV1M,
+        Qwen3TTSTokenizerV1Config as _TokV1C,
+        Qwen3TTSTokenizerV2Model  as _TokV2M,
+        Qwen3TTSTokenizerV2Config as _TokV2C,
+    )
+    if _TokV1M.config_class is None:
+        _TokV1M.config_class = _TokV1C
+    if _TokV2M.config_class is None:
+        _TokV2M.config_class = _TokV2C
+except Exception:
+    pass
+
 # ── qwen3tts: _merge_generate_kwargs passes temperature/do_sample/max_new_tokens
 # directly to model.generate() as model_kwargs, but transformers 4.53 requires
 # them to be in a GenerationConfig object, not forwarded as model forward kwargs.
