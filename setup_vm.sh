@@ -47,7 +47,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=/opt/arthur
-Environment="GEMINI_API_KEY=REDACTED_GOOGLE_API_KEY"
+Environment="GEMINI_API_KEY=${GEMINI_API_KEY:-YOUR_GEMINI_API_KEY_HERE}"
 ExecStart=/opt/arthur-env/bin/uvicorn arthur_server:app --host 0.0.0.0 --port 8000
 Restart=always
 RestartSec=5

@@ -1,0 +1,17 @@
+# Secrets — never commit
+secrets.env
+*.env.local
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+*.user
