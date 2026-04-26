@@ -182,6 +182,16 @@ except ImportError:
     _ml.GradientCheckpointingLayer = _GradCkptLayer
     sys.modules["transformers.modeling_layers"] = _ml
 
+# ── qwen3tts: Qwen3TTSSpeakerEncoderConfig missing _attn_implementation_autoset
+# Its __init__ never calls super().__init__(), so PretrainedConfig never sets it.
+# Fix: inject the attribute as a class-level default before qwen_tts is imported.
+try:
+    from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSSpeakerEncoderConfig as _Q3Cfg
+    if not hasattr(_Q3Cfg, "_attn_implementation_autoset"):
+        _Q3Cfg._attn_implementation_autoset = False
+except Exception:
+    pass
+
 # ── indextts.infer_v2: alias IndexTTS -> IndexTTS2 ───────────────────────────
 try:
     import indextts.infer_v2 as _iv2
