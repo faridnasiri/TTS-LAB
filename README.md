@@ -201,6 +201,38 @@ Patches `transformers/utils/__init__.py` and `transformers/utils/generic.py`:
 
 ---
 
+## Engine Bug Fixes Applied
+
+All fixes are **permanently recorded in source** (`tts_lab_engines.py`, `tts_lab_shims.py`) or in the **patch scripts** re-applied on every deploy. Nothing is ad-hoc.
+
+| Engine | Error Encountered | Root Cause | Fix | Where |
+|---|---|---|---|---|
+| **parler** | `Config has to be initialized with text_encoder…` | `transformers 4.53` calls `ParlerTTSConfig()` with no args inside `to_diff_dict()` | Early return when kwargs empty | [patch_parler_tts.py](patch_parler_tts.py) |
+| **parler** | `AttributeError: _pad_token_tensor` | Removed from `GenerationConfig` in 4.51 | Replaced with `torch.tensor(generation_config.pad_token_id)` | [patch_parler_tts.py](patch_parler_tts.py) |
+| **parler** | `generate()` returns `None` | `generation_config.update()` returns `None` in 4.51 (was `model_kwargs`) | `generation_config.update(**kw); model_kwargs = kw` | [patch_parler_tts.py](patch_parler_tts.py) |
+| **parler** | `generate()` returns `None` (2nd cause) | `PreTrainedModel` no longer inherits `GenerationMixin` in 4.50 | Added `_ParlerGenMixin` to class MRO | [patch_parler_tts.py](patch_parler_tts.py) |
+| **parler** | `TypeError: _prepare_attention_mask_for_generation takes 3 args` | Signature changed `(inputs, pad_t, eos_t)` → `(inputs, gen_cfg, model_kwargs)` | Replaced call with inline `torch.ones(…)` mask | [patch_parler_tts.py](patch_parler_tts.py) |
+| **parler** | `_get_initial_cache_position() takes 3 positional args but 4 given` | Signature changed `(input_ids, model_kwargs)` → `(seq_len, device, model_kwargs)` | Shimmed via `(a, b=None, c=None)` accepting both signatures | [patch_parler_tts.py](patch_parler_tts.py) |
+| **parler** | `property has no setter` on `GenerationConfig` | Earlier shim added a read-only property that XTTS tried to write | Removed property shim; source patch is sufficient | [tts_lab_shims.py](tts_lab_shims.py) |
+| **parler** | `PermissionError` loading model | Service runs as root; HF hub cache owned by user `arthur` | Resolve local snapshot path directly, bypass hub auth | [tts_lab_engines.py](tts_lab_engines.py) |
+| **xtts** | `property has no setter` crash on load | Shared `GenerationConfig` property shim had no setter | Removed conflicting shim from startup | [tts_lab_shims.py](tts_lab_shims.py) |
+| **indextts** | `cannot import name 'IndexTTS' from 'indextts.infer_v2'` | IndexTTS v2 renamed class to `IndexTTS2` | `from indextts.infer_v2 import IndexTTS2 as IndexTTS` | [tts_lab_engines.py](tts_lab_engines.py) |
+| **indextts** | `AttributeError: 'IndexTTS2' object has no attribute 'load_model'` | IndexTTS v2 loads weights in `__init__`, no separate `load_model()` | Removed `model.load_model()` call | [tts_lab_engines.py](tts_lab_engines.py) |
+| **indextts** | `ImportError: cannot import name 'SequenceSummary'` | `SequenceSummary` removed from `transformers` in 4.51 | Added `SequenceSummary` stub to `modeling_utils.py` | [patch_transformers_stubs.py](patch_transformers_stubs.py) |
+| **qwen3tts** | `ModuleNotFoundError: No module named 'transformers.masking_utils'` | `masking_utils` added in `transformers 4.54`, we have 4.53 | Created `masking_utils.py` stub in site-packages | [patch_transformers_stubs.py](patch_transformers_stubs.py) |
+| **qwen3tts** | `ModuleNotFoundError: No module named 'transformers.modeling_layers'` | `modeling_layers` added in `transformers 4.54` | Created `modeling_layers.py` stub in site-packages | [patch_transformers_stubs.py](patch_transformers_stubs.py) |
+| **qwen3tts** | `ImportError: cannot import name 'GeneralInterface'` | `GeneralInterface` base class missing from `utils.generic` in 4.53 | Added `GeneralInterface` class to `generic.py` shim | [fix_transformers_shims.py](fix_transformers_shims.py) |
+| **qwen3tts** | `AttributeError: 'Qwen3TTSSpeakerEncoderConfig' has no '_attn_implementation_autoset'` | Config subclass not calling `super().__init__()` correctly with 4.53 | Set attribute via shim at import time | [tts_lab_shims.py](tts_lab_shims.py) |
+| **openvoice** | `Cannot copy out of meta tensor` on load | `ToneColorConverter` sub-modules initialised on meta device | Iterate all sub-modules, replace `.is_meta` params with empty tensors before `load_ckpt()` | [tts_lab_engines.py](tts_lab_engines.py) |
+| **cosyvoice** | `set_audio_backend` removed in `torchaudio 2.1+` | API removed upstream | Set `TORCHAUDIO_USE_BACKEND_DISPATCHER=0` env var before import | [patch_torchaudio.py](patch_torchaudio.py) |
+| **cosyvoice** | `NameError: name '_np' is not defined` | Typo in `_synth_cosyvoice()` | Renamed `_np` → `np` | [tts_lab_engines.py](tts_lab_engines.py) |
+| **bark** | Shows 🔴 missing despite being installed | `_check_available()` incorrectly flagged bark as GPU-required | Removed `bark` from `_GPU_REQUIRED` set — it runs on CPU | [tts_lab_dispatch.py](tts_lab_dispatch.py) |
+| **outetts** | Shows 🔴 missing despite being installed | Same as bark — wrongly in `_GPU_REQUIRED` set | Removed `outetts` from `_GPU_REQUIRED` set | [tts_lab_dispatch.py](tts_lab_dispatch.py) |
+| **all engines** | `auto_docstring` / `check_model_inputs` `ImportError` | Decorators added in `transformers 4.54`, absent in 4.53 | Shim both decorators into `utils/__init__.py` and `utils/generic.py` | [fix_transformers_shims.py](fix_transformers_shims.py) |
+| **all engines** | 48 `WARNING: Ignoring invalid distribution ~xxx` on every pip call | Interrupted pip upgrades left tilde-prefixed ghost `.dist-info` dirs | `find … -name '~*' -exec rm -rf` in Phase 1 bootstrap | [deploy_lab.ps1](deploy_lab.ps1) |
+
+---
+
 ## Testing
 
 ### Quick synthesis test — [quick_test.sh](quick_test.sh)
