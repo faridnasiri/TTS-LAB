@@ -29,6 +29,10 @@ def check_model_inputs(*args, **kwargs):
     if len(args) == 1 and callable(args[0]):
         return args[0]
     return lambda fn: fn
+
+class GeneralInterface:
+    \"\"\"Shim for transformers>=4.54 GeneralInterface base class used by masking_utils.\"\"\"
+    pass
 """
     with open(path, 'w') as f:
         f.write(base + shim)

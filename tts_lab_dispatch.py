@@ -61,9 +61,8 @@ def _check_available(name: str) -> Tuple[bool, str]:
     if pkg and not ilu.find_spec(pkg):
         return False, f"pip install {pkg} needed"
 
-    # 2. GPU-required engines
-    _GPU_REQUIRED = {"outetts", "bark", "orpheus"}
-    if name in _GPU_REQUIRED:
+    # 2. GPU-required engines (orpheus only — bark/outetts run fine on CPU)
+    if name == "orpheus":
         try:
             import torch
             if not torch.cuda.is_available():
