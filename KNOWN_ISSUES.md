@@ -1,29 +1,28 @@
 # Arthur TTS Lab — Known Issues & Next Steps
 
-## Engines requiring fixes (as of 2026-04-25)
+## Engines fixed (as of 2026-04-25 session 2)
 
-### indextts — `IndexTTS2` has no `load_model()`
-- **Error:** `AttributeError: 'IndexTTS2' object has no attribute 'load_model'`
-- **Cause:** IndexTTS v2 renamed/removed the `load_model()` method; initialisation now happens in `__init__`
-- **Fix needed in:** `tts_lab_engines.py` → `_load_indextts()` — remove the `model.load_model()` call
-- **Investigate:** `python3 -c "from indextts.infer_v2 import IndexTTS2; help(IndexTTS2.__init__)"`
+### indextts — ✅ FIXED
+- **Was:** `AttributeError: 'IndexTTS2' object has no attribute 'load_model'`
+- **Fix applied:** Removed `model.load_model()` from `_load_indextts()` in `tts_lab_engines.py`
+- **Verified:** `IndexTTS2` has no `load_model` method; `__init__` loads all weights
 
-### qwen3tts — `_attn_implementation_autoset` missing on config
-- **Error:** `'Qwen3TTSSpeakerEncoderConfig' object has no attribute '_attn_implementation_autoset'`
-- **Cause:** transformers 4.53 sets this in `PretrainedConfig.__init__` at line 302, but qwen_tts's
-  `Qwen3TTSSpeakerEncoderConfig` may be constructing its config without calling `super().__init__()` first.
-- **Fix options:**
-  1. Shim: add `_attn_implementation_autoset = False` as class attribute on the config class at startup
-  2. Patch `qwen_tts/core/models/configuration_qwen3_tts.py` to set the attribute in `__init__`
+### qwen3tts — ✅ FIXED (shim hardened)
+- **Was:** `'Qwen3TTSSpeakerEncoderConfig' object has no attribute '_attn_implementation_autoset'`
+- **Fix applied:** Added class-level shim in `tts_lab_shims.py` — sets `_attn_implementation_autoset = False` on `Qwen3TTSSpeakerEncoderConfig` at startup
+- **Root cause:** Config `__init__` never calls `super().__init__()`, so `PretrainedConfig` never sets the attribute
+
+---
 
 ## Engines not yet installed
 | Engine | Package | Notes |
 |---|---|---|
 | csm | sesame/csm-1b | Gated HF model — needs `huggingface-cli login` |
-| orpheus | `pip install orpheus-speech` | Should be straightforward |
+| orpheus | `pip install orpheus-speech` ✅ installed | Requires CUDA GPU — vllm crashes on CPU-only VM (guarded by `_require_gpu`) |
 | neutts | unknown | Need to identify correct package |
 
 ## Infra notes
-- transformers pinning: consider pinning to `4.53.2` in requirements.txt to prevent future breakage
-- All site-packages patches are re-applied on every deploy via step 4.5 in `deploy_tts_lab.ps1`
+- transformers pinning: pinned to `4.53.2` in requirements.txt
+- All site-packages patches re-applied on every deploy via step 4.5 in `deploy_tts_lab.ps1`
 - VM root disk expanded to 650 GB — no storage pressure
+- E2E test script: `e2e_test.ps1` — run after every deploy to verify all fixes hold
