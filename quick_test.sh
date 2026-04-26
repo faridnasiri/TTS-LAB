@@ -24,6 +24,9 @@ REF_WAV_ENGINES="indextts f5tts openvoice cosyvoice xtts chatterbox fishspeech"
 # Engines that are GPU-only (vllm/CUDA required) — expect graceful fail
 GPU_ONLY_ENGINES="orpheus"
 
+# NOT_AVAIL pattern: these messages in error body → treat as SKIP not FAIL
+NOT_AVAIL_PATTERNS="not available|not configured|not installed|gated|huggingface-cli login|requires a cuda gpu|cuda gpu"
+
 # Slow-loading engines get a longer curl timeout (first load can take 2+ min)
 SLOW_ENGINES="indextts qwen3tts bark dia zonos"
 
@@ -94,9 +97,9 @@ for engine in $ENGINES; do
     ERR=$(get_json_field "$OUT" "error" | cut -c1-90)
     BYTES=$(file_bytes "$OUT")
 
-    # Detect "not available / not configured" 500s → treat as SKIP
+    # Detect "not available / not configured / GPU-only" 500s → treat as SKIP
     IS_NOT_AVAIL=false
-    if echo "$ERR" | grep -qi "not available\|not configured\|not installed\|gated\|huggingface-cli login"; then
+    if echo "$ERR" | grep -qiE "$NOT_AVAIL_PATTERNS"; then
         IS_NOT_AVAIL=true
     fi
 
@@ -107,18 +110,18 @@ for engine in $ENGINES; do
     fi
 
     # ── classify ─────────────────────────────────────────────────────────────
-    if contains "$GPU_ONLY_ENGINES" "$engine"; then
-        # GPU-only: any response is fine as long as it's not a hard crash
+    if $IS_NOT_AVAIL; then
+        # Not available / not installed / GPU-only graceful fail → SKIP
+        yellow "$engine" "" "not available (HTTP $HTTP_CODE) — $ERR"
+        SKIP=$((SKIP+1))
+
+    elif contains "$GPU_ONLY_ENGINES" "$engine"; then
+        # GPU-only catch-all (e.g. no error text but still can't run)
         if [ "$HTTP_CODE" = "000" ]; then
             warn "$engine" "" "timeout — GPU OOM or not loaded"
         else
             yellow "$engine" "" "GPU-only (HTTP $HTTP_CODE) — needs CUDA"
         fi
-        SKIP=$((SKIP+1))
-
-    elif $IS_NOT_AVAIL; then
-        # "Not available" 500 → package not installed
-        yellow "$engine" "" "not installed — $ERR"
         SKIP=$((SKIP+1))
 
     elif [ "$HTTP_CODE" = "503" ]; then
