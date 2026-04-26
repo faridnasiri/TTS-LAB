@@ -78,6 +78,12 @@ ENGINES=$(curl -sf "$BASE_URL/status" 2>/dev/null | python3 -c \
 printf '  %-14s %-6s %6s  %s\n' "ENGINE" "RESULT" "RTF" "INFO"
 printf '  %s\n' "──────────────────────────────────────────────────────"
 
+# Unload all models first so VRAM is clean — test one engine at a time
+for _e in $ENGINES; do
+    curl -s -X DELETE "$BASE_URL/models/$_e" -o /dev/null 2>/dev/null || true
+done
+sleep 2
+
 for engine in $ENGINES; do
     TIMEOUT=90
     if contains "$SLOW_ENGINES" "$engine"; then TIMEOUT=240; fi
@@ -153,6 +159,10 @@ for engine in $ENGINES; do
     fi
 
     rm -f "$OUT" 2>/dev/null || true
+
+    # ── unload + flush VRAM after every engine to prevent accumulation ────────
+    curl -s -X DELETE "$BASE_URL/models/$engine" -o /dev/null 2>/dev/null || true
+    sleep 1
 done
 
 # ── summary ───────────────────────────────────────────────────────────────────
