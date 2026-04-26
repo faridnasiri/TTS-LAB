@@ -358,14 +358,12 @@ if (should_run 6) {
     hdr 6 "Re-apply site-packages compatibility patches"
     info "Idempotent — safe to re-run after any pip upgrade"
 
-    $patches = @"
-source /opt/arthur-bench-env/bin/activate
-python3 /opt/arthur/patch_transformers_stubs.py
-python3 /opt/arthur/fix_transformers_shims.py
-python3 /opt/arthur/patch_parler_tts.py
-echo PHASE6_DONE
-"@
-    $r = vm $patches -nocheck
+    # Use individual vm() calls to avoid CRLF in heredoc strings
+    $r1 = vm "source /opt/arthur-bench-env/bin/activate && python3 /opt/arthur/patch_transformers_stubs.py" -nocheck
+    $r2 = vm "source /opt/arthur-bench-env/bin/activate && python3 /opt/arthur/fix_transformers_shims.py" -nocheck
+    $r3 = vm "source /opt/arthur-bench-env/bin/activate && python3 /opt/arthur/patch_parler_tts.py" -nocheck
+    $r  = "$r1`n$r2`n$r3`nPHASE6_DONE"
+    $r  = vm "source /opt/arthur-bench-env/bin/activate && python3 /opt/arthur/patch_transformers_stubs.py && python3 /opt/arthur/fix_transformers_shims.py && python3 /opt/arthur/patch_parler_tts.py && echo PHASE6_DONE" -nocheck
     $r | Where-Object { $_ -notmatch "^$" } | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
     if ($r -match "PHASE6_DONE") { ok "Phase 6 complete" }
     else                         { warn "Phase 6 had issues" }
