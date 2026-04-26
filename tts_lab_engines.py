@@ -721,8 +721,8 @@ def _load_indextts(model_dir=None):
     else:
         md = _dl("IndexTeam/IndexTTS-2", ignore_patterns=["*.md", "*.txt"])
     cfg = str(Path(md) / "config.yaml")
+    # IndexTTS2 loads all weights in __init__ — no separate load_model() call needed
     model = IndexTTS(cfg_path=cfg, model_dir=md, device=DEVICE)
-    model.load_model()
     return model
 
 def _synth_indextts(inst, text, params):
