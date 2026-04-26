@@ -182,13 +182,46 @@ except ImportError:
     _ml.GradientCheckpointingLayer = _GradCkptLayer
     sys.modules["transformers.modeling_layers"] = _ml
 
-# ── qwen3tts: Qwen3TTSSpeakerEncoderConfig missing _attn_implementation_autoset
-# Its __init__ never calls super().__init__(), so PretrainedConfig never sets it.
-# Fix: inject the attribute as a class-level default before qwen_tts is imported.
+# ── qwen3tts: Qwen3TTSSpeakerEncoderConfig missing _attn_implementation_* attrs
+# Its __init__ never calls super().__init__(), so PretrainedConfig never sets:
+#   _attn_implementation_autoset  (set to False in PretrainedConfig.__init__)
+#   _attn_implementation_internal (set to None via kwargs.pop in PretrainedConfig.__init__)
+# Fix: inject both as class-level defaults before any qwen_tts model import.
 try:
     from qwen_tts.core.models.configuration_qwen3_tts import Qwen3TTSSpeakerEncoderConfig as _Q3Cfg
     if not hasattr(_Q3Cfg, "_attn_implementation_autoset"):
         _Q3Cfg._attn_implementation_autoset = False
+    if not hasattr(_Q3Cfg, "_attn_implementation_internal"):
+        _Q3Cfg._attn_implementation_internal = None
+except Exception:
+    pass
+
+# ── qwen3tts: _merge_generate_kwargs passes temperature/do_sample/max_new_tokens
+# directly to model.generate() as model_kwargs, but transformers 4.53 requires
+# them to be in a GenerationConfig object, not forwarded as model forward kwargs.
+# Fix: monkeypatch _merge_generate_kwargs to wrap generation-only params into a
+# GenerationConfig and return it as a "generation_config" key so the underlying
+# Qwen3TTSForConditionalGeneration.generate() receives them correctly.
+try:
+    from qwen_tts import Qwen3TTSModel as _Q3M
+    from transformers import GenerationConfig as _GenCfg
+
+    _GEN_PARAM_KEYS = frozenset([
+        "do_sample", "temperature", "top_k", "top_p", "repetition_penalty",
+        "max_new_tokens",
+    ])
+
+    _orig_merge = _Q3M._merge_generate_kwargs
+
+    def _patched_merge(self, **kwargs):
+        merged = _orig_merge(self, **kwargs)
+        # Split: generation-config params → GenerationConfig; rest stays as model kwargs
+        gen_params = {k: merged.pop(k) for k in list(merged) if k in _GEN_PARAM_KEYS}
+        if gen_params:
+            merged["generation_config"] = _GenCfg(**gen_params)
+        return merged
+
+    _Q3M._merge_generate_kwargs = _patched_merge
 except Exception:
     pass
 
