@@ -1,16 +1,10 @@
 """
-Patches parler_tts on the server to be compatible with transformers 4.51+:
-
-1. modeling_parler_tts.py: replace _pad/_bos/_eos_token_tensor (removed in
-   transformers 4.51) with inline torch.tensor() calls.
-
-2. configuration_parler_tts.py: skip the text_encoder/audio_encoder/decoder
-   validation when __init__ is called with no args (transformers 4.53+
-   calls ParlerTTSConfig() with no args inside to_diff_dict() to get defaults).
+Patches parler_tts 0.2.3 for transformers 4.51+ compatibility.
+Safe to re-run -- guarded by 'parler_tts_patched_token_tensors' marker.
 """
 import re, sys, ast
 
-# ── 1. modeling_parler_tts.py ─────────────────────────────────────────────────
+# ?? 1. modeling_parler_tts.py ?????????????????????????????????????????????????
 model_path = '/opt/arthur-bench-env/lib/python3.11/site-packages/parler_tts/modeling_parler_tts.py'
 
 with open(model_path) as f:
@@ -18,65 +12,106 @@ with open(model_path) as f:
 
 if 'parler_tts_patched_token_tensors' not in src:
     replacements = [
-        (r'generation_config\._pad_token_tensor', 'torch.tensor(generation_config.pad_token_id)'),
-        (r'generation_config\._bos_token_tensor', 'torch.tensor(generation_config.bos_token_id)'),
-        (r'generation_config\._eos_token_tensor', 'torch.tensor(generation_config.eos_token_id)'),
-        # transformers 4.51+: generation_config.update() returns None, not model_kwargs
+        # _pad/_bos/_eos_token_tensor removed from GenerationConfig in 4.51+
+        (r'generation_config\._pad_token_tensor',
+         'torch.tensor(generation_config.pad_token_id)'),
+        (r'generation_config\._bos_token_tensor',
+         'torch.tensor(generation_config.bos_token_id)'),
+        (r'generation_config\._eos_token_tensor',
+         'torch.tensor(generation_config.eos_token_id)'),
+        # generation_config.update() returns None in 4.51+
         (r'model_kwargs = generation_config\.update\(\*\*kwargs\)',
          'generation_config.update(**kwargs); model_kwargs = kwargs'),
-        # transformers 4.50+: _prepare_attention_mask_for_generation signature changed.
-        # parler calls it as (inputs, pad_tensor, eos_tensor); new signature is
-        # (inputs, generation_config, model_kwargs). Replace the call to avoid
-        # signature mismatch — just build a default all-ones mask instead.
+        # _prepare_attention_mask_for_generation signature changed -- replace with inline mask
         (r'model_kwargs\["attention_mask"\] = self\._prepare_attention_mask_for_generation\(\s*'
-         r'inputs_tensor, torch\.tensor\(generation_config\.pad_token_id\), '
+         r'inputs_tensor,\s*torch\.tensor\(generation_config\.pad_token_id\),\s*'
          r'torch\.tensor\(generation_config\.eos_token_id\)\s*\)',
          'model_kwargs["attention_mask"] = torch.ones('
          'inputs_tensor.shape[:2], dtype=torch.long, device=inputs_tensor.device)'),
-        # transformers 4.50+: _get_initial_cache_position signature changed from
-        # (input_ids, model_kwargs) to (seq_length, device, model_kwargs).
-        # Replace parler's call sites to use the correct new signature.
-        (r'model_kwargs = self\._get_initial_cache_position\(input_ids, model_kwargs\)',
-         'model_kwargs = self._get_initial_cache_position('
-         'input_ids.shape[-1], input_ids.device, model_kwargs)'),
+        # _get_initial_cache_position: make it accept both old (input_ids, model_kwargs)
+        # AND new (seq_length, device, model_kwargs) signatures from GenerationMixin
+        (r'    def _get_initial_cache_position\(self, input_ids, model_kwargs\):',
+         '    def _get_initial_cache_position(self, a, b=None, c=None):\n'
+         '        import torch as _tgc\n'
+         '        if c is None:\n'
+         '            input_ids, model_kwargs = a, b\n'
+         '        else:\n'
+         '            input_ids = _tgc.zeros((1, int(a)), dtype=_tgc.long, device=b)\n'
+         '            model_kwargs = c'),
+        # Add GenerationMixin so generate() works in transformers 4.50+
+        (r'from transformers\.modeling_utils import PreTrainedModel\n',
+         'from transformers.modeling_utils import PreTrainedModel\n'
+         'try:\n'
+         '    from transformers import GenerationMixin as _ParlerGenMixin\n'
+         'except ImportError:\n'
+         '    from transformers.generation.utils import GenerationMixin as _ParlerGenMixin\n'),
+        (r'class ParlerTTSForConditionalGeneration\(PreTrainedModel\):',
+         'class ParlerTTSForConditionalGeneration(PreTrainedModel, _ParlerGenMixin):'),
     ]
     new_src = src
     for pattern, repl in replacements:
         new_src = re.sub(pattern, repl, new_src)
     new_src = new_src.replace('import torch', 'import torch  # parler_tts_patched_token_tensors', 1)
-    ast.parse(new_src)
+    try:
+        ast.parse(new_src)
+    except SyntaxError as e:
+        print(f'SYNTAX ERROR: {e}')
+        sys.exit(1)
     with open(model_path, 'w') as f:
         f.write(new_src)
     count = sum(len(re.findall(p, src)) for p, _ in replacements)
-    print(f'PATCHED modeling ({count} token_tensor replacements)')
+    print(f'PATCHED modeling ({count} replacements)')
 else:
     print('modeling already patched')
 
-# ── 2. configuration_parler_tts.py ───────────────────────────────────────────
+# ?? 2. configuration_parler_tts.py ???????????????????????????????????????????
 cfg_path = '/opt/arthur-bench-env/lib/python3.11/site-packages/parler_tts/configuration_parler_tts.py'
 
 with open(cfg_path) as f:
     cfg_src = f.read()
 
-old = '        if "text_encoder" not in kwargs or "audio_encoder" not in kwargs or "decoder" not in kwargs:\n            raise ValueError("Config has to be initialized with text_encoder, audio_encoder and decoder config")'
-new = (
-    '        if "text_encoder" not in kwargs or "audio_encoder" not in kwargs or "decoder" not in kwargs:\n'
-    '            # Allow no-arg instantiation (transformers 4.51+ calls __init__() with no\n'
-    '            # args inside to_diff_dict() to introspect defaults). Return early with a\n'
-    '            # minimal valid state so repr/logging does not crash.\n'
+OLD_CFG = (
+    '        if "text_encoder" not in kwargs or "audio_encoder" not in kwargs'
+    ' or "decoder" not in kwargs:\n'
+    '            raise ValueError("Config has to be initialized with'
+    ' text_encoder, audio_encoder and decoder config")'
+)
+NEW_CFG = (
+    '        if "text_encoder" not in kwargs or "audio_encoder" not in kwargs'
+    ' or "decoder" not in kwargs:\n'
     '            self.vocab_size = vocab_size\n'
     '            self.prompt_cross_attention = prompt_cross_attention\n'
-    '            return'
+    '            return  # transformers 4.51+: called empty in to_diff_dict()'
 )
 
-if old in cfg_src:
-    new_cfg = cfg_src.replace(old, new, 1)
+if OLD_CFG in cfg_src:
+    new_cfg = cfg_src.replace(OLD_CFG, NEW_CFG, 1)
     ast.parse(new_cfg)
     with open(cfg_path, 'w') as f:
         f.write(new_cfg)
-    print(f'PATCHED configuration (no-arg init guard)')
-elif 'Return early with a' in cfg_src:
+    print('PATCHED configuration')
+elif 'to_diff_dict()' in cfg_src:
     print('configuration already patched')
 else:
     print(f'ERROR: expected string not found in {cfg_path}')
     sys.exit(1)
+
+# ?? 3. modeling_utils stubs ???????????????????????????????????????????????????
+mu_path = '/opt/arthur-bench-env/lib/python3.11/site-packages/transformers/modeling_utils.py'
+with open(mu_path) as f:
+    mu = f.read()
+appends = []
+if 'ALL_ATTENTION_FUNCTIONS' not in mu:
+    appends.append('ALL_ATTENTION_FUNCTIONS = {}')
+if 'class SequenceSummary' not in mu:
+    appends.append(
+        'class SequenceSummary:\n'
+        '    def __init__(self, config=None, **kw): pass\n'
+        '    def __call__(self, *a, **kw): return None\n'
+    )
+if appends:
+    with open(mu_path, 'a') as f:
+        f.write('\n' + '\n'.join(appends) + '\n')
+    print(f'PATCHED modeling_utils ({len(appends)} stubs)')
+else:
+    print('modeling_utils already has all stubs')
