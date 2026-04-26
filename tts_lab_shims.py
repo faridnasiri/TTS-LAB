@@ -138,10 +138,22 @@ except Exception:
     pass
 
 # ── torchaudio: list_audio_backends removed in 2.x (fish-speech calls it) ────
+# Also replace load_with_torchcodec — torchaudio 2.10 ships it but raises
+# RuntimeError when torchcodec is not installed. Using _ta.load() as fallback
+# causes infinite recursion (torchaudio.load calls load_with_torchcodec internally
+# in 2.10). Instead fall back directly to soundfile which has no such loop.
 try:
     import torchaudio as _ta
     if not hasattr(_ta, "list_audio_backends"):
         _ta.list_audio_backends = lambda: ["soundfile"]
+    # Replace unconditionally — avoids RuntimeError and recursion
+    def _load_with_torchcodec_fallback(path, *args, **kwargs):
+        import soundfile as _sf
+        import torch as _torch
+        data, sr = _sf.read(str(path), dtype="float32", always_2d=True)
+        # soundfile returns (samples, channels) — transpose to (channels, samples)
+        return _torch.from_numpy(data.T), sr
+    _ta.load_with_torchcodec = _load_with_torchcodec_fallback
 except Exception:
     pass
 
