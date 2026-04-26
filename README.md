@@ -8,15 +8,14 @@ Compare every major open-source TTS model side-by-side through a single web UI o
 ## Quick Start
 
 ```powershell
-# From Windows dev machine — existing VM (code + patches + restart, ~30 sec):
+# Existing VM — redeploy code + patches + restart (~30 sec):
 cd C:\repos\Spamblocker\tools\tts-lab
 .\deploy_lab.ps1 -Phase 5
 
-# Brand-new blank VM (everything from zero, ~30-60 min):
+# Brand-new blank VM — everything from zero (~30-60 min):
 .\deploy_lab.ps1
 
-# Open in browser:
-# http://192.168.0.87:8001
+# Open in browser: http://192.168.0.87:8001
 ```
 
 ---
@@ -93,7 +92,7 @@ Windows dev machine  ──SCP──►  Ubuntu VM (192.168.0.87)
 
 ---
 
-## Deploy Script — deploy_lab.ps1
+## Deploy Script — [deploy_lab.ps1](deploy_lab.ps1)
 
 Single PowerShell script, 8 idempotent phases. Run from the Windows dev machine.
 
@@ -107,10 +106,10 @@ Single PowerShell script, 8 idempotent phases. Run from the Windows dev machine.
 | 2 | PyTorch (CPU or CUDA) + onnxruntime + soundfile | Already installed |
 | 3 | All 21 engine pip installs (best-effort, logged per engine) | Already installed |
 | 4 | Model downloads - Piper ONNX, Kokoro, Parler, IndexTTS-2 | Models already on disk |
-| 5 | SCP 7 tts_lab_*.py modules + 3 patch scripts to VM | — (always fast, ~30 s) |
+| 5 | SCP 7 `tts_lab_*.py` modules + 3 patch scripts to VM | — (always fast, ~30 s) |
 | 6 | Re-apply transformers/parler_tts compat patches | — (idempotent, always safe) |
-| 7 | Write arthur-lab.service, systemctl enable, restart | — (always needed) |
-| 8 | HTTP 200 check, /status table, Piper smoke-test synthesis | — |
+| 7 | Write `arthur-lab.service`, `systemctl enable`, restart | — (always needed) |
+| 8 | HTTP 200 check, `/status` table, Piper smoke-test synthesis | — |
 
 ```powershell
 .\deploy_lab.ps1              # fresh VM: phases 1-8
@@ -152,38 +151,29 @@ Single PowerShell script, 8 idempotent phases. Run from the Windows dev machine.
 }
 ```
 
-Parameters are engine-specific - unused ones are silently ignored.
+Parameters are engine-specific — unused ones are silently ignored.
 
 ---
 
 ## Source Code Map
 
-```
-tts-lab/
-|
-+-- tts_lab.py              FastAPI app, lifespan, top-level route wiring
-+-- tts_lab_shims.py        Imported FIRST - sys.modules stubs for
-|                              transformers.masking_utils, modeling_layers,
-|                              indextts alias, SequenceSummary stub
-+-- tts_lab_config.py       Model catalogue (MODEL_INFO), all voice lists,
-|                              Arthur presets, per-engine _state dict, paths
-+-- tts_lab_utils.py        Shared helpers: wav_to_bytes(), resample(),
-|                              bytes_to_numpy(), temp file helpers
-+-- tts_lab_engines.py      All 21 engine pairs: _load_X() + _synth_X()
-|                              LOADERS dict, SYNTHERS dict
-+-- tts_lab_dispatch.py     _ensure_loaded(), _do_synth(), _check_available()
-|                              HTTP handler implementations
-+-- tts_lab_ui.py           Full HTML/JS web UI - sidebar, waveform player,
-                               engine tabs, debug log drawer, ref-WAV upload
-```
+| File | Role |
+|---|---|
+| [tts_lab.py](tts_lab.py) | FastAPI app, lifespan, top-level route wiring |
+| [tts_lab_shims.py](tts_lab_shims.py) | **Imported FIRST** — `sys.modules` stubs for `transformers.masking_utils`, `modeling_layers`, `indextts` alias, `SequenceSummary` |
+| [tts_lab_config.py](tts_lab_config.py) | `MODEL_INFO` catalogue, all voice lists, Arthur presets, per-engine `_state` dict, paths |
+| [tts_lab_utils.py](tts_lab_utils.py) | Shared helpers: `wav_to_bytes()`, `resample()`, `bytes_to_numpy()`, temp file helpers |
+| [tts_lab_engines.py](tts_lab_engines.py) | All 21 `_load_X()` + `_synth_X()` pairs, `LOADERS` dict, `SYNTHERS` dict |
+| [tts_lab_dispatch.py](tts_lab_dispatch.py) | `_ensure_loaded()`, `_do_synth()`, `_check_available()`, HTTP handler implementations |
+| [tts_lab_ui.py](tts_lab_ui.py) | Full HTML/JS web UI — sidebar, waveform player, engine tabs, debug log drawer, ref-WAV upload |
 
 ---
 
 ## Compatibility Patch Scripts
 
-Three scripts re-applied on every deploy (Phase 6). All idempotent - guarded by marker strings.
+Three scripts re-applied on every deploy (Phase 6). All idempotent — guarded by marker strings.
 
-### patch_parler_tts.py
+### [patch_parler_tts.py](patch_parler_tts.py)
 Patches `parler_tts` 0.2.3 for `transformers` 4.51+ API breakages:
 
 | Patch | Problem | Fix |
@@ -193,16 +183,16 @@ Patches `parler_tts` 0.2.3 for `transformers` 4.51+ API breakages:
 | `_prepare_attention_mask_for_generation` | Signature changed `(inputs, pad_t, eos_t)` | Replaced with inline `torch.ones(...)` mask |
 | `_get_initial_cache_position` | Signature changed to `(seq_len, device, model_kwargs)` | Shimmed via `(a, b=None, c=None)` |
 | `GenerationMixin` | `PreTrainedModel` no longer inherits it in 4.50 | Added `_ParlerGenMixin` to class MRO |
-| `ParlerTTSConfig.__init__` | Raises if called with no args | Early return - 4.53 calls it empty in `to_diff_dict()` |
+| `ParlerTTSConfig.__init__` | Raises if called with no args | Early return — 4.53 calls it empty in `to_diff_dict()` |
 
-### patch_transformers_stubs.py
+### [patch_transformers_stubs.py](patch_transformers_stubs.py)
 Creates missing modules present in `transformers 4.54+` but absent in `4.53.2`:
 
-- `transformers/masking_utils.py` - stub with `create_masks_for_generate()`
-- `transformers/modeling_layers.py` - stub with `GradientCheckpointingLayer`
-- `transformers/modeling_utils.py` - appends `SequenceSummary` + `ALL_ATTENTION_FUNCTIONS`
+- `transformers/masking_utils.py` — stub with `create_masks_for_generate()`
+- `transformers/modeling_layers.py` — stub with `GradientCheckpointingLayer`
+- `transformers/modeling_utils.py` — appends `SequenceSummary` + `ALL_ATTENTION_FUNCTIONS`
 
-### fix_transformers_shims.py
+### [fix_transformers_shims.py](fix_transformers_shims.py)
 Patches `transformers/utils/__init__.py` and `transformers/utils/generic.py`:
 
 - `auto_docstring()` decorator shim (added in 4.54)
@@ -213,66 +203,66 @@ Patches `transformers/utils/__init__.py` and `transformers/utils/generic.py`:
 
 ## Testing
 
-### Quick synthesis test (fast engines, ~2 min)
+### Quick synthesis test — [quick_test.sh](quick_test.sh)
 ```sh
 scp -i ~/.ssh/id_arthur_vm quick_test.sh arthur@192.168.0.87:/tmp/
 ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87 "bash /tmp/quick_test.sh"
 ```
 
-### Slow-loading engines (5-min timeout each)
+### Slow-loading engines — [test_slow_engines.sh](test_slow_engines.sh)
 ```sh
 scp -i ~/.ssh/id_arthur_vm test_slow_engines.sh arthur@192.168.0.87:/tmp/
 ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87 "bash /tmp/test_slow_engines.sh"
 ```
 
-### Full E2E test suite (10 sections, from Windows)
+### Full E2E test suite — [e2e_test.ps1](e2e_test.ps1)
 ```powershell
 .\e2e_test.ps1
 .\e2e_test.ps1 -VM 10.0.0.5
 ```
 
-E2E sections: SSH, service health, HTTP 200, /status, fix verifications (2),
+E2E sections: SSH, service health, HTTP 200, `/status`, fix verifications (2),
 synthesis tests, ref-WAV engine checks, GPU engine graceful-fail, journal crash scan.
 
 ---
 
 ## Known Issues
 
-See `KNOWN_ISSUES.md` for full detail.
+See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for full detail.
 
 | Engine | Issue | Fix needed |
 |---|---|---|
-| `csm` | Package not installed - gated HF model | `huggingface-cli login` then install |
-| `orpheus` | Needs CUDA - not available on this CPU VM | Install on GPU VM |
-| `neutts` | `_load_neutts()` raises NotImplementedError | Identify package + implement |
-| `qwen3tts` | `_attn_implementation_autoset` intermittent | Shim in `tts_lab_shims.py` |
+| `csm` | Package not installed — gated HF model | `huggingface-cli login` then install |
+| `orpheus` | Needs CUDA — not available on this CPU VM | Install on GPU VM |
+| `neutts` | `_load_neutts()` raises `NotImplementedError` | Identify package + implement |
+| `qwen3tts` | `_attn_implementation_autoset` intermittent | Shim in [tts_lab_shims.py](tts_lab_shims.py) |
 
 ---
 
 ## Benchmark Results
 
-| Date | Hardware | File |
+| Date | Hardware | Results |
 |---|---|---|
-| 2026-03-26 | CPU baseline | `BENCHMARK_RESULTS_2026-03-26.md` |
-| 2026-04-20 | RTX 5060 Ti 16 GB | `BENCHMARK_RESULTS_2026-04-20_RTX5060Ti.md` |
-| 2026-04-23 | RTX 5060 Ti - Qwen3 SDPA | `BENCHMARK_RESULTS_2026-04-23.md` |
+| 2026-03-26 | CPU baseline | [BENCHMARK_RESULTS_2026-03-26.md](BENCHMARK_RESULTS_2026-03-26.md) |
+| 2026-04-20 | RTX 5060 Ti 16 GB | [BENCHMARK_RESULTS_2026-04-20_RTX5060Ti.md](BENCHMARK_RESULTS_2026-04-20_RTX5060Ti.md) |
+| 2026-04-23 | RTX 5060 Ti — Qwen3 SDPA | [BENCHMARK_RESULTS_2026-04-23.md](BENCHMARK_RESULTS_2026-04-23.md) |
 
 ---
 
 ## Session Notes
 
-| Date | File | Topic |
+| Date | Session | Topic |
 |---|---|---|
-| 2026-03-25 | `SESSION_2026-03-25_CODEBASE_COMPLETION.md` | Initial 13-engine build |
-| 2026-03-25 | `SESSION_2026-03-25_MODEL_EXPANSION_REFERENCE.md` | Model expansion reference |
-| 2026-03-26 | `SESSION_2026-03-26_DEPLOY_AND_STABILITY.md` | Deploy stability, GPU passthrough |
-| 2026-03-26 | `SESSION_2026-03-26_NEW_ENGINES.md` | Engines 14-21 added |
-| 2026-04-21 | `SESSION_2026-04-21_TESTING_FISHSPEECH_INDEXTTS.md` | Fish Speech + IndexTTS |
-| 2026-04-22 | `SESSION_2026-04-22_GPU_FLASH_ATTN.md` | Flash-attn verdict, SM 12.0 |
-| 2026-04-22 | `SESSION_2026-04-22_QWEN3TTS.md` | Qwen3-TTS first integration |
-| 2026-04-23 | `SESSION_2026-04-23_QWEN3TTS_UI_UPGRADE.md` | Qwen3 params + UI sidebar |
-| 2026-04-25 | `SESSION_2026-04-25_ENGINE_FIXES.md` | 7-fix transformers 4.53 marathon |
-| 2026-04-25 | `SESSION_2026-04-25_FIX2_INDEXTTS_QWEN3TTS.md` | IndexTTS v2 + Qwen3 config shim |
+| 2026-03-25 | [SESSION_2026-03-25_CODEBASE_COMPLETION.md](SESSION_2026-03-25_CODEBASE_COMPLETION.md) | Initial 13-engine build |
+| 2026-03-25 | [SESSION_2026-03-25_MODEL_EXPANSION_REFERENCE.md](SESSION_2026-03-25_MODEL_EXPANSION_REFERENCE.md) | Model expansion reference |
+| 2026-03-26 | [SESSION_2026-03-26_DEPLOY_AND_STABILITY.md](SESSION_2026-03-26_DEPLOY_AND_STABILITY.md) | Deploy stability, GPU passthrough |
+| 2026-03-26 | [SESSION_2026-03-26_NEW_ENGINES.md](SESSION_2026-03-26_NEW_ENGINES.md) | Engines 14-21 added |
+| 2026-04-21 | [SESSION_2026-04-21_TESTING_FISHSPEECH_INDEXTTS.md](SESSION_2026-04-21_TESTING_FISHSPEECH_INDEXTTS.md) | Fish Speech + IndexTTS debugging |
+| 2026-04-22 | [SESSION_2026-04-22_GPU_FLASH_ATTN.md](SESSION_2026-04-22_GPU_FLASH_ATTN.md) | Flash-attn verdict, SM 12.0 |
+| 2026-04-22 | [SESSION_2026-04-22_QWEN3TTS.md](SESSION_2026-04-22_QWEN3TTS.md) | Qwen3-TTS first integration |
+| 2026-04-23 | [SESSION_2026-04-23_QWEN3TTS_UI_UPGRADE.md](SESSION_2026-04-23_QWEN3TTS_UI_UPGRADE.md) | Qwen3 params + UI sidebar redesign |
+| 2026-04-25 | [SESSION_2026-04-25_ENGINE_FIXES.md](SESSION_2026-04-25_ENGINE_FIXES.md) | 7-fix transformers 4.53 compat marathon |
+| 2026-04-25 | [SESSION_2026-04-25_FIX2_INDEXTTS_QWEN3TTS.md](SESSION_2026-04-25_FIX2_INDEXTTS_QWEN3TTS.md) | IndexTTS v2 API + Qwen3 config shim |
 
 ---
 
@@ -280,28 +270,30 @@ See `KNOWN_ISSUES.md` for full detail.
 
 | File | Purpose |
 |---|---|
-| `deploy_lab.ps1` | PRIMARY - zero-to-hero 8-phase deploy |
-| `e2e_test.ps1` | Full 10-section end-to-end test suite |
-| `quick_test.sh` | Fast synthesis smoke test (10 engines, 180 s timeout) |
-| `test_slow_engines.sh` | 5-min timeout test for indextts/qwen3tts/openvoice |
-| `tts_benchmark.py` | Automated RTF benchmark across all engines |
-| `bench_all.py` | Batch benchmark runner |
-| `bench_warm.py` | Warm-cache benchmark (excludes load time) |
-| `download_models.sh` | Downloads all model files to /opt/models/ |
-| `requirements.txt` | Core pip dependencies for the lab service |
-| `requirements_benchmark.txt` | Additional benchmark-only dependencies |
-| `fix_tts_env.sh` | Emergency venv repair script |
-| `patch_parler_tts.py` | parler_tts -> transformers 4.51+ compat patches |
-| `patch_transformers_stubs.py` | Creates missing transformers 4.54+ module stubs |
-| `fix_transformers_shims.py` | Patches decorators + GeneralInterface into transformers.utils |
-| `patch_torchaudio.py` | torchaudio backend compat for CosyVoice |
-| `_arthur-lab.service` | Reference systemd unit file |
-| `VM_SETUP_REFERENCE.md` | Proxmox VM setup, disk expansion, network |
-| `GPU_QA_REFERENCE.md` | SM 12.0 (Blackwell) library compatibility table |
-| `GPU_UPGRADE_ANALYSIS.md` | GPU upgrade analysis and flash-attn verdict |
-| `TTS_MODEL_COMPARISON.md` | Side-by-side quality comparison notes |
-| `KNOWN_ISSUES.md` | Current bugs and planned fixes |
-| `archive/` | Old one-off debug scripts (preserved, not in deploy) |
+| [deploy_lab.ps1](deploy_lab.ps1) | **PRIMARY** — zero-to-hero 8-phase deploy |
+| [e2e_test.ps1](e2e_test.ps1) | Full 10-section end-to-end test suite |
+| [quick_test.sh](quick_test.sh) | Fast synthesis smoke test (10 engines, 180 s timeout) |
+| [test_slow_engines.sh](test_slow_engines.sh) | 5-min timeout test for indextts/qwen3tts/openvoice |
+| [tts_benchmark.py](tts_benchmark.py) | Automated RTF benchmark across all engines |
+| [bench_all.py](bench_all.py) | Batch benchmark runner |
+| [bench_warm.py](bench_warm.py) | Warm-cache benchmark (excludes load time) |
+| [download_models.sh](download_models.sh) | Downloads all model files to `/opt/models/` |
+| [requirements.txt](requirements.txt) | Core pip dependencies for the lab service |
+| [requirements_benchmark.txt](requirements_benchmark.txt) | Additional benchmark-only dependencies |
+| [fix_tts_env.sh](fix_tts_env.sh) | Emergency venv repair script |
+| [patch_parler_tts.py](patch_parler_tts.py) | `parler_tts` → `transformers` 4.51+ compat patches |
+| [patch_transformers_stubs.py](patch_transformers_stubs.py) | Creates missing `transformers` 4.54+ module stubs |
+| [fix_transformers_shims.py](fix_transformers_shims.py) | Patches decorators + `GeneralInterface` into `transformers.utils` |
+| [patch_torchaudio.py](patch_torchaudio.py) | `torchaudio` backend compat for CosyVoice |
+| [_arthur-lab.service](_arthur-lab.service) | Reference systemd unit file |
+| [VM_SETUP_REFERENCE.md](VM_SETUP_REFERENCE.md) | Proxmox VM setup, disk expansion, network |
+| [GPU_QA_REFERENCE.md](GPU_QA_REFERENCE.md) | SM 12.0 (Blackwell) library compatibility table |
+| [GPU_UPGRADE_ANALYSIS.md](GPU_UPGRADE_ANALYSIS.md) | GPU upgrade analysis and flash-attn verdict |
+| [TTS_MODEL_COMPARISON.md](TTS_MODEL_COMPARISON.md) | Side-by-side quality comparison notes v1 |
+| [TTS_MODEL_COMPARISON2.md](TTS_MODEL_COMPARISON2.md) | Side-by-side quality comparison notes v2 |
+| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Current bugs and planned fixes |
+| [SESSION_SUMMARY.md](SESSION_SUMMARY.md) | Rolling cross-session summary |
+| [archive/](archive/) | Old one-off debug scripts (preserved, not deployed) |
 
 ---
 
@@ -313,19 +305,19 @@ See `KNOWN_ISSUES.md` for full detail.
 | `HF_HOME` | `/opt/models/huggingface` | HF model cache on data disk |
 | `XDG_CACHE_HOME` | `/opt/models/cache` | General cache on data disk |
 | `SUNO_USE_SMALL_MODELS` | `False` | Use full Bark models |
-| `CUDA_VISIBLE_DEVICES` | (empty) | Hide GPU - force CPU on this VM |
+| `CUDA_VISIBLE_DEVICES` | *(empty)* | Hide GPU — force CPU on this VM |
 | `TOKENIZERS_PARALLELISM` | `false` | Suppress tokenizer fork warning |
-| `HF_TOKEN` | (injected from VM keychain) | Access gated HF models |
+| `HF_TOKEN` | *(injected from VM keychain)* | Access gated HF models |
 
 ---
 
 ## Adding a New Engine
 
-1. Add entry to `MODEL_INFO` dict in `tts_lab_config.py`
-2. Add key to `MODEL_ORDER` list in `tts_lab_config.py`
-3. Add `_load_xxx()` and `_synth_xxx()` in `tts_lab_engines.py`
-4. Register both in `LOADERS` and `SYNTHERS` dicts at the bottom of `tts_lab_engines.py`
-5. Add package name to `pkg_map` in `_check_available()` in `tts_lab_dispatch.py`
+1. Add entry to `MODEL_INFO` dict in [tts_lab_config.py](tts_lab_config.py)
+2. Add key to `MODEL_ORDER` list in [tts_lab_config.py](tts_lab_config.py)
+3. Add `_load_xxx()` and `_synth_xxx()` in [tts_lab_engines.py](tts_lab_engines.py)
+4. Register both in `LOADERS` and `SYNTHERS` dicts at bottom of [tts_lab_engines.py](tts_lab_engines.py)
+5. Add package name to `pkg_map` in `_check_available()` in [tts_lab_dispatch.py](tts_lab_dispatch.py)
 6. Deploy: `.\deploy_lab.ps1 -Phase 5`
 
 ---
@@ -345,7 +337,7 @@ ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87
 sudo journalctl -u arthur-lab -f
 sudo journalctl -u arthur-lab -n 50 --no-pager
 
-# Restart
+# Restart service
 sudo systemctl restart arthur-lab
 
 # Re-apply patches manually (after pip upgrade)
@@ -357,7 +349,7 @@ python3 /opt/arthur/patch_parler_tts.py
 # Check all 21 engines
 curl -s http://localhost:8001/status | python3 -m json.tool
 
-# Refresh availability badges (no restart)
+# Refresh availability badges without restarting
 curl -sX POST http://localhost:8001/refresh | python3 -m json.tool
 
 # Quick synthesis test
