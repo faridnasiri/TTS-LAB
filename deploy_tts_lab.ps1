@@ -164,9 +164,15 @@ if (-not $SkipInstall) {
 # ── 6. restart arthur-lab ─────────────────────────────────────────────────────
 hdr "6 — Patch service file + restart arthur-lab.service (port 8001)"
 # Ensure CUDA is hidden from all ML libs (prevents SEGV on CPU-only VM)
+# Also inject HF_TOKEN so gated models (orpheus etc.) can be accessed by root
 $svcPatch = @'
 sudo grep -q "CUDA_VISIBLE_DEVICES" /etc/systemd/system/arthur-lab.service || sudo sed -i '/^Environment=COQUI_TOS_AGREED/a Environment=CUDA_VISIBLE_DEVICES=' /etc/systemd/system/arthur-lab.service
 sudo grep -q "TOKENIZERS_PARALLELISM" /etc/systemd/system/arthur-lab.service || sudo sed -i '/^Environment=CUDA_VISIBLE_DEVICES/a Environment=TOKENIZERS_PARALLELISM=false' /etc/systemd/system/arthur-lab.service
+HF_TOKEN=$(cat /home/arthur/.cache/huggingface/token /root/.cache/huggingface/token 2>/dev/null | head -1)
+if [ -n "$HF_TOKEN" ]; then
+  sudo grep -q "^Environment=HF_TOKEN" /etc/systemd/system/arthur-lab.service \
+    || sudo sed -i "/^Environment=HF_HOME/a Environment=HF_TOKEN=$HF_TOKEN" /etc/systemd/system/arthur-lab.service
+fi
 '@
 vm $svcPatch -nocheck
 vm "sudo systemctl daemon-reload"

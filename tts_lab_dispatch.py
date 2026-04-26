@@ -71,20 +71,21 @@ def _check_available(name: str) -> Tuple[bool, str]:
         except ImportError:
             pass
 
-    # 3. Orpheus — gated model check
+    # 3. Orpheus — gated model check (authenticated, uses cached HF token)
     if name == "orpheus":
         if not ilu.find_spec("orpheus_tts"):
             return False, "pip install orpheus-speech"
         try:
-            import urllib.request, urllib.error
-            req = urllib.request.Request(
-                "https://huggingface.co/canopylabs/orpheus-3b-0.1-ft/resolve/main/config.json")
-            with urllib.request.urlopen(req, timeout=5): pass
-        except urllib.error.HTTPError as _e:
-            if _e.code in (401, 403):
-                return False, "canopylabs/orpheus-3b-0.1-ft is gated — run: huggingface-cli login"
+            from huggingface_hub import hf_hub_download as _hf_dl
+            from huggingface_hub.errors import GatedRepoError as _GatedErr
+            _hf_dl("canopylabs/orpheus-3b-0.1-ft", "config.json",
+                   local_files_only=False, local_dir="/tmp/_orpheus_check")
+        except _GatedErr:
+            return False, ("canopylabs/orpheus-3b-0.1-ft is gated — "
+                           "request access at https://huggingface.co/canopylabs/orpheus-3b-0.1-ft "
+                           "then run: huggingface-cli login")
         except Exception:
-            pass
+            pass  # network error or already cached — let the load attempt proceed
 
     # 4. Engine-specific file / directory checks
     if name == "piper":
