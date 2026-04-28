@@ -1,82 +1,108 @@
+###############################################################################
+# deploy.ps1 — TTS-LAB repo
+#
+# Deploys the 21-engine TTS Lab (tts_lab*.py) to the arthur VM (port 8001).
+# arthur_server.py (port 8000) is owned by C:\repos\Spamblocker — deploy it
+# with: C:\repos\Spamblocker\tools\arthur_server\deploy.ps1
+#
+# Usage:
+#   .\deploy.ps1              # copy files only
+#   .\deploy.ps1 -Restart     # copy files + restart arthur-lab.service
+#   .\deploy.ps1 -ServiceFile # also sync _arthur-lab.service → systemd
+###############################################################################
 param(
-    [string]$VM   = "192.168.0.87",   # Ubuntu VM (not the Hyper-V host at .153)
-    [string]$User = "arthur",
-    [string]$Key  = "$env:USERPROFILE\.ssh\id_arthur_vm"
+    [string]$VM          = "192.168.0.87",
+    [string]$User        = "arthur",
+    [string]$Key         = "$env:USERPROFILE\.ssh\id_arthur_vm",
+    [switch]$Restart,
+    [switch]$ServiceFile
 )
 
-$root = Split-Path $PSScriptRoot -Parent
+$ErrorActionPreference = "Stop"
+$here = $PSScriptRoot
 
-if (-not (Test-Path $Key)) {
-    Write-Error "SSH key not found: $Key"
-    exit 1
-}
-
-Write-Host ""
-Write-Host "=== Deploying Arthur Server to $User@$VM ===" -ForegroundColor Cyan
-Write-Host "    Key: $Key" -ForegroundColor DarkGray
-
-if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) {
-    Write-Error "ssh not found. Install OpenSSH (built into Windows 10+)."
-    exit 1
-}
+if (-not (Test-Path $Key))  { Write-Error "SSH key not found: $Key"; exit 1 }
+if (-not (Get-Command ssh -ErrorAction SilentlyContinue)) { Write-Error "ssh not in PATH"; exit 1 }
 
 function Invoke-Remote([string]$cmd) {
     Write-Host "  >> $cmd" -ForegroundColor DarkGray
     ssh -i $Key -o StrictHostKeyChecking=no "${User}@${VM}" $cmd
+    if ($LASTEXITCODE -ne 0) { throw "Remote command failed: $cmd" }
 }
 
 function Send-File([string]$local, [string]$remote) {
     Write-Host "  COPY $(Split-Path $local -Leaf) → $remote" -ForegroundColor DarkGray
     scp -i $Key -o StrictHostKeyChecking=no $local "${User}@${VM}:${remote}"
+    if ($LASTEXITCODE -ne 0) { throw "scp failed: $local" }
 }
 
-# ── 1. Create target dirs ──────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "--- Step 1: Creating directories ---" -ForegroundColor Yellow
-Invoke-Remote "sudo mkdir -p /opt/arthur && sudo chmod 777 /opt/arthur"
+# Files this repo owns on the VM (arthur_server.py is NOT in this list)
+$labFiles = @(
+    "tts_lab.py",
+    "tts_lab_config.py",
+    "tts_lab_dispatch.py",
+    "tts_lab_engines.py",
+    "tts_lab_shims.py",
+    "tts_lab_ui.py",
+    "tts_lab_utils.py",
+    "bench_all.py",
+    "bench_warm.py",
+    "patch_parler_tts.py",
+    "patch_torchaudio.py",
+    "patch_torchaudio_init.py",
+    "patch_transformers_stubs.py",
+    "fix_transformers_shims.py"
+)
 
-# ── 2. Copy files ──────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "--- Step 2: Copying files ---" -ForegroundColor Yellow
-Send-File "$root\arthur_server\arthur_server.py"          "/opt/arthur/arthur_server.py"
-Send-File "$root\arthur_server\requirements.txt"          "/tmp/requirements.txt"
-Send-File "$root\arthur_server\setup_vm.sh"               "/tmp/setup_vm.sh"
-Send-File "$root\arthur_server\tts_benchmark.py"          "/opt/arthur/tts_benchmark.py"
-Send-File "$root\arthur_server\requirements_benchmark.txt" "/opt/arthur/requirements_benchmark.txt"
-Send-File "$root\arthur_server\run_benchmark.sh"          "/opt/arthur/run_benchmark.sh"
-Send-File "$root\arthur_server\download_models.sh"        "/opt/arthur/download_models.sh"
-Send-File "$root\arthur_server\tts_lab.py"                "/opt/arthur/tts_lab.py"
-Send-File "$root\arthur_server\setup_tts_lab.sh"          "/opt/arthur/setup_tts_lab.sh"
+Write-Host "=== Deploying TTS-LAB → $User@$VM ===" -ForegroundColor Cyan
 
-# ── 3. Run setup script ────────────────────────────────────────────────────────
-Write-Host ""
-Write-Host "--- Step 3: Running setup_vm.sh (this takes a few minutes) ---" -ForegroundColor Yellow
-Invoke-Remote "chmod +x /tmp/setup_vm.sh && sudo /tmp/setup_vm.sh"
+# ── 1. Ensure target dir ──────────────────────────────────────────────────────
+Invoke-Remote "sudo mkdir -p /opt/arthur && sudo chown arthur:arthur /opt/arthur"
 
-# ── 4. Verify service ──────────────────────────────────────────────────────────
+# ── 2. Copy TTS Lab files ─────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "--- Step 4: Checking service status ---" -ForegroundColor Yellow
-Invoke-Remote "sudo systemctl status arthur --no-pager -l | head -20"
+Write-Host "--- Copying TTS Lab files ---" -ForegroundColor Yellow
+foreach ($f in $labFiles) {
+    $local = Join-Path $here $f
+    if (Test-Path $local) {
+        Send-File $local "/opt/arthur/$f"
+    } else {
+        Write-Warning "Skipping missing file: $f"
+    }
+}
 
-# ── 5. Test endpoint ───────────────────────────────────────────────────────────
+# ── 3. Optionally deploy service unit file ────────────────────────────────────
+if ($ServiceFile) {
+    Write-Host ""
+    Write-Host "--- Deploying arthur-lab.service unit file ---" -ForegroundColor Yellow
+    Send-File "$here\_arthur-lab.service" "/tmp/arthur-lab.service"
+    Invoke-Remote "sudo cp /tmp/arthur-lab.service /etc/systemd/system/arthur-lab.service && sudo systemctl daemon-reload"
+    Write-Host "  service unit updated" -ForegroundColor Green
+}
+
+# ── 4. Optionally restart the service ─────────────────────────────────────────
+if ($Restart) {
+    Write-Host ""
+    Write-Host "--- Restarting arthur-lab.service ---" -ForegroundColor Yellow
+    Invoke-Remote "sudo systemctl restart arthur-lab"
+    Start-Sleep -Seconds 4
+}
+
+# ── 5. Status + smoke test ────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "--- Step 5: Testing HTTP endpoint (should return 200) ---" -ForegroundColor Yellow
-Invoke-Remote "curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/incoming-call -X POST"
+Write-Host "--- arthur-lab.service status ---" -ForegroundColor Yellow
+Invoke-Remote "sudo systemctl status arthur-lab --no-pager -l | head -15"
+
+Write-Host ""
+Write-Host "--- Smoke test (GET /status → expect HTTP 200) ---" -ForegroundColor Yellow
+Invoke-Remote "curl -s -o /dev/null -w 'HTTP %{http_code}' http://localhost:8001/status"
 
 Write-Host ""
 Write-Host "=== DONE ===" -ForegroundColor Green
-Write-Host "Next steps:" -ForegroundColor Cyan
-Write-Host "  1. On VM: cloudflared tunnel login" -ForegroundColor White
-Write-Host "  2. On VM: cloudflared tunnel create arthur" -ForegroundColor White
-Write-Host "  3. On VM: cloudflared tunnel route dns arthur arthur.YOURDOMAIN.com" -ForegroundColor White
-Write-Host "  4. On VM: sudo systemctl start cloudflared-arthur" -ForegroundColor White
-Write-Host "  5. Telnyx webhook: https://arthur.YOURDOMAIN.com/incoming-call" -ForegroundColor White
-Write-Host "  6. Update Secrets.cs: AiBridgeNumber = your Telnyx number" -ForegroundColor White
 Write-Host ""
-Write-Host "To run TTS benchmark on the VM:" -ForegroundColor Cyan
-Write-Host "  ssh arthur@192.168.0.87 'sudo bash /opt/arthur/run_benchmark.sh'" -ForegroundColor White
-Write-Host "  # Then copy WAVs to Windows to listen:" -ForegroundColor DarkGray
-Write-Host "  scp arthur@192.168.0.87:/tmp/tts_bench/*.wav ." -ForegroundColor White
+Write-Host "  TTS Lab files  → /opt/arthur/tts_lab*.py  (port 8001)" -ForegroundColor White
+Write-Host "  arthur_server  → C:\repos\Spamblocker\tools\arthur_server\deploy.ps1" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "To launch the TTS Lab web UI:" -ForegroundColor Cyan
 Write-Host "  ssh arthur@192.168.0.87 'sudo bash /opt/arthur/setup_tts_lab.sh'" -ForegroundColor White
