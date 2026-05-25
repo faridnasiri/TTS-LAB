@@ -129,9 +129,10 @@ def save_nvfp4_transformer(label: str, hf_repo: str, subfolder: str, out_dir: st
     t0 = time.time()
     quant_config = TorchAoConfig(NVFP4WeightOnlyConfig())
 
-    # device_map="auto" splits across GPU (16 GB) + CPU RAM (32 GB) = 48 GB addressable,
-    # which is necessary for the 32 GB FLUX.2-dev BF16 transformer.
-    # Smaller models (SD3.5, Wan) fit in CPU RAM alone so "auto" is still safe there.
+    # IMPORTANT: the service must be stopped (or GPU must be free) before running this.
+    # device_map="auto" enables NVFP4 quantization on CUDA (required — CPU-only fails silently).
+    # If the GPU is occupied, accelerate will disk-offload some layers which saves them as
+    # meta (empty) tensors — the meta tensor guard below will catch this and abort.
     try:
         transformer = AutoModel.from_pretrained(
             hf_repo,
@@ -144,6 +145,26 @@ def save_nvfp4_transformer(label: str, hf_repo: str, subfolder: str, out_dir: st
         )
     except Exception as exc:
         print(f"[{label}] ERROR during load: {exc}", flush=True)
+        shutil.rmtree(cache_dir, ignore_errors=True)
+        return False
+
+    # Guard: refuse to save if any tensors are still on meta device.
+    # Meta tensors mean the GPU was occupied and accelerate disk-offloaded some layers.
+    # That would produce a corrupted checkpoint (weights with no data).
+    # FIX: stop the arthur-imglab service before running this script.
+    meta_keys = [n for n, p in transformer.named_parameters()
+                 if hasattr(p, "is_meta") and p.is_meta]
+    if meta_keys:
+        print(
+            f"[{label}] ERROR: {len(meta_keys)} meta tensors detected after load — "
+            "the GPU was not free during quantization.  "
+            "Stop the arthur-imglab service and retry.",
+            flush=True,
+        )
+        del transformer
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         shutil.rmtree(cache_dir, ignore_errors=True)
         return False
 
