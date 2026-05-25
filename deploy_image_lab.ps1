@@ -139,6 +139,9 @@ Run-Phase 3 "Engine Python packages" {
     # Requests (remote T5 encoder for FLUX.2)
     Invoke-SSH "$pip install requests -q"
 
+    # GGUF loading support (required for SD3.5 and FLUX.2 GGUF checkpoints)
+    Invoke-SSH "$pip install 'gguf>=0.10.0' -q"
+
     Write-Host "  All packages installed."
 }
 
