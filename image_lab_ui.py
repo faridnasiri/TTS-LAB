@@ -28,7 +28,7 @@ UI_HTML = r"""<!DOCTYPE html>
   /* ---- Layout ---- */
   .shell { display: grid; grid-template-columns: 300px 1fr; height: 100vh; overflow: hidden; }
   .sidebar { background: var(--panel); border-right: 1px solid var(--border);
-             display: flex; flex-direction: column; overflow-y: auto; }
+             display: flex; flex-direction: column; overflow: hidden; }
   .main    { display: flex; flex-direction: column; overflow: hidden; }
 
   /* ---- Header ---- */
@@ -51,7 +51,7 @@ UI_HTML = r"""<!DOCTYPE html>
                        color: var(--muted); font-weight: 400; }
 
   /* ---- Params ---- */
-  .params-area { flex: 1; overflow-y: auto; padding: 16px; }
+  .params-area { flex: 1; overflow-y: auto; padding: 16px; min-height: 0; }
   .param-group { margin-bottom: 14px; }
   .param-group label { display: block; font-size: 12px; color: var(--muted);
                         margin-bottom: 5px; font-weight: 500; }
@@ -329,7 +329,11 @@ async function refreshStatus() {
     // Update tab availability dots
     for (const e of s.engines) {
       const el = document.getElementById('tab-' + e.key);
-      if (el) el.querySelector('.badge').textContent = e.available ? '✓ available' : '✗ unavailable';
+      if (el) {
+        const badge = el.querySelector('.badge');
+        badge.textContent = e.available ? '✓ available' : '✗ unavailable';
+        badge.style.color  = e.available ? 'var(--ok)' : 'var(--err)';
+      }
     }
   } catch(e) {
     document.getElementById('statusDot').className = 'status-dot err';
@@ -343,8 +347,8 @@ async function refreshStatus() {
 // ============================================================
 function buildEngineTabs() {
   const tabs = document.getElementById('engineTabs');
-  const keys = ['flux2', 'sd35', 'wan'];
-  const labels = { flux2: 'FLUX.2', sd35: 'SD 3.5', wan: 'Wan2.2' };
+  const keys = ['flux2', 'flux2klein', 'sd35', 'wan'];
+  const labels = { flux2: 'FLUX.2', flux2klein: 'FLUX.2 Klein', sd35: 'SD 3.5', wan: 'Wan2.2' };
   tabs.innerHTML = keys.map(k => `
     <div class="engine-tab" id="tab-${k}" onclick="selectEngine('${k}')">
       ${labels[k]}
@@ -540,6 +544,11 @@ function extractErrorMsg(data, fallback) {
 // Generate
 // ============================================================
 async function doGenerate() {
+  const prompt = (formValues['prompt'] ?? '').trim();
+  if (!prompt) {
+    alert('Please enter a prompt before generating.');
+    return;
+  }
   const btn = document.getElementById('btnGenerate');
   btn.disabled = true;
   const loadedQuant = lastStatus?.active_quant ?? '';
