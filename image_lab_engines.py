@@ -117,6 +117,7 @@ def _load_nvfp4_transformer(model_key: str, subfolder: str):
     return AutoModel.from_pretrained(
         path,
         torch_dtype     = torch.bfloat16,
+        device_map      = "cuda",
         use_safetensors = False,
     )
 
@@ -162,14 +163,18 @@ def _ensure_engine(key: str, quant: str = ""):
 def _load_flux2(quant: str = "Q4_K_M"):
     import torch
     from diffusers import Flux2Pipeline, Flux2Transformer2DModel
-    from transformers import BitsAndBytesConfig as TrfBnBConfig
+    from diffusers.hooks import apply_group_offloading
+    from transformers import AutoModel
 
     quant = quant or "Q4_K_M"
     t0    = time.time()
     token = HF_TOKEN or True
 
+    # ── Transformer ──────────────────────────────────────────────────────────
     if quant == "nvfp4":
         transformer = _load_nvfp4_transformer("flux2", "transformer")
+        # nvfp4 transformer is already on GPU; skip group offloading
+        _apply_transformer_group_offload = False
     else:
         if quant not in _FLUX2_GGUF:
             raise RuntimeError(
@@ -184,34 +189,85 @@ def _load_flux2(quant: str = "Q4_K_M"):
             quantization_config = _gguf_quant_config(),
             torch_dtype         = torch.bfloat16,
         )
+        _apply_transformer_group_offload = True
 
-    # Load the text encoder (Mistral 3.1 8B) in 4-bit NF4 to keep RAM under 31 GB.
-    # Without this, the text encoder alone uses ~15 GB BF16; with NF4 it's ~4 GB.
-    bnb_4bit = TrfBnBConfig(
-        load_in_4bit           = True,
-        bnb_4bit_compute_dtype = torch.bfloat16,
-        bnb_4bit_quant_type    = "nf4",
+    if _apply_transformer_group_offload:
+        # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
+        # Group offloading moves one leaf layer at a time to GPU during forward,
+        # keeping peak VRAM for transformer to ~300-500 MB per step.
+        log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
+        apply_group_offloading(
+            transformer,
+            onload_device  = torch.device("cuda"),
+            offload_device = torch.device("cpu"),
+            offload_type   = "leaf_level",
+            use_stream     = False,
+        )
+
+    # ── Text encoder (Mistral Small 3.1 24B, NF4 pre-quantised) ─────────────
+    # device_map="cpu" with a single destination device does NOT add
+    # AlignDevicesHook (confirmed empirically), so apply_group_offloading
+    # works directly without needing hook removal.
+    log.info("Loading FLUX.2 text encoder (NF4, CPU) …")
+    text_encoder = AutoModel.from_pretrained(
+        ENGINES["flux2"].hf_repo,
+        subfolder  = "text_encoder",
+        device_map = "cpu",
+        dtype      = torch.bfloat16,
+        token      = token,
     )
+    log.info("Applying leaf-level group offloading to text encoder …")
+    try:
+        apply_group_offloading(
+            text_encoder,
+            onload_device  = torch.device("cuda"),
+            offload_device = torch.device("cpu"),
+            offload_type   = "leaf_level",
+            use_stream     = False,
+        )
+    except ValueError as exc:
+        if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
+            log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
+            from accelerate.hooks import remove_hook_from_module
+            remove_hook_from_module(text_encoder, recurse=True)
+            apply_group_offloading(
+                text_encoder,
+                onload_device  = torch.device("cuda"),
+                offload_device = torch.device("cpu"),
+                offload_type   = "leaf_level",
+                use_stream     = False,
+            )
+        else:
+            raise
 
-    # Load the rest of the pipeline (text encoder, VAE, scheduler) from the
-    # cached BnB repo — only the transformer is swapped out for our GGUF version.
-    log.info("Loading FLUX.2 [dev] pipeline (quant=%s) …", quant)
+    # ── Pipeline assembly ────────────────────────────────────────────────────
+    log.info("Loading FLUX.2 [dev] pipeline shell (quant=%s) …", quant)
     pipe = Flux2Pipeline.from_pretrained(
-        ENGINES["flux2"].hf_repo,   # diffusers/FLUX.2-dev-bnb-4bit (already in HF cache)
-        transformer          = transformer,
-        torch_dtype          = torch.bfloat16,
-        quantization_config  = bnb_4bit,
-        token                = token,
+        ENGINES["flux2"].hf_repo,
+        transformer  = transformer,
+        text_encoder = text_encoder,
+        torch_dtype  = torch.bfloat16,
+        token        = token,
     )
-    pipe.enable_model_cpu_offload()
+
+    # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
+    # doesn't block waiting for a CPU→GPU transfer. DO NOT call
+    # enable_model_cpu_offload() here — that would add AlignDevicesHook to the
+    # transformer / text_encoder and conflict with group offloading.
+    log.info("Moving VAE to CUDA …")
+    pipe.vae = pipe.vae.to("cuda")
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
+
+    log.info("CUDA after pipeline ready: %.2f GiB",
+             torch.cuda.memory_allocated() / 1024**3)
 
     STATE.loaded_model  = pipe
     STATE.active_engine = "flux2"
     STATE.active_quant  = quant
     ENGINES["flux2"].loaded = True
-    log.info("FLUX.2 [dev] ready (quant=%s) in %.1f s", quant, time.time() - t0)
+    log.info("FLUX.2 [dev] ready (group-offload leaf-level, quant=%s) in %.1f s",
+             quant, time.time() - t0)
 
 
 def _generate_flux2(params: dict) -> list[dict]:
@@ -222,8 +278,12 @@ def _generate_flux2(params: dict) -> list[dict]:
     if seed == -1:
         seed = random_seed()
 
-    # Use CPU generator — with device_map the pipeline manages device placement
-    generator = torch.Generator("cpu").manual_seed(seed)
+    # Use CUDA generator — group offloading makes transformer.device="cuda",
+    # so the pipeline creates latents on CUDA.
+    generator = torch.Generator("cuda").manual_seed(seed)
+
+    log.info("CUDA allocated before pipe() call: %.2f GiB",
+             torch.cuda.memory_allocated() / 1024**3)
 
     result = pipe(
         prompt              = params["prompt"],
@@ -523,6 +583,52 @@ def probe_availability():
     _probe_flux2klein()
     _probe_sd35()
     _probe_wan()
+    _strip_missing_nvfp4_options()
+
+
+def _nvfp4_shard_size_bytes(transformer_dir: str) -> int:
+    """Return total bytes of all .bin shard files under transformer_dir."""
+    total = 0
+    for fname in os.listdir(transformer_dir) if os.path.isdir(transformer_dir) else []:
+        if fname.endswith(".bin"):
+            total += os.path.getsize(os.path.join(transformer_dir, fname))
+    return total
+
+
+def _strip_missing_nvfp4_options():
+    """Remove the nvfp4 quant choice for any engine whose saved files are missing or corrupted.
+
+    A save is considered corrupted if the total .bin shard size is < MIN_SHARD_BYTES,
+    which catches the meta-tensor bug from nvfp4_save.py when device_map='auto' caused
+    disk offloading and most weights were serialised as empty meta tensors.
+    """
+    # Minimum total .bin shard size (bytes) to consider a save valid.
+    # Corrupted SD3.5 save had 530 MB (only non-meta tensors); valid NVFP4 saves are ≥ 2 GB.
+    MIN_SHARD_BYTES = 1 * 1024 ** 3  # 1 GB
+
+    checks = {
+        "flux2": os.path.join(NVFP4_ROOT, "flux2",   "transformer"),
+        "sd35":  os.path.join(NVFP4_ROOT, "sd35",    "transformer"),
+        "wan":   os.path.join(NVFP4_ROOT, "wan-t2v", "transformer"),
+    }
+    for engine_key, transformer_dir in checks.items():
+        config_path = os.path.join(transformer_dir, "config.json")
+        missing = not os.path.isfile(config_path)
+        if not missing:
+            shard_size = _nvfp4_shard_size_bytes(transformer_dir)
+            if shard_size < MIN_SHARD_BYTES:
+                missing = True
+                log.warning(
+                    "NVFP4 save for %s appears corrupted (shard size %.0f MB < 1 GB) "
+                    "— removing from quant options. Re-run nvfp4_save.py to fix.",
+                    engine_key, shard_size / 1024 ** 2,
+                )
+        if missing:
+            for p in ENGINES[engine_key].params:
+                if p.get("name") == "quant" and "options" in p:
+                    p["options"] = [o for o in p["options"] if o.get("value") != "nvfp4"]
+            if not log.isEnabledFor(logging.WARNING):
+                log.info("NVFP4 not saved for %s — removed from quant options", engine_key)
 
 
 def _probe_flux2():
