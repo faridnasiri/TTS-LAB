@@ -2,6 +2,8 @@
 image_lab_ui.py — Full web UI returned as inline HTML/CSS/JS from GET /.
 """
 
+from image_lab_config import USE_COMFYUI
+
 UI_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -85,6 +87,7 @@ UI_HTML = r"""<!DOCTYPE html>
   .statusbar { padding: 6px 16px; font-size: 11px; color: var(--muted);
                border-bottom: 1px solid var(--border); display: flex; gap: 16px; align-items: center; }
   .status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); display: inline-block; margin-right: 4px; }
+  .comfy-banner { display: none; padding: 10px 16px; background: rgba(79, 70, 229, 0.12); color: #dbeafe; border: 1px solid rgba(129, 140, 248, 0.25); margin: 8px 16px; border-radius: 8px; font-size: 12px; }
   .status-dot.ok   { background: var(--ok); }
   .status-dot.busy { background: var(--warn); animation: pulse 1s infinite; }
   .status-dot.err  { background: var(--err); }
@@ -184,6 +187,8 @@ UI_HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
+
+<div class="comfy-banner" id="comfyBanner">🚀 ComfyUI mode enabled — GPU-only execution is active.</div>
 
 <!-- Spinner overlay -->
 <div class="spinner-overlay" id="spinner">
@@ -740,6 +745,12 @@ function showSpinner(show, msg='') {
   if (msg) document.getElementById('spinnerMsg').textContent = msg;
 }
 
+const USE_COMFYUI = false;
+if (USE_COMFYUI) {
+  const banner = document.getElementById('comfyBanner');
+  if (banner) banner.style.display = 'block';
+}
+
 function switchView(name) {
   document.querySelectorAll('.view-tab').forEach((t,i) => {
     t.classList.toggle('active', ['generate','gallery'][i] === name);
@@ -756,4 +767,7 @@ function switchView(name) {
 
 
 def get_ui_html() -> str:
+    if USE_COMFYUI:
+        return UI_HTML.replace('const USE_COMFYUI = false;', 'const USE_COMFYUI = true;')
+    return UI_HTML
     return UI_HTML

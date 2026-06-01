@@ -15,7 +15,7 @@ import os
 import time
 from typing import Any, Optional
 
-from image_lab_config import ENGINES, STATE, HF_TOKEN, HF_HOME
+from image_lab_config import ENGINES, STATE, HF_TOKEN, HF_HOME, GPU_ONLY
 from image_lab_utils import free_vram, random_seed, save_image, save_images, save_video
 
 # Local directory for cached GGUF model files
@@ -192,39 +192,50 @@ def _load_flux2(quant: str = "Q4_K_M"):
         _apply_transformer_group_offload = True
 
     if _apply_transformer_group_offload:
-        # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
-        # Group offloading moves one leaf layer at a time to GPU during forward,
-        # keeping peak VRAM for transformer to ~300-500 MB per step.
-        log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
-        apply_group_offloading(
-            transformer,
-            onload_device  = torch.device("cuda"),
-            offload_device = torch.device("cpu"),
-            offload_type   = "leaf_level",
-            use_stream     = False,
-        )
+        if GPU_ONLY:
+            log.info("GPU-only mode enabled: moving FLUX.2 transformer to CUDA without group offloading …")
+            transformer = transformer.to("cuda")
+        else:
+            # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
+            # Group offloading moves one leaf layer at a time to GPU during forward,
+            # keeping peak VRAM for transformer to ~300-500 MB per step.
+            log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
+            apply_group_offloading(
+                transformer,
+                onload_device  = torch.device("cuda"),
+                offload_device = torch.device("cpu"),
+                offload_type   = "leaf_level",
+                use_stream     = False,
+            )
 
     # ── Text encoder (Mistral Small 3.1 24B, NF4 pre-quantised) ─────────────
-    # device_map="cpu" with a single destination device does NOT add
-    # AlignDevicesHook (confirmed empirically), so apply_group_offloading
-    # works directly without needing hook removal.
-    log.info("Loading FLUX.2 text encoder (NF4, CPU) …")
-    text_encoder = AutoModel.from_pretrained(
-        ENGINES["flux2"].hf_repo,
-        subfolder  = "text_encoder",
-        device_map = "cpu",
-        dtype      = torch.bfloat16,
-        token      = token,
-    )
-    log.info("Applying leaf-level group offloading to text encoder …")
-    try:
-        apply_group_offloading(
-            text_encoder,
-            onload_device  = torch.device("cuda"),
-            offload_device = torch.device("cpu"),
-            offload_type   = "leaf_level",
-            use_stream     = False,
+    if GPU_ONLY:
+        log.info("Loading FLUX.2 text encoder (NF4) directly on CUDA …")
+        text_encoder = AutoModel.from_pretrained(
+            ENGINES["flux2"].hf_repo,
+            subfolder  = "text_encoder",
+            device_map = "cuda",
+            dtype      = torch.bfloat16,
+            token      = token,
         )
+    else:
+        log.info("Loading FLUX.2 text encoder (NF4, CPU) …")
+        text_encoder = AutoModel.from_pretrained(
+            ENGINES["flux2"].hf_repo,
+            subfolder  = "text_encoder",
+            device_map = "cpu",
+            dtype      = torch.bfloat16,
+            token      = token,
+        )
+        log.info("Applying leaf-level group offloading to text encoder …")
+        try:
+            apply_group_offloading(
+                text_encoder,
+                onload_device  = torch.device("cuda"),
+                offload_device = torch.device("cpu"),
+                offload_type   = "leaf_level",
+                use_stream     = False,
+            )
     except ValueError as exc:
         if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
             log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
@@ -250,12 +261,17 @@ def _load_flux2(quant: str = "Q4_K_M"):
         token        = token,
     )
 
-    # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
-    # doesn't block waiting for a CPU→GPU transfer. DO NOT call
-    # enable_model_cpu_offload() here — that would add AlignDevicesHook to the
-    # transformer / text_encoder and conflict with group offloading.
-    log.info("Moving VAE to CUDA …")
-    pipe.vae = pipe.vae.to("cuda")
+    if GPU_ONLY:
+        log.info("GPU-only mode enabled: moving FLUX.2 [dev] pipeline to CUDA …")
+        pipe = pipe.to("cuda")
+    else:
+        # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
+        # doesn't block waiting for a CPU→GPU transfer. DO NOT call
+        # enable_model_cpu_offload() here — that would add AlignDevicesHook to the
+        # transformer / text_encoder and conflict with group offloading.
+        log.info("Moving VAE to CUDA …")
+        pipe.vae = pipe.vae.to("cuda")
+
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
 
@@ -317,7 +333,11 @@ def _load_flux2klein(quant: str = ""):
         torch_dtype = torch.bfloat16,
         token       = token,
     )
-    pipe.enable_model_cpu_offload()
+    if GPU_ONLY:
+        log.info("GPU-only mode enabled: moving FLUX.2 Klein 4B to CUDA …")
+        pipe = pipe.to("cuda")
+    else:
+        pipe.enable_model_cpu_offload()
     pipe.vae.enable_slicing()
 
     STATE.loaded_model       = pipe
@@ -392,7 +412,11 @@ def _load_sd35(quant: str = "Q4_0"):
         transformer = transformer,
         torch_dtype = torch.bfloat16,
     )
-    pipe.enable_model_cpu_offload()
+    if GPU_ONLY:
+        log.info("GPU-only mode enabled: moving SD 3.5 Large pipeline to CUDA …")
+        pipe = pipe.to("cuda")
+    else:
+        pipe.enable_model_cpu_offload()
     pipe.vae.enable_slicing()
 
     STATE.loaded_model  = pipe
@@ -489,7 +513,11 @@ def _load_wan(quant: str = "Q4_K_M"):
         transformer_2 = t2v_tf2,
         torch_dtype   = torch.bfloat16,
     )
-    pipe_t2v.enable_model_cpu_offload()
+    if GPU_ONLY:
+        log.info("GPU-only mode enabled: moving Wan T2V pipeline to CUDA …")
+        pipe_t2v = pipe_t2v.to("cuda")
+    else:
+        pipe_t2v.enable_model_cpu_offload()
     pipe_t2v.vae.enable_slicing()
 
     # I2V pipeline — same structure, separate weights
@@ -508,7 +536,11 @@ def _load_wan(quant: str = "Q4_K_M"):
             transformer_2 = i2v_tf2,
             torch_dtype   = torch.bfloat16,
         )
-        pipe_i2v.enable_model_cpu_offload()
+        if GPU_ONLY:
+            log.info("GPU-only mode enabled: moving Wan I2V pipeline to CUDA …")
+            pipe_i2v = pipe_i2v.to("cuda")
+        else:
+            pipe_i2v.enable_model_cpu_offload()
         pipe_i2v.vae.enable_slicing()
     except Exception as exc:
         log.warning("Wan I2V load failed (T2V still available): %s", exc)

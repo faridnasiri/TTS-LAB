@@ -28,6 +28,14 @@ HF_TOKEN         = os.environ.get("HF_TOKEN", "")
 PORT             = int(os.environ.get("IMGLAB_PORT", "8002"))
 HOST             = os.environ.get("IMGLAB_HOST", "0.0.0.0")
 
+# Runtime behavior flags
+USE_COMFYUI      = os.environ.get("IMGLAB_USE_COMFYUI", "").lower() in ("1", "true", "yes")
+GPU_ONLY         = os.environ.get("IMGLAB_GPU_ONLY", "").lower() in ("1", "true", "yes")
+NO_MODEL_OFFLOAD = os.environ.get("IMGLAB_NO_MODEL_OFFLOAD", "").lower() in ("1", "true", "yes")
+
+# Normalize GPU-only behavior so either flag works
+GPU_ONLY = GPU_ONLY or NO_MODEL_OFFLOAD
+
 # ---------------------------------------------------------------------------
 # Engine descriptor
 # ---------------------------------------------------------------------------
