@@ -211,20 +211,21 @@ Run-Phase 5 "SCP code files to VM" {
 
     Invoke-SCP -LocalFiles $files -RemoteDest "/opt/arthur-img/"
 
-    # Write .env with HF_TOKEN if provided (use printf to avoid heredoc issues)
+    # Write .env with the runtime environment for the service.
+    # If HF_TOKEN is provided, include it; otherwise still create the file so GPU-only mode is enforced.
+    $envLines = @(
+        "HF_HOME=/opt/arthur-img-models/huggingface",
+        "IMGLAB_MODELS_ROOT=/opt/models/image",
+        "IMGLAB_OUTPUT_ROOT=/opt/arthur-gen",
+        "IMGLAB_PORT=8002",
+        "IMGLAB_GPU_ONLY=1"
+    )
     if ($HFToken) {
-        $envLines = @(
-            "HF_TOKEN=$HFToken",
-            "HF_HOME=/opt/arthur-img-models/huggingface",
-            "IMGLAB_MODELS_ROOT=/opt/models/image",
-            "IMGLAB_OUTPUT_ROOT=/opt/arthur-gen",
-            "IMGLAB_PORT=8002"
-        ) -join '\n'
-        Invoke-SSH "printf '$envLines\n' > /opt/arthur-img/.env && chmod 600 /opt/arthur-img/.env"
-        Write-Host "  .env written with HF_TOKEN."
-    } else {
-        Write-Host "  No HF_TOKEN — .env not written. Set manually if needed."
+        $envLines = @("HF_TOKEN=$HFToken") + $envLines
     }
+    $envText = $envLines -join '\n'
+    Invoke-SSH "printf '$envText\n' > /opt/arthur-img/.env && chmod 600 /opt/arthur-img/.env"
+    Write-Host "  .env written with runtime configuration."
 
     Invoke-SSH "ls -la /opt/arthur-img/"
 }

@@ -27,9 +27,11 @@ import requests
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-API_BASE = "http://localhost:8002"
-OUT_DIR  = Path("/tmp/bench")
-OUT_DIR.mkdir(exist_ok=True)
+API_BASE = os.environ.get("IMGLAB_API_BASE", "http://localhost:8002")
+REQUEST_TIMEOUT = int(os.environ.get("BENCH_TIMEOUT_S", "900"))
+DEFAULT_BENCH_DIR = r"C:\Temp\bench" if os.name == "nt" else "/tmp/bench"
+OUT_DIR = Path(os.environ.get("BENCH_DIR", DEFAULT_BENCH_DIR))
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 PROMPT     = (
     "a photorealistic mountain lake at golden hour, reflections of snow-capped "
@@ -143,7 +145,7 @@ for engine_key, quant, steps, label in RUNS:
         resp = requests.post(
             f"{API_BASE}/generate/{engine_key}",
             data=payload,
-            timeout=900,   # 15 min max (flux2 GGUF cold load can be slow)
+            timeout=REQUEST_TIMEOUT,
         )
         t_end    = time.time()
         total_s  = t_end - t_start

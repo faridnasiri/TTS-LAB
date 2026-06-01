@@ -1206,6 +1206,7 @@ WantedBy=multi-user.target
 
 - **`User=root`**: Required because generating files in `/opt/arthur-gen/`, CUDA driver initialization in some configurations, and potential file permission issues with the HF cache. For hardened production use, consider creating a dedicated `imglab` user with appropriate group memberships (`video`, `render`).
 - **`EnvironmentFile=-/opt/arthur-img/.env`**: The leading `-` makes this non-fatal if the file doesn't exist.
+- **`IMGLAB_GPU_ONLY=1`**: Set in `/opt/arthur-img/.env` to force GPU-only execution and disable CPU model offloading.
 - **`PYTHONUNBUFFERED=1`**: Ensures Python's stdout is not buffered, so log lines appear in `journalctl` in real-time.
 - **`Restart=on-failure`**: Automatically restarts the service if it crashes, but not if it exits cleanly. `RestartSec=5` prevents rapid restart loops.
 
