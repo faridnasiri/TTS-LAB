@@ -353,7 +353,7 @@ async function refreshStatus() {
 function buildEngineTabs() {
   const tabs = document.getElementById('engineTabs');
   const keys = ['flux2', 'flux2klein', 'sd35', 'wan'];
-  const labels = { flux2: 'FLUX.2', flux2klein: 'FLUX.2 Klein', sd35: 'SD 3.5', wan: 'Wan2.2' };
+  const labels = { flux2: 'FLUX.2', flux2klein: 'FLUX.2 Klein', sd35: 'SD 3.5 Large', wan: 'Wan2.2' };
   tabs.innerHTML = keys.map(k => `
     <div class="engine-tab" id="tab-${k}" onclick="selectEngine('${k}')">
       ${labels[k]}
@@ -391,6 +391,10 @@ function renderParams(key) {
       area.appendChild(buildParam(p));
     }
   }
+  if (key === 'sd35') {
+    const preset = formValues['speed_preset'] || 'standard';
+    applySd35Preset(preset);
+  }
 }
 
 function buildParam(p) {
@@ -404,10 +408,14 @@ function buildParam(p) {
   let el;
   if (p.type === 'textarea') {
     el = document.createElement('textarea');
+    el.name = p.name;
+    el.dataset.param = p.name;
     el.placeholder = p.tooltip || '';
     el.value = formValues[p.name] ?? p.default ?? '';
   } else if (p.type === 'select') {
     el = document.createElement('select');
+    el.name = p.name;
+    el.dataset.param = p.name;
     for (const opt of (p.options || [])) {
       const o   = document.createElement('option');
       const val = (opt && typeof opt === 'object') ? opt.value : opt;
@@ -423,6 +431,8 @@ function buildParam(p) {
       row.className = 'range-row';
       const range = document.createElement('input');
       range.type = 'range';
+      range.name = p.name;
+      range.dataset.param = p.name;
       range.min = p.min; range.max = p.max; range.step = p.step ?? (p.type === 'float' ? 0.1 : 1);
       range.value = formValues[p.name] ?? p.default;
       const valSpan = document.createElement('span');
@@ -436,12 +446,16 @@ function buildParam(p) {
     } else {
       el = document.createElement('input');
       el.type = 'number';
+      el.name = p.name;
+      el.dataset.param = p.name;
       el.step = p.step ?? (p.type === 'float' ? 0.1 : 1);
       el.value = formValues[p.name] ?? p.default ?? 0;
     }
   } else {
     el = document.createElement('input');
     el.type = 'text';
+    el.name = p.name;
+    el.dataset.param = p.name;
     el.value = formValues[p.name] ?? p.default ?? '';
   }
 
@@ -449,10 +463,32 @@ function buildParam(p) {
     formValues[p.name] = el.value;
     updateCurl();
     if (p.name === 'quant') updateQuantWarning();
+    if (currentEngine === 'sd35' && p.name === 'speed_preset') applySd35Preset(el.value);
   };
   formValues[p.name] = el.value ?? el.options?.[el.selectedIndex]?.value ?? '';
   wrap.appendChild(el);
   return wrap;
+}
+
+function applySd35Preset(preset) {
+  const presets = {
+    standard:  {steps: 28, guidance: 4.5},
+    turbo:     {steps: 4,  guidance: 4.5},
+    lightning: {steps: 8,  guidance: 4.5},
+  };
+  const data = presets[preset];
+  if (!data) return;
+
+  const stepEl = document.querySelector('[data-param="num_inference_steps"]');
+  const guideEl = document.querySelector('[data-param="guidance_scale"]');
+  if (stepEl) {
+    stepEl.value = data.steps;
+    stepEl.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (guideEl) {
+    guideEl.value = data.guidance;
+    guideEl.dispatchEvent(new Event('input', { bubbles: true }));
+  }
 }
 
 function buildFileParam(p) {
@@ -566,7 +602,7 @@ async function doGenerate() {
   const meta = ENGINES_META[currentEngine];
   const sentParams = {};
   for (const p of (meta?.params ?? [])) {
-    if (p.type === 'file') continue;
+    if (p.type === 'file' || p.client_only) continue;
     const v = formValues[p.name];
     if (v !== undefined && v !== '') { fd.append(p.name, v); sentParams[p.name] = v; }
   }

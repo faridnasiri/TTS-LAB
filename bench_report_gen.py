@@ -196,13 +196,19 @@ for r in results:
         run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
         run.font.size = Pt(9)
     else:
-        img_path = BENCH_DIR / f"{r['engine']}_{r['quant']}.png"
-        if img_path.exists():
-            doc.add_picture(str(img_path), width=Inches(5.5))
-            doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+        image_files = r.get("image_files") or ([] if r.get("image_file") is None else [r.get("image_file")])
+        if image_files:
+            for img_name in image_files:
+                img_path = BENCH_DIR / img_name
+                if img_path.exists():
+                    doc.add_picture(str(img_path), width=Inches(3.3))
+                    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                else:
+                    p = doc.add_paragraph()
+                    p.add_run(f"(image not found: {img_path})")
         else:
             p = doc.add_paragraph()
-            p.add_run(f"(image not found: {img_path})")
+            p.add_run(f"(no images found for {r['label']})")
 
     doc.add_paragraph()
 

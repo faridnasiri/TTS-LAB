@@ -59,13 +59,14 @@ class EngineInfo:
 # ---------------------------------------------------------------------------
 
 def _p(name, type_, default, label, min_=None, max_=None, step=None,
-       options=None, tooltip="", required=False):
+       options=None, tooltip="", required=False, client_only=False):
     d = dict(name=name, type=type_, default=default, label=label,
              tooltip=tooltip, required=required)
     if min_  is not None: d["min"]     = min_
     if max_  is not None: d["max"]     = max_
     if step  is not None: d["step"]    = step
     if options is not None: d["options"] = options
+    if client_only: d["client_only"] = True
     return d
 
 # ---------------------------------------------------------------------------
@@ -130,7 +131,8 @@ ENGINES: dict[str, EngineInfo] = {
             "Stable Diffusion 3.5 Large — 8B MMDiT text-to-image model. "
             "GGUF quantised transformer (city96/stable-diffusion-3.5-large-gguf). "
             "Text encoders and VAE reused from pre-saved shared directory on disk. "
-            "Q4_0 uses ~5 GB VRAM for the transformer alone."
+            "Q4_0 uses ~5 GB VRAM for the transformer alone. "
+            "Supports speed-presets for turbo / lightning fast runs on the same model weights."
         ),
         output_type = "image",
         vram_gb     = 12.0,
@@ -141,6 +143,14 @@ ENGINES: dict[str, EngineInfo] = {
                tooltip="Describe the image you want to generate.", required=True),
             _p("negative_prompt",     "textarea", "",     "Negative prompt",
                tooltip="Describe what you do NOT want in the image."),
+            _p("speed_preset",        "select",   "standard", "Mode",
+               options=[
+                   {"value": "standard",  "label": "Standard — 28 steps (default quality)"},
+                   {"value": "turbo",     "label": "Turbo — 4 steps (fast preview)"},
+                   {"value": "lightning", "label": "Lightning — 8 steps (fast)"},
+               ],
+               tooltip="Choose a speed/quality profile for SD 3.5 Large. Turbo and Lightning use fewer steps on the same model weights.",
+               client_only=True),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=1536, step=64),
             _p("height",              "int",      1024,   "Height (px)",

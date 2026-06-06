@@ -33,6 +33,9 @@ DEFAULT_BENCH_DIR = r"C:\Temp\bench" if os.name == "nt" else "/tmp/bench"
 OUT_DIR = Path(os.environ.get("BENCH_DIR", DEFAULT_BENCH_DIR))
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+# How many sequential inference runs to perform per-model (hot runs)
+NUM_HOT_RUNS = int(os.environ.get("BENCH_NUM_HOT_RUNS", "3"))
+
 PROMPT     = (
     "a photorealistic mountain lake at golden hour, reflections of snow-capped "
     "peaks, misty atmosphere, dramatic clouds, cinematic lighting, 8k"
@@ -41,12 +44,15 @@ NEG_PROMPT = "blurry, low quality, noise, watermark, text"
 SEED       = 42
 WIDTH      = 1024
 HEIGHT     = 1024
+NUM_IMAGES = 3
 
 # (engine_key, quant, num_inference_steps, label)
+# Use shorter 'turbo-style' runs for SD to measure steady-state inference quickly
+# (steps reduced to 4 and 8 to emulate distilled / lightning checkpoints)
 RUNS = [
-    ("sd35",       "Q4_0",   28, "SD 3.5 Large · GGUF Q4_0"),
-    ("sd35",       "nvfp4",  28, "SD 3.5 Large · NVFP4 ⚡"),
-    ("flux2klein", "",        4, "FLUX.2 Klein 4B · BF16 (distilled)"),
+    ("sd35",       "Q4_0",    4, "SD 3.5 Large · GGUF Q4_0 (turbo-style, 4 steps)"),
+    ("sd35",       "nvfp4",   8, "SD 3.5 Large · NVFP4 (lightning, 8 steps)"),
+    ("flux2klein", "",        4, "FLUX.2 Klein 4B · BF16 (distilled, 4 steps)"),
     ("flux2",      "Q4_K_M", 28, "FLUX.2 [dev] · GGUF Q4_K_M"),
 ]
 
@@ -122,68 +128,99 @@ for engine_key, quant, steps, label in RUNS:
     print(f"  engine={engine_key}  quant={quant or '(default)'}  steps={steps}")
     print(sep)
 
-    vram_before = vram_mb()
-    t_start = time.time()
-
-    payload = {
-        "prompt":               PROMPT,
-        "negative_prompt":      NEG_PROMPT,
-        "width":                str(WIDTH),
-        "height":               str(HEIGHT),
-        "num_inference_steps":  str(steps),
-        "guidance_scale":       "4.5" if engine_key == "sd35" else "3.5",
-        "seed":                 str(SEED),
-    }
-    if quant:
-        payload["quant"] = quant
-
-    status   = "ok"
-    error    = ""
-    img_path = None
-
+    # Query VRAM before load
     try:
-        resp = requests.post(
-            f"{API_BASE}/generate/{engine_key}",
-            data=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        t_end    = time.time()
-        total_s  = t_end - t_start
+        pre_status = requests.get(f"{API_BASE}/status?format=json", timeout=10).json()
+        v = pre_status.get("vram", {})
+        vram_before = (int(v.get("allocated_gb", 0) * 1024), int(v.get("free_gb", 0) * 1024))
+    except Exception:
+        vram_before = (-1, -1)
 
-        if resp.status_code == 200:
-            data    = resp.json()
-            item    = data["results"][0]
-            img_b64 = item["base64"]
-            img_data = base64.b64decode(img_b64)
+    status = "ok"
+    error = ""
+    load_s = None
+    inf_times: list[float] = []
+    image_files = []
 
-            fname    = f"{engine_key}_{quant or 'default'}.png"
-            img_path = OUT_DIR / fname
-            img_path.write_bytes(img_data)
-            print(f"  Image saved → {img_path}  ({len(img_data)//1024} KB)")
-        else:
+    # 1) Preload engine and measure load time
+    print(f"  Preloading engine (quant={quant or '(default)'}) …")
+    try:
+        t0 = time.time()
+        resp = requests.post(f"{API_BASE}/engines/{engine_key}/load", timeout=REQUEST_TIMEOUT)
+        load_s = round(time.time() - t0, 1)
+        if resp.status_code != 200:
             status = "error"
-            error  = f"HTTP {resp.status_code}: {resp.text[:300]}"
-            print(f"  FAIL: {error}")
-
+            error = f"Load failed: HTTP {resp.status_code}: {resp.text[:300]}"
+            print(f"  ✗ Load failed: {error}")
     except Exception as exc:
-        t_end   = time.time()
-        total_s = t_end - t_start
-        status  = "exception"
-        error   = str(exc)
-        print(f"  EXCEPTION: {exc}")
+        load_s = round(time.time() - t0, 1) if 't0' in locals() else None
+        status = "exception"
+        error = str(exc)
+        print(f"  ✗ Load exception: {exc}")
 
-    vram_after = vram_mb()
+    # 2) Run inference passes (only if load succeeded)
+    if status == "ok":
+        for run_idx in range(NUM_HOT_RUNS):
+            run_seed = SEED + run_idx
+            payload = {
+                "prompt":               PROMPT,
+                "negative_prompt":      NEG_PROMPT,
+                "width":                str(WIDTH),
+                "height":               str(HEIGHT),
+                "num_inference_steps":  str(steps),
+                "guidance_scale":       "4.5" if engine_key == "sd35" else "3.5",
+                "seed":                 str(run_seed),
+                "num_images":           "1",
+            }
+            if quant:
+                payload["quant"] = quant
 
-    # Parse timing from journal
-    journal   = journal_tail(t_start)
-    load_s, inf_s = parse_timing(journal)
-    if load_s is None:
-        print(f"  (journal parse: no 'ready' line found)")
-    if inf_s is None:
-        print(f"  (journal parse: no tqdm line found)")
+            print(f"  Run {run_idx+1}/{NUM_HOT_RUNS} (seed={run_seed}) …")
+            t0 = time.time()
+            try:
+                resp = requests.post(f"{API_BASE}/generate/{engine_key}", data=payload, timeout=REQUEST_TIMEOUT)
+                elapsed = round(time.time() - t0, 2)
+                inf_times.append(elapsed)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    for i, item in enumerate(data.get("results", [])):
+                        img_b64 = item.get("base64")
+                        if img_b64:
+                            img_data = base64.b64decode(img_b64)
+                            fname = f"{engine_key}_{quant or 'default'}_{run_idx+1}_{i+1}.png"
+                            img_path = OUT_DIR / fname
+                            img_path.write_bytes(img_data)
+                            image_files.append(str(img_path))
+                            print(f"    ✓ Image {run_idx+1}/{NUM_HOT_RUNS} saved ({len(img_data)//1024} KB) in {elapsed}s")
+                else:
+                    status = "error"
+                    error = f"HTTP {resp.status_code}: {resp.text[:300]}"
+                    print(f"    ✗ Generation failed: {error}")
+                    break
 
-    # Steps/sec
+            except Exception as exc:
+                elapsed = round(time.time() - t0, 2)
+                inf_times.append(elapsed)
+                status = "exception"
+                error = str(exc)
+                print(f"    ✗ Exception: {exc} (elapsed {elapsed}s)")
+                break
+
+            time.sleep(1)  # settle between runs
+
+    # Query VRAM after
+    try:
+        post_status = requests.get(f"{API_BASE}/status?format=json", timeout=10).json()
+        v = post_status.get("vram", {})
+        vram_after = (int(v.get("allocated_gb", 0) * 1024), int(v.get("free_gb", 0) * 1024))
+    except Exception:
+        vram_after = (-1, -1)
+
+    # Compute stats
+    inf_s = round(sum(inf_times) / len(inf_times), 1) if inf_times else None
     sps = round(steps / inf_s, 2) if inf_s and inf_s > 0 else None
+    total_s = round((load_s or 0) + (sum(inf_times) or 0), 1)
 
     result: dict = {
         "label":       label,
@@ -191,25 +228,29 @@ for engine_key, quant, steps, label in RUNS:
         "quant":       quant or "default",
         "steps":       steps,
         "status":      status,
-        "total_s":     round(total_s, 1),
+        "total_s":     total_s,
         "load_s":      load_s,
         "inf_s":       inf_s,
+        "inf_times":   inf_times,
         "steps_per_s": sps,
         "vram_used_before_mb": vram_before[0],
         "vram_used_after_mb":  vram_after[0],
-        "image_file":  str(img_path) if img_path else None,
+        "image_files": image_files,
     }
     if error:
         result["error"] = error
 
-    print(
-        f"  total={total_s:.1f}s  load={load_s}s  inf={inf_s}s  "
-        f"sps={sps}  VRAM={vram_after[0]} MiB"
-    )
+    print(f"  ✓ Summary: load={load_s}s  avg_inf={inf_s}s ({len(inf_times)} runs)  sps={sps}  total={total_s}s")
     all_results.append(result)
 
-    # Brief pause so the model is evicted and VRAM settles
-    time.sleep(5)
+    # Unload and pause
+    try:
+        requests.post(f"{API_BASE}/engines/unload", timeout=30)
+        time.sleep(2)
+    except Exception:
+        pass
+
+    time.sleep(3)  # pause between models
 
 # ---------------------------------------------------------------------------
 # Write summary JSON
