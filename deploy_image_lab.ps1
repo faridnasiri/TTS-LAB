@@ -142,6 +142,10 @@ Run-Phase 3 "Engine Python packages" {
     # GGUF loading support (required for SD3.5 and FLUX.2 GGUF checkpoints)
     Invoke-SSH "$pip install 'gguf>=0.10.0' -q"
 
+    # Ideogram 4 (cloned from GitHub, install as editable)
+    Invoke-SSH "test -d /opt/arthur-img/ideogram4 && echo 'ideogram4 already cloned' || (cd /opt/arthur-img && git clone https://github.com/ideogram-ai/ideogram4.git)"
+    Invoke-SSH "$pip install -e /opt/arthur-img/ideogram4 -q"
+
     Write-Host "  All packages installed."
 }
 
@@ -202,7 +206,8 @@ Run-Phase 5 "SCP code files to VM" {
         "$PSScriptRoot\image_lab_ui.py",
         "$PSScriptRoot\image_lab_utils.py",
         "$PSScriptRoot\gguf_download.py",
-        "$PSScriptRoot\nvfp4_save.py"
+        "$PSScriptRoot\nvfp4_save.py",
+        "$PSScriptRoot\ideogram4_lab_engine.py"
     )
 
     foreach ($f in $files) {
@@ -210,6 +215,13 @@ Run-Phase 5 "SCP code files to VM" {
     }
 
     Invoke-SCP -LocalFiles $files -RemoteDest "/opt/arthur-img/"
+
+    # Copy magic prompt template alongside the engine module for fallback
+    $magicPromptDir = "$PSScriptRoot\ideogram4\src\ideogram4\magic_prompt_system_prompts"
+    if (Test-Path "$magicPromptDir\v1.txt") {
+        Invoke-SCP -LocalFiles @("$magicPromptDir\v1.txt") -RemoteDest "/opt/arthur-img/"
+        Write-Host "  Copied magic prompt v1.txt template to /opt/arthur-img/"
+    }
 
     # Write .env with the runtime environment for the service.
     # If HF_TOKEN is provided, include it; otherwise still create the file so GPU-only mode is enforced.
@@ -222,6 +234,12 @@ Run-Phase 5 "SCP code files to VM" {
     )
     if ($HFToken) {
         $envLines = @("HF_TOKEN=$HFToken") + $envLines
+    }
+    # Add OPENROUTER_API_KEY if found in secrets.env
+    $orKeyLine = Get-Content "$PSScriptRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^OPENROUTER_API_KEY=" }
+    if ($orKeyLine) {
+        $orKey = ($orKeyLine -split "=", 2)[1].Trim()
+        if ($orKey) { $envLines += "OPENROUTER_API_KEY=$orKey" }
     }
     $envText = $envLines -join '\n'
     Invoke-SSH "printf '$envText\n' > /opt/arthur-img/.env && chmod 600 /opt/arthur-img/.env"
