@@ -69,6 +69,13 @@ async def generate(
     num_frames:           int           = Form(49),
     fps:                  int           = Form(16),
     resolution:           str           = Form("720p"),
+    # Ideogram 4-specific
+    preset:               str           = Form("V4_DEFAULT_20"),
+    mu:                   float         = Form(0.0),
+    std:                  float         = Form(1.75),
+    use_magic_prompt:     bool          = Form(False),
+    magic_prompt_input:   str           = Form(""),
+    magic_prompt_aspect_ratio: str      = Form("1:1"),
     # Optional reference image (FLUX.2 I2I / Wan I2V)
     reference_image:      Optional[UploadFile] = File(None),
     # Quantization format (engine-specific; empty = use engine default)
@@ -96,6 +103,13 @@ async def generate(
         "resolution":           resolution,
         "reference_image":      ref_bytes,
         "quant":                quant,
+        # Ideogram 4-specific
+        "preset":               preset,
+        "mu":                   mu,
+        "std":                  std,
+        "use_magic_prompt":     use_magic_prompt,
+        "magic_prompt_input":   magic_prompt_input,
+        "magic_prompt_aspect_ratio": magic_prompt_aspect_ratio,
     }
 
     try:

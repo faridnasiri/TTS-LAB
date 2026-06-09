@@ -140,6 +140,7 @@ def _unload_current():
     ENGINES["flux2klein"].loaded = False
     ENGINES["sd35"].loaded       = False
     ENGINES["wan"].loaded        = False
+    ENGINES["ideogram4"].loaded  = False
 
 
 def _ensure_engine(key: str, quant: str = ""):
@@ -236,20 +237,20 @@ def _load_flux2(quant: str = "Q4_K_M"):
                 offload_type   = "leaf_level",
                 use_stream     = False,
             )
-    except ValueError as exc:
-        if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
-            log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
-            from accelerate.hooks import remove_hook_from_module
-            remove_hook_from_module(text_encoder, recurse=True)
-            apply_group_offloading(
-                text_encoder,
-                onload_device  = torch.device("cuda"),
-                offload_device = torch.device("cpu"),
-                offload_type   = "leaf_level",
-                use_stream     = False,
-            )
-        else:
-            raise
+        except ValueError as exc:
+            if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
+                log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
+                from accelerate.hooks import remove_hook_from_module
+                remove_hook_from_module(text_encoder, recurse=True)
+                apply_group_offloading(
+                    text_encoder,
+                    onload_device  = torch.device("cuda"),
+                    offload_device = torch.device("cpu"),
+                    offload_type   = "leaf_level",
+                    use_stream     = False,
+                )
+            else:
+                raise
 
     # ── Pipeline assembly ────────────────────────────────────────────────────
     log.info("Loading FLUX.2 [dev] pipeline shell (quant=%s) …", quant)
@@ -603,6 +604,62 @@ def _generate_wan(params: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Ideogram 4
+# ---------------------------------------------------------------------------
+
+def _load_ideogram4(quant: str = "nf4"):
+    import importlib
+    ideogram4_engine = importlib.import_module("ideogram4_lab_engine")
+    t0 = time.time()
+    log.info("Loading Ideogram 4 (quant=%s) …", quant)
+    pipe = ideogram4_engine.load_ideogram4(quant=quant)
+    STATE.loaded_model  = pipe
+    STATE.active_engine = "ideogram4"
+    STATE.active_quant  = quant
+    ENGINES["ideogram4"].loaded = True
+    log.info("Ideogram 4 ready (quant=%s) in %.1f s", quant, time.time() - t0)
+
+
+def _generate_ideogram4(params: dict) -> list[dict]:
+    import importlib
+    ideogram4_engine = importlib.import_module("ideogram4_lab_engine")
+
+    pipe   = STATE.loaded_model
+    prompt = params["prompt"]
+
+    # Handle magic prompt expansion
+    use_magic = bool(params.get("use_magic_prompt", False))
+    magic_input = params.get("magic_prompt_input", "").strip()
+    if use_magic and magic_input:
+        # The engine handles expansion internally
+        prompt = magic_input
+
+    # Resolve steps: 0 means "use preset default"
+    steps = int(params.get("num_inference_steps", 0))
+    if steps == 0:
+        steps = None
+
+    images = ideogram4_engine.generate_ideogram4(
+        pipe,
+        prompt=prompt,
+        width=int(params.get("width", 1024)),
+        height=int(params.get("height", 1024)),
+        preset=params.get("preset", "V4_DEFAULT_20"),
+        num_steps=steps,
+        guidance_scale=float(params.get("guidance_scale", 7.0)),
+        mu=float(params.get("mu", 0.0)),
+        std=float(params.get("std", 1.75)),
+        seed=int(params.get("seed", -1)),
+        use_magic_prompt=use_magic,
+        magic_prompt_aspect_ratio=params.get("magic_prompt_aspect_ratio", "1:1"),
+    )
+
+    seed = params.get("seed", -1) if params.get("seed", -1) >= 0 else None
+    final_params = {**params, "seed": seed}
+    return save_images(images, "ideogram4", final_params)
+
+
+# ---------------------------------------------------------------------------
 # Availability probe (called at startup)
 # ---------------------------------------------------------------------------
 
@@ -615,6 +672,7 @@ def probe_availability():
     _probe_flux2klein()
     _probe_sd35()
     _probe_wan()
+    _probe_ideogram4()
     _strip_missing_nvfp4_options()
 
 
@@ -711,6 +769,23 @@ def _probe_wan():
         log.warning("Wan2.2 unavailable: %s", exc)
 
 
+def _probe_ideogram4():
+    try:
+        import importlib
+        mod = importlib.import_module("ideogram4_lab_engine")
+        result = mod.probe_ideogram4()
+        if result["available"]:
+            ENGINES["ideogram4"].available = True
+        else:
+            ENGINES["ideogram4"].available = False
+            ENGINES["ideogram4"].error     = result.get("error", "unknown error")
+            log.warning("Ideogram 4 unavailable: %s", result.get("error"))
+    except Exception as exc:
+        ENGINES["ideogram4"].available = False
+        ENGINES["ideogram4"].error     = str(exc)
+        log.warning("Ideogram 4 unavailable: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Public generate dispatcher
 # ---------------------------------------------------------------------------
@@ -778,6 +853,7 @@ _LOADERS = {
     "flux2klein": _load_flux2klein,
     "sd35":       _load_sd35,
     "wan":        _load_wan,
+    "ideogram4":  _load_ideogram4,
 }
 
 _GENERATORS = {
@@ -785,4 +861,5 @@ _GENERATORS = {
     "flux2klein": _generate_flux2klein,
     "sd35":       _generate_sd35,
     "wan":        _generate_wan,
+    "ideogram4":  _generate_ideogram4,
 }

@@ -263,12 +263,80 @@ ENGINES: dict[str, EngineInfo] = {
                    "fastest on RTX 5060 Ti (Blackwell SM100+). Both HighNoise + LowNoise transformers quantized."
                )),
         ],
-    ),
-}
+            ),
 
-# ---------------------------------------------------------------------------
-# Global runtime state  (mutated by engines + dispatch at runtime)
-# ---------------------------------------------------------------------------
+            "ideogram4": EngineInfo(
+                key         = "ideogram4",
+                label       = "Ideogram 4",
+                description = (
+                    "Ideogram 4 — 9.3B flow-matching DiT with Qwen3-VL text encoder. "
+                    "Native text rendering. State-of-the-art prompt adherence. "
+                    "Uses a structured JSON caption format (not plain text). "
+                    "nf4 quant = ~6 GB VRAM for transformer (bitsandbytes, CUDA only). "
+                    "fp8 quant = ~10 GB VRAM for transformer (weight-only float8, any device). "
+                    "Optional magic-prompt expansion via OpenRouter (Claude Sonnet)."
+                ),
+                output_type = "image",
+                vram_gb     = 10.0,
+                hf_repo     = "ideogram-ai/ideogram-4-nf4",
+                hf_repo_alt = "ideogram-ai/ideogram-4-fp8",
+                params      = [
+                    _p("prompt",                "textarea", "",     "Caption (JSON)",
+                       required=True,
+                       tooltip="Structured JSON caption. Use Magic Prompt to auto-generate from plain text."),
+                    _p("use_magic_prompt",      "checkbox", False,  "Magic Prompt (auto-expand plain text)",
+                       tooltip="Enable to expand a plain-text idea into a JSON caption via OpenRouter."),
+                    _p("magic_prompt_input",    "textarea", "",     "Plain idea (for magic prompt)",
+                       tooltip="Write a plain idea here if magic prompt is enabled."),
+                    _p("width",                 "int",      1024,   "Width (px)",
+                       min_=256, max_=2048, step=16,
+                       tooltip="Must be multiple of 16. Range: 256-2048."),
+                    _p("height",                "int",      1024,   "Height (px)",
+                       min_=256, max_=2048, step=16,
+                       tooltip="Must be multiple of 16. Range: 256-2048."),
+                    _p("preset",                "select",   "V4_DEFAULT_20", "Sampler preset",
+                       options=[
+                           {"value": "V4_QUALITY_48", "label": "V4_QUALITY_48 - 48 steps (best quality)"},
+                           {"value": "V4_DEFAULT_20", "label": "V4_DEFAULT_20 - 20 steps (recommended)"},
+                           {"value": "V4_TURBO_12",   "label": "V4_TURBO_12 - 12 steps (fastest)"},
+                       ],
+                       tooltip="Named sampler preset. V4_DEFAULT_20 is best balance."),
+                    _p("num_inference_steps",   "int",      0,      "Override steps (0 = preset default)",
+                       min_=0, max_=128, step=1,
+                       tooltip="0 uses the preset's step count. Set to override."),
+                    _p("guidance_scale",        "float",    7.0,    "Guidance scale",
+                       min_=1.0, max_=30.0, step=0.5,
+                       tooltip="Constant CFG weight. 7.0 is default."),
+                    _p("mu",                    "float",    0.0,    "Schedule mean (mu)",
+                       min_=-5.0, max_=5.0, step=0.1,
+                       tooltip="Logit-normal schedule mean."),
+                    _p("std",                   "float",    1.75,   "Schedule std (sigma)",
+                       min_=0.1, max_=5.0, step=0.1,
+                       tooltip="Logit-normal schedule standard deviation."),
+                    _p("seed",                  "int",      -1,     "Seed (-1 = random)",
+                       min_=-1, max_=2**31-1, step=1),
+                    _p("quant",                 "select",   "nf4",  "Quantization",
+                       options=[
+                           {"value": "nf4", "label": "nf4 - 6 GB VRAM, CUDA only (recommended)"},
+                           {"value": "fp8", "label": "fp8 - 10 GB VRAM, any device"},
+                       ],
+                       tooltip="nf4 is smaller/faster on CUDA. fp8 works on any device."),
+                    _p("magic_prompt_aspect_ratio", "select", "1:1", "Aspect ratio (magic prompt)",
+                       options=[
+                           {"value": "1:1",  "label": "1:1 - Square"},
+                           {"value": "3:2",  "label": "3:2 - Landscape"},
+                           {"value": "2:3",  "label": "2:3 - Portrait"},
+                           {"value": "16:9", "label": "16:9 - Widescreen"},
+                           {"value": "9:16", "label": "9:16 - Phone"},
+                       ],
+                       tooltip="Target aspect ratio for magic-prompt expansion."),
+                ],
+            ),
+        }
+
+        # ---------------------------------------------------------------------------
+        # Global runtime state  (mutated by engines + dispatch at runtime)
+        # ---------------------------------------------------------------------------
 
 class LabState:
     active_engine: Optional[str]  = None   # key of model currently in VRAM

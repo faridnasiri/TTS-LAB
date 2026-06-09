@@ -266,6 +266,7 @@ UI_HTML = r"""<!DOCTYPE html>
           <option value="flux2">FLUX.2 [dev]</option>
           <option value="sd35">SD 3.5 Large</option>
           <option value="wan">Wan2.2</option>
+          <option value="ideogram4">Ideogram 4</option>
         </select>
       </div>
       <div class="gallery-grid" id="galleryGrid"></div>
@@ -352,8 +353,8 @@ async function refreshStatus() {
 // ============================================================
 function buildEngineTabs() {
   const tabs = document.getElementById('engineTabs');
-  const keys = ['flux2', 'flux2klein', 'sd35', 'wan'];
-  const labels = { flux2: 'FLUX.2', flux2klein: 'FLUX.2 Klein', sd35: 'SD 3.5 Large', wan: 'Wan2.2' };
+  const keys = ['flux2', 'flux2klein', 'sd35', 'wan', 'ideogram4'];
+  const labels = { flux2: 'FLUX.2', flux2klein: 'FLUX.2 Klein', sd35: 'SD 3.5 Large', wan: 'Wan2.2', ideogram4: 'Ideogram 4' };
   tabs.innerHTML = keys.map(k => `
     <div class="engine-tab" id="tab-${k}" onclick="selectEngine('${k}')">
       ${labels[k]}
@@ -375,6 +376,19 @@ function selectEngine(key) {
 // ============================================================
 // Parameter rendering
 // ============================================================
+function toggleMagicPrompt(visible) {
+  const magicInput = document.querySelector('[data-param="magic_prompt_input"]');
+  const magicRatio = document.querySelector('[data-param="magic_prompt_aspect_ratio"]');
+  if (magicInput) {
+    const group = magicInput.closest('.param-group');
+    if (group) group.style.display = visible ? '' : 'none';
+  }
+  if (magicRatio) {
+    const group = magicRatio.closest('.param-group');
+    if (group) group.style.display = visible ? '' : 'none';
+  }
+}
+
 function renderParams(key) {
   const meta = ENGINES_META[key];
   if (!meta) { return; }
@@ -394,6 +408,11 @@ function renderParams(key) {
   if (key === 'sd35') {
     const preset = formValues['speed_preset'] || 'standard';
     applySd35Preset(preset);
+  }
+  // Initialise magic prompt visibility for ideogram4
+  if (key === 'ideogram4') {
+    const magicEnabled = formValues['use_magic_prompt'] === true;
+    toggleMagicPrompt(magicEnabled);
   }
 }
 
@@ -424,6 +443,26 @@ function buildParam(p) {
       if (val === (formValues[p.name] ?? p.default)) o.selected = true;
       el.appendChild(o);
     }
+  } else if (p.type === 'checkbox') {
+    el = document.createElement('input');
+    el.type = 'checkbox';
+    el.name = p.name;
+    el.dataset.param = p.name;
+    el.checked = formValues[p.name] ?? p.default ?? false;
+    // Repurpose the outer label to be an inline checkbox label
+    label.textContent = '';
+    const labelSpan = document.createElement('span');
+    labelSpan.textContent = p.label;
+    label.prepend(el);
+    label.appendChild(labelSpan);
+    label.style.cssText = 'display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;';
+    el.onchange = () => {
+      formValues[p.name] = el.checked;
+      updateCurl();
+      if (p.name === 'use_magic_prompt') toggleMagicPrompt(el.checked);
+    };
+    formValues[p.name] = el.checked;
+    return wrap;
   } else if (p.type === 'int' || p.type === 'float') {
     // Use range + number input side by side when min/max defined
     if (p.min !== undefined && p.max !== undefined) {
