@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i *)",
+      "Bash(curl -s *)",
+      "Bash(scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i *)"
+    ]
+  }
+}

@@ -16,6 +16,9 @@ __pycache__/
 .vscode/
 *.user
 
+# Claude Code local settings (contains API keys)
+.claude/settings.local.json
+
 # Temp debug artifacts from ideogram4 integration
 _check*.txt
 _check*.py
