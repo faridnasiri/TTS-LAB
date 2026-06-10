@@ -6,7 +6,7 @@ payload = {
     "width": "512", "height": "512", "preset": "V4_TURBO_12",
     "num_inference_steps": "0", "guidance_scale": "7.0",
     "mu": "0.0", "std": "1.75", "seed": "42", "quant": "nf4",
-    "use_magic_prompt": "false", "magic_prompt_input": "",
+    "use_magic_prompt": "false",
     "magic_prompt_aspect_ratio": "1:1"
 }
 

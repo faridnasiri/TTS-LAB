@@ -19,7 +19,7 @@ for res in RESOLUTIONS:
         "preset": PRESET, "num_inference_steps": "0",
         "guidance_scale": "1.0", "mu": "0.0", "std": "1.75",
         "seed": str(SEED), "quant": QUANT,
-        "use_magic_prompt": "false", "magic_prompt_input": "",
+        "use_magic_prompt": "false",
         "magic_prompt_aspect_ratio": "1:1"
     }
 
