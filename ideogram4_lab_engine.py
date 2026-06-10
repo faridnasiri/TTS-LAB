@@ -3,7 +3,11 @@ ideogram4_lab_engine.py — Ideogram 4 text-to-image engine for Arthur Image Lab
 
 Integrates the ideogram4 package as a local PyPI-installed dependency.
 Supports both nf4 (CUDA-only, bitsandbytes) and fp8 (any device) quantizations.
-Optional magic-prompt expansion via OpenRouter (Claude Sonnet/Opus).
+Optional magic-prompt expansion (no local model — all API-based, zero VRAM):
+
+  1. Ideogram hosted API (free, best quality)  — IDEOGRAM_API_KEY
+  2. DeepSeek native API (v1.txt prompt)        — DEEPSEEK_API_KEY
+  3. OpenRouter → DeepSeek V3 (v1.txt fallback) — OPENROUTER_API_KEY
 
 Usage:
     from ideogram4_lab_engine import load_ideogram4, generate_ideogram4
@@ -48,6 +52,27 @@ _MAGIC_PROMPT_MODE = "deepseek" if os.environ.get("DEEPSEEK_API_KEY") else ("ope
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_QWEN3_CACHE_DIR = "/opt/arthur-img-models/qwen3-vl-4bit-cache"
+
+
+def _cache_quantized_text_encoder(pipe) -> None:
+    """Save the bitsandbytes-quantized Qwen3-VL to disk so we skip re-quantization on restart.
+
+    NOTE: Currently disabled — bitsandbytes Params4bit tensors cannot be
+    serialized via save_pretrained() (NotImplementedError) and the torch.save
+    workaround causes CUDA OOM on reload. Revisit when GPU VRAM situation changes.
+    """
+    return  # Disabled — known OOM issue with cached Params4bit reload
+
+
+def _load_cached_text_encoder(device: str = "cuda", torch_dtype=None):
+    """Load the pre-quantized Qwen3-VL from disk cache. Returns (text_encoder, tokenizer) or (None, None).
+
+    NOTE: Currently disabled — reloading cached Params4bit weights causes CUDA OOM
+    due to hidden GPU buffer allocations. Revisit when VRAM situation changes.
+    """
+    return None, None  # Disabled — known OOM issue
 
 def _resolve_hf_token() -> str:
     """Return HF_TOKEN from environment (set in deploy script)."""
@@ -107,35 +132,116 @@ _OPENROUTER_DEEPSEEK_MODEL = "deepseek/deepseek-chat"
 
 _DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
 
-_DEEPSEEK_SYSTEM_PROMPT = """You are an expert Ideogram 4 caption writer. Your task is to expand a short text prompt into a structured JSON caption.
+# Ideogram's own hosted magic-prompt API (free, server-side — no local model needed)
+_IDEOGRAM_MAGIC_PROMPT_URL = "https://api.ideogram.ai/v1/ideogram-v4/magic-prompt"
 
-The JSON caption must follow this exact schema:
 
-{
-  "high_level_description": "concise summary of the entire scene, like a search query",
-  "style_description": {
-    "aesthetics": "overall visual style (cinematic, photorealistic, minimalist, etc.)",
-    "lighting": "lighting description (golden hour, dramatic, soft, etc.)",
-    "photo": "camera settings if photograph (35mm, f/2.8, shallow depth of field, etc.)",
-    "medium": "medium (photograph, digital art, oil painting, 3D render, etc.)",
-    "color_palette": ["#HEX1", "#HEX2", "#HEX3", "#HEX4"]
-  },
-  "compositional_deconstruction": {
-    "background": "detailed description of the background",
-    "elements": [
-      {"type": "obj", "desc": "description of element 1"},
-      {"type": "obj", "desc": "description of element 2"}
+# ---------------------------------------------------------------------------
+# v1.txt system prompt loader (Ideogram's hand-crafted 28KB recipe)
+# ---------------------------------------------------------------------------
+
+def _load_ideogram_v1_messages(prompt: str, aspect_ratio: str = "1:1") -> list[dict]:
+    """
+    Build chat messages using Ideogram's official v1.txt system prompt.
+    Uses the ideogram4 package's own build_messages() if available,
+    otherwise loads v1.txt from the shipped directory or fallback path.
+
+    Returns [{"role": "system", ...}, {"role": "user", ...}]
+    """
+    # Try the ideogram4 package's build_messages first
+    try:
+        from ideogram4.magic_prompt import build_messages
+        return build_messages("v1.txt", prompt, aspect_ratio)
+    except (ImportError, Exception):
+        pass
+
+    # Fallback: load v1.txt manually
+    v1_path = _MAGIC_PROMPT_SYSTEM_DIR / "v1.txt"
+    if not v1_path.exists():
+        v1_path = _MAGIC_PROMPT_FALLBACK_DIR / "v1.txt"
+    if not v1_path.exists():
+        log.warning("v1.txt not found — falling back to simple system prompt")
+        return [
+            {"role": "system", "content": "Expand the user's plain-text idea into an Ideogram 4 JSON caption."},
+            {"role": "user", "content": f"Aspect ratio: {aspect_ratio}\n\n{prompt}"},
+        ]
+
+    raw = v1_path.read_text(encoding="utf-8")
+    # Parse [SYSTEM] and [USER] sections
+    sections: dict[str, str] = {}
+    current: str | None = None
+    lines: list[str] = []
+    for line in raw.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]") and " " not in stripped:
+            if current is not None:
+                sections[current] = "\n".join(lines).strip()
+            current = stripped[1:-1].strip().lower()
+            lines = []
+        else:
+            lines.append(line)
+    if current is not None:
+        sections[current] = "\n".join(lines).strip()
+
+    system = sections.get("system", "Expand the user's plain-text idea into an Ideogram 4 JSON caption.")
+    user_template = sections.get("user", "TARGET IMAGE ASPECT RATIO: {{aspect_ratio}} (width:height).")
+    user = user_template.replace("{{aspect_ratio}}", aspect_ratio)
+    if "{{original_prompt}}" in user:
+        user = user.replace("{{original_prompt}}", prompt)
+    else:
+        user = f"{user}\n\n{prompt}"
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
     ]
-  }
-}
 
-Rules:
-1. high_level_description should be concise (like a search query, 10-20 words)
-2. style_description must always include aesthetics, lighting, medium, and color_palette
-3. compositional_deconstruction must have a background description and 2-5 elements
-4. Each element has type "obj" and a detailed description
-5. Use specific, vivid language. Be creative but grounded.
-6. The aspect ratio is provided — adapt your composition accordingly."""
+
+def _expand_via_ideogram(
+    prompt: str,
+    aspect_ratio: str = "1:1",
+) -> str | None:
+    """
+    Expand a plain-text prompt via Ideogram's own hosted magic-prompt API (FREE).
+
+    This is the highest-quality option — Ideogram's servers run the expansion
+    with their own tuned pipeline. No system prompt needed.
+
+    Requires IDEOGRAM_API_KEY env var.
+    """
+    api_key = os.environ.get("IDEOGRAM_API_KEY", "")
+    if not api_key:
+        return None  # Silently skip — not configured
+
+    import requests
+
+    # Ideogram API uses "WxH" format
+    ideogram_ratio = aspect_ratio.replace(":", "x")
+
+    try:
+        resp = requests.post(
+            _IDEOGRAM_MAGIC_PROMPT_URL,
+            headers={
+                "Api-Key": api_key,
+                "Content-Type": "application/json",
+            },
+            json={"text_prompt": prompt, "aspect_ratio": ideogram_ratio},
+            timeout=60.0,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        json_prompt = data.get("json_prompt")
+        if not json_prompt:
+            log.warning("Ideogram API returned no json_prompt: %s", data)
+            return None
+        # Return minified JSON
+        import json as _json
+        caption = _json.dumps(json_prompt, ensure_ascii=False, separators=(",", ":"))
+        log.info("Magic-prompt expanded via Ideogram hosted API (free)")
+        return caption
+    except Exception as exc:
+        log.warning("Ideogram hosted magic-prompt failed: %s", exc)
+        return None
 
 
 def _expand_via_deepseek(
@@ -145,6 +251,7 @@ def _expand_via_deepseek(
     """
     Expand a plain-text prompt into a structured Ideogram 4 caption via DeepSeek API.
 
+    Uses Ideogram's official v1.txt system prompt for maximum caption quality.
     Returns the JSON caption string, or None if expansion fails.
     """
     api_key = _resolve_deepseek_key()
@@ -154,10 +261,7 @@ def _expand_via_deepseek(
 
     import requests
 
-    messages = [
-        {"role": "system", "content": _DEEPSEEK_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Aspect ratio: {aspect_ratio}\n\nPrompt: {prompt}\n\nGenerate an Ideogram 4 JSON caption for this."},
-    ]
+    messages = _load_ideogram_v1_messages(prompt, aspect_ratio)
 
     body = {
         "model": "deepseek-chat",
@@ -211,10 +315,7 @@ def _expand_via_openrouter(
 
     import requests
 
-    messages = [
-        {"role": "system", "content": _DEEPSEEK_SYSTEM_PROMPT},
-        {"role": "user", "content": f"Aspect ratio: {aspect_ratio}\n\nPrompt: {prompt}\n\nGenerate an Ideogram 4 JSON caption for this."},
-    ]
+    messages = _load_ideogram_v1_messages(prompt, aspect_ratio)
 
     body = {
         "model": _OPENROUTER_DEEPSEEK_MODEL,
@@ -294,7 +395,6 @@ def load_ideogram4(
     # Select repo + pipeline config based on quantization
     if quant == "nf4":
         weights_repo = "ideogram-ai/ideogram-4-nf4"
-        # Use the default Ideogram4PipelineConfig (points at nf4 repo)
         from ideogram4 import Ideogram4Pipeline, Ideogram4PipelineConfig, Ideogram4Config
         config = Ideogram4PipelineConfig(weights_repo=weights_repo)
         transformer_config = Ideogram4Config()
@@ -345,9 +445,16 @@ def load_ideogram4(
 
     log.info("Ideogram 4 loaded successfully")
 
+    # Cache the quantized Qwen3-VL to disk — skips bitsandbytes re-quantization on next load
+    _cache_quantized_text_encoder(pipe)
+
     # Immediately offload non-essential components to CPU to free VRAM
     # The pipeline __call__ will bring them back when needed
     import gc
+    # Aggressive cleanup before offloading (GPU may be at 99% capacity)
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    gc.collect()
     for comp_name in ['text_encoder', 'unconditional_transformer', 'autoencoder']:
         if hasattr(pipe, comp_name):
             comp = getattr(pipe, comp_name)
@@ -357,6 +464,9 @@ def load_ideogram4(
                     if dev.type == 'cuda':
                         setattr(pipe, comp_name, comp.to('cpu'))
                         log.info("Offloaded %s to CPU after loading", comp_name)
+                        # Free immediately so next offload has room
+                        gc.collect()
+                        torch.cuda.empty_cache()
                 except StopIteration:
                     pass
     gc.collect()
@@ -413,10 +523,14 @@ def generate_ideogram4(
 
     # --- Handle magic prompt expansion ---
     if use_magic_prompt and prompt.strip():
-        # Try OpenRouter (DeepSeek) first, fall back to native DeepSeek API
-        expanded = _expand_via_openrouter(prompt, magic_prompt_aspect_ratio)
+        # Priority: Ideogram hosted API (free, best quality) →
+        #           Native DeepSeek API (v1.txt prompt) →
+        #           OpenRouter → DeepSeek (v1.txt prompt, fallback)
+        expanded = _expand_via_ideogram(prompt, magic_prompt_aspect_ratio)
         if not expanded:
             expanded = _expand_via_deepseek(prompt, magic_prompt_aspect_ratio)
+        if not expanded:
+            expanded = _expand_via_openrouter(prompt, magic_prompt_aspect_ratio)
         if expanded:
             log.info("Magic-prompt expanded plain text to structured caption")
             prompt = expanded
