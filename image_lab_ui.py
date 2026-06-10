@@ -242,6 +242,7 @@ UI_HTML = r"""<!DOCTYPE html>
     <div class="view-tabs">
       <div class="view-tab active" onclick="switchView('generate')">Generate</div>
       <div class="view-tab"        onclick="switchView('gallery')">Gallery</div>
+      <div class="view-tab"        onclick="switchView('logs')">Logs</div>
     </div>
 
     <!-- Generate view -->
@@ -270,6 +271,15 @@ UI_HTML = r"""<!DOCTYPE html>
         </select>
       </div>
       <div class="gallery-grid" id="galleryGrid"></div>
+    </div>
+
+    <!-- Logs view -->
+    <div class="view-panel" id="viewLogs">
+      <div class="gallery-header">
+        <h2>Server Logs</h2>
+        <button class="btn-copy" onclick="loadLogs()" style="padding:6px 14px;font-size:12px;">↻ Refresh</button>
+      </div>
+      <div id="logsViewer" style="background:#0d1117;color:#c9d1d9;font:12px/1.6 'JetBrains Mono','Consolas',monospace;padding:12px 16px;border-radius:6px;max-height:calc(100vh - 200px);overflow-y:auto;white-space:pre-wrap;word-break:break-all;"></div>
     </div>
   </main>
 </div>
@@ -377,12 +387,7 @@ function selectEngine(key) {
 // Parameter rendering
 // ============================================================
 function toggleMagicPrompt(visible) {
-  const magicInput = document.querySelector('[data-param="magic_prompt_input"]');
   const magicRatio = document.querySelector('[data-param="magic_prompt_aspect_ratio"]');
-  if (magicInput) {
-    const group = magicInput.closest('.param-group');
-    if (group) group.style.display = visible ? '' : 'none';
-  }
   if (magicRatio) {
     const group = magicRatio.closest('.param-group');
     if (group) group.style.display = visible ? '' : 'none';
@@ -828,12 +833,45 @@ if (USE_COMFYUI) {
 
 function switchView(name) {
   document.querySelectorAll('.view-tab').forEach((t,i) => {
-    t.classList.toggle('active', ['generate','gallery'][i] === name);
+    t.classList.toggle('active', ['generate','gallery','logs'][i] === name);
   });
   document.querySelectorAll('.view-panel').forEach(p => {
     p.classList.toggle('active', p.id === 'view' + name.charAt(0).toUpperCase() + name.slice(1));
   });
   if (name === 'gallery') loadGallery();
+  if (name === 'logs') loadLogs();
+}
+
+async function loadLogs() {
+  const viewer = document.getElementById('logsViewer');
+  if (!viewer) return;
+  viewer.textContent = 'Loading logs…';
+  try {
+    const data = await apiFetch('/logs?n=200');
+    if (!data.logs || !data.logs.length) {
+      viewer.textContent = 'No log entries yet.';
+      return;
+    }
+    const lines = data.logs.map(l =>
+      `\x1b[90m${l.time}\x1b[0m \x1b[${l.level==='ERROR'?'31':l.level==='WARNING'?'33':l.level==='INFO'?'36':'37'}m[${l.level.padEnd(7)}]\x1b[0m \x1b[35m${l.logger}\x1b[0m — ${l.msg}`
+    );
+    // Strip ANSI for non-terminal display — use HTML spans instead
+    const htmlLines = data.logs.map(l => {
+      const lvlColor = l.level==='ERROR'?'#f85149':l.level==='WARNING'?'#d29922':l.level==='INFO'?'#58a6ff':'#8b949e';
+      return `<span style="color:#484f58">${l.time}</span> <span style="color:${lvlColor}">[${l.level.padEnd(7)}]</span> <span style="color:#bc8cff">${l.logger}</span> — ${escHtml(l.msg)}`;
+    });
+    viewer.innerHTML = htmlLines.join('\n');
+    // Auto-scroll to bottom
+    viewer.scrollTop = viewer.scrollHeight;
+  } catch (e) {
+    viewer.textContent = 'Failed to load logs: ' + e.message;
+  }
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 </script>
 </body>

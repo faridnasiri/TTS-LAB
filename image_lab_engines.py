@@ -627,12 +627,8 @@ def _generate_ideogram4(params: dict) -> list[dict]:
     pipe   = STATE.loaded_model
     prompt = params["prompt"]
 
-    # Handle magic prompt expansion
+    # Magic prompt: when enabled, the engine expands plain text → JSON via DeepSeek
     use_magic = bool(params.get("use_magic_prompt", False))
-    magic_input = params.get("magic_prompt_input", "").strip()
-    if use_magic and magic_input:
-        # The engine handles expansion internally
-        prompt = magic_input
 
     # Resolve steps: 0 means "use preset default"
     steps = int(params.get("num_inference_steps", 0))
@@ -803,6 +799,8 @@ def generate(engine_key: str, params: dict) -> list[dict]:
         )
     if STATE.generating:
         raise RuntimeError("Another generation is already in progress.")
+    if STATE.loading:
+        raise RuntimeError("Model is currently loading. Retry in a few seconds.")
 
     quant = params.get("quant", "")
     STATE.generating = True

@@ -3,6 +3,7 @@ image_lab_dispatch.py — FastAPI route handlers for the Image & Video Lab.
 """
 
 from __future__ import annotations
+import asyncio
 import logging
 import os
 from pathlib import Path
@@ -74,7 +75,6 @@ async def generate(
     mu:                   float         = Form(0.0),
     std:                  float         = Form(1.75),
     use_magic_prompt:     bool          = Form(False),
-    magic_prompt_input:   str           = Form(""),
     magic_prompt_aspect_ratio: str      = Form("1:1"),
     # Optional reference image (FLUX.2 I2I / Wan I2V)
     reference_image:      Optional[UploadFile] = File(None),
@@ -108,12 +108,20 @@ async def generate(
         "mu":                   mu,
         "std":                  std,
         "use_magic_prompt":     use_magic_prompt,
-        "magic_prompt_input":   magic_prompt_input,
         "magic_prompt_aspect_ratio": magic_prompt_aspect_ratio,
     }
 
     try:
-        results = engines.generate(engine_key, params)
+        if engine_key == "ideogram4":
+            log.info(
+                "IDEogram4 REQUEST | magic=%s | ratio=%s | %dx%d | preset=%s | steps=%s | guidance=%.1f | seed=%s | quant=%s | prompt_head=%s...",
+                use_magic_prompt, magic_prompt_aspect_ratio,
+                width, height, preset, num_inference_steps,
+                guidance_scale, seed, quant,
+                prompt[:120].replace("\n", " "),
+            )
+        # Run generation in a thread so the event loop stays free for /status and /logs
+        results = await asyncio.to_thread(engines.generate, engine_key, params)
     except RuntimeError as exc:
         raise HTTPException(503, str(exc))
     except ValueError as exc:
