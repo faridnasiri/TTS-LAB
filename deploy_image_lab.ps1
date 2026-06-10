@@ -146,6 +146,19 @@ Run-Phase 3 "Engine Python packages" {
     Invoke-SSH "test -d /opt/arthur-img/ideogram4 && echo 'ideogram4 already cloned' || (cd /opt/arthur-img && git clone https://github.com/ideogram-ai/ideogram4.git)"
     Invoke-SSH "$pip install -e /opt/arthur-img/ideogram4 -q"
 
+    # Patch ideogram4 pipeline to add local_files_only=True for offline mode.
+    # NOTE: Do NOT patch the tokenizer — Qwen3-VL tokenizer files (vocab.json,
+    # merges.txt, config.json) legitimately don't exist in the nf4 repo (404).
+    # AutoTokenizer handles missing optional files gracefully with network access,
+    # but local_files_only=True turns that into a hard error. The tokenizer makes
+    # a few cheap HEAD requests on first load, then caches results.
+    Invoke-SSH @'
+# Patch: AutoModel (quantized + non-quantized) — skip network checks for transformer weights
+sed -i "/trust_remote_code=True,$/s/trust_remote_code=True,/trust_remote_code=True, local_files_only=True,/" /opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py
+sed -i "/trust_remote_code=True, low_cpu_mem_usage=True,/s/trust_remote_code=True, low_cpu_mem_usage=True/trust_remote_code=True, local_files_only=True, low_cpu_mem_usage=True/" /opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py
+echo "ideogram4 pipeline patched for offline mode (transformer weights only)"
+'@
+
     Write-Host "  All packages installed."
 }
 
@@ -240,6 +253,18 @@ Run-Phase 5 "SCP code files to VM" {
     if ($orKeyLine) {
         $orKey = ($orKeyLine -split "=", 2)[1].Trim()
         if ($orKey) { $envLines += "OPENROUTER_API_KEY=$orKey" }
+    }
+    # Add DEEPSEEK_API_KEY if found in secrets.env
+    $dsKeyLine = Get-Content "$PSScriptRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^DEEPSEEK_API_KEY=" }
+    if ($dsKeyLine) {
+        $dsKey = ($dsKeyLine -split "=", 2)[1].Trim()
+        if ($dsKey) { $envLines += "DEEPSEEK_API_KEY=$dsKey" }
+    }
+    # Add IDEOGRAM_API_KEY if found in secrets.env (free hosted magic-prompt API)
+    $igKeyLine = Get-Content "$PSScriptRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^IDEOGRAM_API_KEY=" }
+    if ($igKeyLine) {
+        $igKey = ($igKeyLine -split "=", 2)[1].Trim()
+        if ($igKey) { $envLines += "IDEOGRAM_API_KEY=$igKey" }
     }
     $envText = $envLines -join '\n'
     Invoke-SSH "printf '$envText\n' > /opt/arthur-img/.env && chmod 600 /opt/arthur-img/.env"
