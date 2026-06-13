@@ -16,6 +16,7 @@ from tts_lab_shims  import _N_CORES, DEVICE
 from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, INDEXTTS_DIR, OPENVOICE_MODELS_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
+    slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
 
@@ -509,7 +510,13 @@ def _synth_parler(inst, text, params):
 
 # ── 13. Chatterbox ────────────────────────────────────────────────────────────
 def _load_chatterbox(model="default"):
-    """Load Chatterbox TTS. model="persian"=FA fine-tune, "multilingual-v2"=23-lang v2."""
+    """Load Chatterbox TTS.
+
+    Models:
+      default — English-only (0.5B, 16 layers, 704 tokens)
+      persian — Persian fine-tune (0.5B, 30 layers, 2454 tokens) from hootan09
+      v3      — Multilingual v3 (1.0B, 30 layers, 2454 tokens, new vocoder) from ResembleAI
+    """
     import types, importlib.machinery, shutil
     for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
                 "torchcodec.decoders._core", "torchcodec.decoders.video_decoder",
@@ -544,6 +551,31 @@ def _load_chatterbox(model="default"):
         inst.s3gen = inst.s3gen.to(DEVICE)
         inst.device = DEVICE
         inst.tokenizer = EnTokenizer(str(fa_dir / "mtl_tokenizer.json"))
+        return inst
+
+    if model == "v3":
+        from huggingface_hub import snapshot_download
+        from chatterbox.models.t3.modules.t3_config import T3Config
+        from chatterbox.models.t3 import T3
+        from chatterbox.models.tokenizers import EnTokenizer
+        from safetensors.torch import load_file
+        v3_dir = Path(snapshot_download(
+            "ResembleAI/chatterbox",
+            allow_patterns=["t3_mtl23ls_v3.safetensors", "s3gen_v3.safetensors",
+                          "mtl_tokenizer.json", "ve.safetensors"],
+        ))
+        slog("LOAD", "chatterbox", "Loading v3 (30-layer, 2GB)...")
+        inst = ChatterboxTTS.from_pretrained(device="cpu")
+        t3_new = T3(hp=T3Config.multilingual())
+        t3_state = load_file(str(v3_dir / "t3_mtl23ls_v3.safetensors"))
+        t3_new.load_state_dict(t3_state, strict=True)
+        inst.t3 = t3_new.to(DEVICE).eval()
+        # v3 has its own vocoder
+        inst.s3gen.load_state_dict(load_file(str(v3_dir / "s3gen_v3.safetensors")), strict=False)
+        inst.s3gen = inst.s3gen.to(DEVICE)
+        inst.ve = inst.ve.to(DEVICE)
+        inst.device = DEVICE
+        inst.tokenizer = EnTokenizer(str(v3_dir / "mtl_tokenizer.json"))
         return inst
 
     return ChatterboxTTS.from_pretrained(device=DEVICE)
