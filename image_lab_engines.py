@@ -131,16 +131,37 @@ def _unload_current():
     if STATE.active_engine is None:
         return
     log.info("Unloading engine: %s (quant=%s)", STATE.active_engine, STATE.active_quant)
+
+    # Explicitly move GPU components to CPU before dropping references.
+    # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True prevents the caching
+    # allocator from releasing memory unless we explicitly offload first.
+    _gpu_attrs = [
+        'conditional_transformer', 'unconditional_transformer',
+        'text_encoder', 'autoencoder', 'transformer',
+        'vae', 'text_encoder_2',
+    ]
+    for ref in [STATE.loaded_model, STATE.loaded_pipe2]:
+        if ref is None:
+            continue
+        for attr in _gpu_attrs:
+            comp = getattr(ref, attr, None)
+            if comp is not None:
+                try:
+                    setattr(ref, attr, comp.to('cpu'))
+                except Exception:
+                    pass
+                try:
+                    setattr(ref, attr, None)
+                except Exception:
+                    pass
+
     STATE.loaded_model  = None
     STATE.loaded_pipe2  = None
     STATE.active_engine = None
     STATE.active_quant  = ""
     free_vram()
-    ENGINES["flux2"].loaded      = False
-    ENGINES["flux2klein"].loaded = False
-    ENGINES["sd35"].loaded       = False
-    ENGINES["wan"].loaded        = False
-    ENGINES["ideogram4"].loaded  = False
+    for k in ENGINES:
+        ENGINES[k].loaded = False
 
 
 def _ensure_engine(key: str, quant: str = ""):
@@ -635,7 +656,7 @@ def _generate_ideogram4(params: dict) -> list[dict]:
     if steps == 0:
         steps = None
 
-    images = ideogram4_engine.generate_ideogram4(
+    images, caption = ideogram4_engine.generate_ideogram4(
         pipe,
         prompt=prompt,
         width=int(params.get("width", 1024)),
@@ -651,7 +672,7 @@ def _generate_ideogram4(params: dict) -> list[dict]:
     )
 
     seed = params.get("seed", -1) if params.get("seed", -1) >= 0 else None
-    final_params = {**params, "seed": seed}
+    final_params = {**params, "seed": seed, "caption": caption}
     return save_images(images, "ideogram4", final_params)
 
 
