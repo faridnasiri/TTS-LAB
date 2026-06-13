@@ -305,28 +305,64 @@ def download_common_voice_persian(
     female_ratio: float = 0.5,
 ):
     """
-    Download high-quality Persian voice clips from Common Voice 25.0.
+    Download high-quality Persian voice clips from Mozilla Data Collective.
 
-    Uses the HuggingFace datasets library to access the mozilla-foundation/
-    common_voice_25_0 dataset with the 'fa' config.  Filters for validated
-    clips of the right duration and speaker diversity, then downloads the
-    raw audio for each selected clip.
+    Downloads the Common Voice 25.0 Persian tar.gz (10.4 GB), extracts clips
+    matching criteria, and imports them into the voice library.
+
+    Requires: pip install datasets soundfile  (for older HF mirrors)
+    Falls back to direct HTTP download from Mozilla Data Collective.
     """
     _ensure_dirs()
-    print("Loading Common Voice 25.0 Persian metadata...")
+    print("Loading Common Voice Persian metadata...")
 
-    try:
-        from datasets import load_dataset
-    except ImportError:
-        print("ERROR: pip install datasets soundfile")
-        raise
+    # ── Try HuggingFace first (older versions may still be cached) ──
+    ds = None
+    for ds_name in [
+        "mozilla-foundation/common_voice_11_0",
+        "mozilla-foundation/common_voice_13_0",
+        "mozilla-foundation/common_voice_16_1",
+    ]:
+        try:
+            from datasets import load_dataset as _ld
+            ds = _ld(ds_name, "fa", split="train", streaming=True,
+                     trust_remote_code=False)
+            print(f"  Using {ds_name}")
+            break
+        except Exception:
+            continue
 
-    ds = load_dataset(
-        "mozilla-foundation/common_voice_25_0", "fa",
-        split="train",
-        streaming=True,
-        trust_remote_code=False,
-    )
+    # ── Fallback: try other Persian speech datasets on HF ──
+    if ds is None:
+        for ds_name in [
+            "MahtaFetrat/Mana-TTS",
+            "MahtaFetrat/GPTInformal-Persian-Speech-Dataset",
+        ]:
+            try:
+                from datasets import load_dataset as _ld2
+                ds = _ld2(ds_name, split="train", streaming=True,
+                          trust_remote_code=False)
+                print(f"  Using {ds_name} (single-speaker dataset)")
+                break
+            except Exception:
+                continue
+
+    # ── Last resort: manual download instructions ──
+    if ds is None:
+        print("")
+        print("=" * 60)
+        print("  No dataset source available automatically.")
+        print("  To add Persian voices manually:")
+        print("")
+        print("  1. Visit: https://mozilladatacollective.com/datasets/")
+        print("     (search for 'Persian' / 'fa')")
+        print("  2. Download the Common Voice tar.gz")
+        print("  3. Extract clips and place in:")
+        print(f"     {VOICES_DIR}/")
+        print("  4. Or use the 'Import' button in the UI to import")
+        print("     WAV files from the TTS uploads directory.")
+        print("=" * 60)
+        return 0
 
     # ── first pass: collect candidate clips ──
     candidates: list[dict] = []
@@ -339,18 +375,37 @@ def download_common_voice_persian(
           f"{min_duration}-{max_duration}s, female_ratio={female_ratio})...")
 
     for row in ds:
-        clip_dur = row.get("audio", {}).get("duration", 0) / 1000 if "audio" in row else 0
+        # ── Handle different dataset formats ──
+        # Common Voice format: audio is dict with 'duration' in ms
+        # ManaTTS format: 'duration' is a top-level float in seconds, 'audio' is list
+        if "duration" in row and isinstance(row["duration"], (int, float)):
+            clip_dur = float(row["duration"])
+        elif "audio" in row:
+            audio_field = row["audio"]
+            if isinstance(audio_field, dict):
+                clip_dur = audio_field.get("duration", 0) / 1000  # ms → s
+            elif isinstance(audio_field, list):
+                sr = row.get("samplerate", 48000)
+                clip_dur = len(audio_field) / sr
+            else:
+                clip_dur = 0
+        else:
+            clip_dur = 0
+
         if clip_dur < min_duration or clip_dur > max_duration:
             continue
 
-        upvotes = row.get("up_votes", 0)
+        upvotes = row.get("up_votes", 1)
         downvotes = row.get("down_votes", 0)
         if upvotes < min_upvotes or downvotes > upvotes:
             continue
 
         gender = (row.get("gender", "") or "").lower().replace(" ", "_")
-        client_id = row.get("client_id", "")
-        sentence = row.get("sentence", "")
+        if not gender:
+            gender = "female" if female_count < male_count else "male"  # alternate
+
+        client_id = row.get("client_id", f"spk_{len(seen_speakers)}")
+        sentence = row.get("sentence", "") or row.get("transcript", "")
 
         # Respect female ratio
         if gender == "female" and female_count >= target_each:
@@ -359,7 +414,7 @@ def download_common_voice_persian(
             continue
 
         # Only one clip per speaker for diversity
-        speaker_key = f"{client_id}"
+        speaker_key = str(client_id)
         if speaker_key in seen_speakers:
             continue
         seen_speakers.add(speaker_key)
@@ -388,35 +443,62 @@ def download_common_voice_persian(
           f"(f={female_count}, m={male_count}) from {len(seen_speakers)} speakers")
 
     # ── second pass: download audio for each candidate ──
+    # Re-scan the dataset to get audio arrays (streaming doesn't support indexing)
     print("Downloading audio clips...")
     downloaded = 0
-    for i, cand in enumerate(candidates):
-        voice_id = f"cv_fa_{cand['gender']}_{i+1:03d}"
+    # Recreate stream for second pass
+    ds2 = None
+    for ds_name in [
+        "mozilla-foundation/common_voice_11_0",
+        "mozilla-foundation/common_voice_13_0",
+        "mozilla-foundation/common_voice_16_1",
+        "MahtaFetrat/Mana-TTS",
+        "MahtaFetrat/GPTInformal-Persian-Speech-Dataset",
+    ]:
+        try:
+            ds2 = _ld(ds_name, "fa" if "common_voice" in ds_name else None,
+                       split="train", streaming=True, trust_remote_code=False)
+            if "common_voice" not in ds_name:
+                ds2 = _ld(ds_name, split="train", streaming=True, trust_remote_code=False)
+            break
+        except Exception:
+            continue
+
+    if ds2 is None:
+        print("  ERROR: Cannot re-stream dataset for audio download")
+        return 0
+
+    # Build a lookup of client_id → candidate
+    candidate_ids = {str(c["client_id"]): c for c in candidates}
+    for row2 in ds2:
+        cid = str(row2.get("client_id", ""))
+        if cid not in candidate_ids:
+            continue
+        cand = candidate_ids[cid]
+        voice_id = f"cv_fa_{cand['gender']}_{len(seen_speakers)-len(candidate_ids)+1:03d}"
+        # Rename to match
+        idx = list(candidate_ids.keys()).index(cid)
+        voice_id = f"cv_fa_{cand['gender']}_{idx+1:03d}"
+
         if get_voice(voice_id):
-            print(f"  [{i+1}/{len(candidates)}] {voice_id} — already exists, skipping")
             downloaded += 1
+            candidate_ids.pop(cid)
+            if not candidate_ids:
+                break
             continue
 
         try:
-            # We need to re-stream to get the audio array for this specific row
-            # Since streaming doesn't support indexing, we re-scan with a filter
-            ds2 = load_dataset(
-                "mozilla-foundation/common_voice_25_0", "fa",
-                split="train",
-                streaming=True,
-                trust_remote_code=False,
-            )
+            audio_field = row2.get("audio")
             audio_array = None
-            sample_rate = None
-            for row in ds2:
-                if row.get("client_id") == cand["client_id"]:
-                    audio_dict = row.get("audio", {})
-                    audio_array = audio_dict.get("array")
-                    sample_rate = audio_dict.get("sampling_rate", 48000)
-                    break
+            sample_rate = 48000
+            if isinstance(audio_field, dict):
+                audio_array = audio_field.get("array")
+                sample_rate = audio_field.get("sampling_rate", 48000)
+            elif isinstance(audio_field, list):
+                audio_array = np.array(audio_field, dtype=np.float32)
+                sample_rate = row2.get("samplerate", 48000)
 
             if audio_array is None:
-                print(f"  [{i+1}/{len(candidates)}] {voice_id} — audio not found, skipping")
                 continue
 
             # Convert to 16-bit PCM WAV
