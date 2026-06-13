@@ -39,16 +39,24 @@ def _row(*cols) -> str:
 
 def _upload_widget(prompt_file_id, prompt_status_id, prompt_hidden_id,
                    label="Reference audio WAV (5-30s)") -> str:
+    """Upload button + visible dropdown (populated from /refs on page load)."""
     return (
         f'<div class="param-group" style="max-width:100%;width:100%"><label>{label}</label>'
+        f'<div class="d-flex flex-column gap-1">'
+        # Visible dropdown — populated by refreshRefDropdowns() on page load
+        f'<select class="form-select form-select-sm bg-dark text-light border-secondary" '
+        f'data-param="audio_prompt_id" id="{prompt_hidden_id}" '
+        f'onchange="document.getElementById(\'{prompt_hidden_id}\').dataset.voice=this.value">'
+        f'<option value="">— none (use default voice) —</option>'
+        f'</select>'
         f'<div class="d-flex gap-2 align-items-center">'
         f'<input type="file" id="{prompt_file_id}" '
         f'class="form-control form-control-sm bg-dark text-light border-secondary" '
-        f'accept="audio/wav,audio/*" style="max-width:320px">'
+        f'accept="audio/wav,audio/*" style="max-width:280px">'
         f'<button class="btn btn-sm btn-outline-info" '
         f"onclick=\"uploadPrompt('{prompt_file_id}','{prompt_status_id}','{prompt_hidden_id}')\">Upload</button>"
         f'<span id="{prompt_status_id}" class="text-muted small"></span>'
-        f'<input type="hidden" data-param="audio_prompt_id" id="{prompt_hidden_id}">'
+        f'</div>'
         f'</div></div>'
     )
 
@@ -1019,7 +1027,11 @@ async function uploadPrompt(fileId, statusId, hiddenId) {
     const r = await fetch(`${API}/upload`, {method:'POST', body:fd});
     dbg('REQUEST','—', `← HTTP ${r.status}`);
     const d = await r.json();
-    document.getElementById(hiddenId).value = d.id;
+    // Refresh ALL ref dropdowns so the new file appears everywhere
+    await refreshRefDropdowns(null);
+    // Pre-select the newly uploaded file in this engine's dropdown
+    const sel = document.getElementById(hiddenId);
+    if (sel) sel.value = d.id;
     status.textContent = `✅ ${fname} (${(d.size/1024).toFixed(0)} KB)`;
     dbg('UPLOAD', '—', `✅ Uploaded → id=${d.id}  size=${d.size} B`);
   } catch(e) {
@@ -1187,7 +1199,7 @@ async function refreshRefDropdowns(selectId) {
     const refs = data.refs || [];
     const targets = selectId
       ? [document.getElementById(selectId)]
-      : Array.from(document.querySelectorAll('[id$="-prompt-id"]')).filter(el => el.tagName === 'SELECT');
+      : Array.from(document.querySelectorAll('[id$="-prompt-id"], [id$="-ref-select"]')).filter(el => el.tagName === 'SELECT');
     targets.forEach(sel => {
       if (!sel) return;
       const currentVal = sel.value;
@@ -1211,8 +1223,9 @@ async function useVoiceRef(voiceId) {
     if (data.ok) {
       // Refresh ALL engine reference dropdowns and pre-select this voice
       await refreshRefDropdowns(null);
-      document.querySelectorAll('[id$="-prompt-id"]').forEach(el => {
-        if (el.tagName === 'SELECT') el.value = voiceId;
+      // Set value on both SELECT dropdowns and hidden INPUTs (legacy engines)
+      document.querySelectorAll('[id$="-prompt-id"], [id$="-ref-select"]').forEach(el => {
+        el.value = voiceId;
       });
       // Show toast instead of alert
       const v = data.voice || {};
@@ -1289,6 +1302,7 @@ window.addEventListener('load', () => {
   pollServerLog();
   schedulePreview();
   loadVoiceLibraryStats();
+  refreshRefDropdowns(null);  // populate all reference WAV dropdowns from /refs
 });
 </script>"""
 
