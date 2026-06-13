@@ -38,18 +38,38 @@ def _wav_dur(wav: bytes) -> float:
 def _safe_del(*objs) -> None:
     for o in objs:
         try:
+            # Move to CPU first to force GPU memory release
+            if hasattr(o, "to"):
+                try:
+                    o.to("cpu")
+                except Exception:
+                    pass
             del o
         except Exception:
             pass
     gc.collect()
+    # PyTorch CUDA caching allocator holds memory even after del + gc
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def _evict_heavy(keep: str) -> None:
+    from tts_lab_config import slog
     for n in HEAVY:
         if n != keep and _state[n]["instance"] is not None:
+            slog("VRAM", n, f"Evicting {n} to free GPU memory")
             _safe_del(_state[n]["instance"])
             _state[n]["instance"] = None
             _state[n]["status"]   = "unloaded"
+    # Double-clear — belt and suspenders
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
 
 
 def _piper_voices() -> list[str]:

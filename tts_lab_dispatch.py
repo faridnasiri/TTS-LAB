@@ -54,6 +54,8 @@ def _check_available(name: str) -> Tuple[bool, str]:
         "indextts":   "indextts",
         "zonos":      "zonos",
         "openvoice":  "openvoice",
+        "matcha":     "sherpa_onnx",
+        "manatts":    None,
     }
 
     # 1. Quick package-present check
@@ -147,6 +149,24 @@ def _check_available(name: str) -> Tuple[bool, str]:
                 return False, "Qwen3-TTS: run huggingface-cli login"
             if "404" in str(_e):
                 return False, "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice not found on HuggingFace"
+    elif name == "matcha":
+        if not ilu.find_spec("sherpa_onnx"):
+            return False, "pip install sherpa-onnx"
+    elif name == "manatts":
+        from tts_lab_config import MANATTS_REPO_DIR
+        if not MANATTS_REPO_DIR.exists():
+            return False, (
+                "Clone MahtaFetrat/Persian-MultiSpeaker-Tacotron2 to "
+                f"{MANATTS_REPO_DIR}"
+            )
+        if not ilu.find_spec("scipy"):
+            return False, "pip install scipy"
+        if not ilu.find_spec("librosa"):
+            return False, "pip install librosa"
+        if not ilu.find_spec("soundfile"):
+            return False, "pip install soundfile"
+        if not ilu.find_spec("parallel_wavegan"):
+            return False, "pip install parallel-wavegan"
 
     return True, ""
 
@@ -161,6 +181,24 @@ def _ensure_loaded(name: str, params: dict) -> None:
             if st["instance"] and st.get("loaded_voice") != wanted:
                 slog("LOAD", name, f"Voice change: {st.get('loaded_voice')!r} → {wanted!r} — evicting")
                 _safe_del(st["instance"]); st["instance"] = None
+        if name == "matcha":
+            wanted_voice = params.get("voice", "khadijah")
+            wanted_temp  = str(params.get("temperature", "0.333"))
+            if (st["instance"] and
+                (st.get("loaded_voice") != wanted_voice or
+                 st.get("loaded_temperature") != wanted_temp)):
+                slog("LOAD", name,
+                     f"Voice/temp change: {st.get('loaded_voice')!r}/{st.get('loaded_temperature')!r} "
+                     f"→ {wanted_voice!r}/{wanted_temp!r} — evicting")
+                _safe_del(st["instance"]); st["instance"] = None
+
+        if name == "chatterbox":
+            wanted_model = params.get("model", "default")
+            if st["instance"] and st.get("loaded_model") != wanted_model:
+                slog("LOAD", name,
+                     f"Model change: {st.get('loaded_model')!r} → {wanted_model!r} — evicting")
+                _safe_del(st["instance"]); st["instance"] = None
+
         if name in ("outetts", "parler", "zonos"):
             key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
             defaults = {"outetts": OUTETTS_DEFAULT_GGUF,
@@ -178,12 +216,30 @@ def _ensure_loaded(name: str, params: dict) -> None:
                 slog("ERROR", name, f"Not available: {reason}")
                 raise RuntimeError(f"Not available: {reason}")
             if MODEL_INFO[name]["heavy"]:
+                # Log VRAM before eviction
+                try:
+                    import torch
+                    _free, _total = torch.cuda.mem_get_info()
+                    slog("VRAM", name, f"Free before evict: {_free//1048576} / {_total//1048576} MB")
+                except Exception:
+                    pass
                 _evict_heavy(keep=name)
+                try:
+                    import torch
+                    torch.cuda.empty_cache()
+                    _free, _total = torch.cuda.mem_get_info()
+                    slog("VRAM", name, f"Free after evict: {_free//1048576} / {_total//1048576} MB")
+                except Exception:
+                    pass
             st["status"] = "loading"
             t0 = time.perf_counter()
             try:
                 if name == "piper":
                     model_arg = params.get("voice", "en_US-ryan-high")
+                elif name == "matcha":
+                    model_arg = params.get("voice", "khadijah")
+                elif name == "chatterbox":
+                    model_arg = params.get("model", "default")
                 elif name == "outetts":
                     model_arg = params.get("model_path", OUTETTS_DEFAULT_GGUF)
                 elif name == "parler":
@@ -202,6 +258,11 @@ def _ensure_loaded(name: str, params: dict) -> None:
                 st["error"]  = ""
                 if name == "piper":
                     st["loaded_voice"] = params.get("voice", "en_US-ryan-high")
+                if name == "matcha":
+                    st["loaded_voice"] = params.get("voice", "khadijah")
+                    st["loaded_temperature"] = str(params.get("temperature", "0.333"))
+                if name == "chatterbox":
+                    st["loaded_model"] = params.get("model", "default")
                 if name in ("outetts", "parler", "zonos"):
                     key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
                     defaults = {"outetts": OUTETTS_DEFAULT_GGUF,
