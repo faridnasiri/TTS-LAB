@@ -122,6 +122,99 @@ try:
 except Exception:
     pass
 
+# ── GeneralInterface MutableMapping shim ────────────────────────────────────────
+# fix_transformers_shims.py truncates generic.py just before class
+# GeneralInterface(MutableMapping), replacing it with an empty stub.
+# All of AttentionInterface, AttentionMaskInterface (and any other subclass)
+# inherit from GeneralInterface and lose __getitem__, __contains__, register(),
+# valid_keys(), etc.
+#
+# Restore the full MutableMapping contract on GeneralInterface at the class
+# level so EVERY subclass picks it up.
+try:
+    from transformers.utils.generic import GeneralInterface  # noqa: F811
+
+    if not hasattr(GeneralInterface, "__getitem__"):
+        def _gi_getitem(self, key):
+            local = getattr(self, "_local_mapping", None)
+            if local is not None and key in local:
+                return local[key]
+            return self._global_mapping[key]
+        GeneralInterface.__getitem__ = _gi_getitem
+
+    if not hasattr(GeneralInterface, "__setitem__"):
+        def _gi_setitem(self, key, value):
+            if not hasattr(self, "_local_mapping"):
+                self._local_mapping = {}
+            self._local_mapping[key] = value
+        GeneralInterface.__setitem__ = _gi_setitem
+
+    if not hasattr(GeneralInterface, "__delitem__"):
+        def _gi_delitem(self, key):
+            if hasattr(self, "_local_mapping") and key in self._local_mapping:
+                del self._local_mapping[key]
+        GeneralInterface.__delitem__ = _gi_delitem
+
+    if not hasattr(GeneralInterface, "__iter__"):
+        def _gi_iter(self):
+            local = getattr(self, "_local_mapping", {})
+            merged = {**self._global_mapping, **local}
+            return iter(merged)
+        GeneralInterface.__iter__ = _gi_iter
+
+    if not hasattr(GeneralInterface, "__len__"):
+        def _gi_len(self):
+            local = getattr(self, "_local_mapping", {})
+            return len(self._global_mapping.keys() | local.keys())
+        GeneralInterface.__len__ = _gi_len
+
+    if not hasattr(GeneralInterface, "register"):
+        @classmethod
+        def _gi_register(cls, key, value):
+            cls._global_mapping.update({key: value})
+        GeneralInterface.register = _gi_register
+
+    if not hasattr(GeneralInterface, "valid_keys"):
+        def _gi_valid_keys(self):
+            local = getattr(self, "_local_mapping", {})
+            merged = {**self._global_mapping, **local}
+            return list(merged.keys())
+        GeneralInterface.valid_keys = _gi_valid_keys
+
+    if not hasattr(GeneralInterface, "keys"):
+        def _gi_keys(self):
+            local = getattr(self, "_local_mapping", {})
+            merged = {**self._global_mapping, **local}
+            return merged.keys()
+        GeneralInterface.keys = _gi_keys
+
+except Exception:
+    pass
+
+# ── chatterbox T3 hidden_states fix (transformers 4.57.6 compat) ──────────────
+# LlamaModel.forward() in transformers 4.57.6 no longer collects all hidden
+# states — it returns BaseModelOutputWithPast with hidden_states=None.
+# chatterbox's T3HuggingfaceBackend does tfmr_out.hidden_states[-1], which
+# raises TypeError: 'NoneType' object is not subscriptable.
+# Fix: patch LlamaModel.forward to fill hidden_states when it's None.
+# The result is a single-element tuple (last_hidden_state, post-norm).
+# chatterbox only accesses [-1] so this is sufficient.  Other models that
+# need per-layer hidden states will need a more complete fix later.
+try:
+    from transformers.models.llama.modeling_llama import LlamaModel
+
+    _orig_llama_forward = LlamaModel.forward
+
+    def _patched_llama_forward(self, **kwargs):
+        out = _orig_llama_forward(self, **kwargs)
+        if out.hidden_states is None and hasattr(out, "last_hidden_state"):
+            out.hidden_states = (out.last_hidden_state,)
+        return out
+
+    LlamaModel.forward = _patched_llama_forward
+except Exception:
+    pass
+
 # ── transformers cache_utils stubs (before any indextts import) ───────────────
 try:
     import transformers.cache_utils as _cu
@@ -269,3 +362,31 @@ except Exception:
 # ── parler_tts compatibility shims ────────────────────────────────────────────
 # parler_tts 0.2.3 has its own complete generate() method. No MRO or
 # attention-mask shims needed — all API fixes are in patch_parler_tts.py.
+
+# ── Chatterbox SDPA fix: AlignmentStreamAnalyzer needs output_attentions=True
+# which sdpa doesn't support. Force eager on the specific llama layers that
+# the spy hooks into.  DO NOT restore _attn_implementation afterward — the
+# hooks fire during the forward pass (later), not during registration (now).
+# Restoring "sdpa" here would cause the hooked layers to return None for
+# attention weights, crashing torch.stack(self.last_aligned_attns).
+try:
+    from chatterbox.models.t3.inference.alignment_stream_analyzer import (
+        AlignmentStreamAnalyzer as _ASA,
+    )
+    _orig_add_spy = _ASA._add_attention_spy
+    def _patched_add_spy(self, tfmr, i, layer_idx, head_idx):
+        if hasattr(tfmr, "config"):
+            tfmr.config._attn_implementation = "eager"
+        return _orig_add_spy(self, tfmr, i, layer_idx, head_idx)
+    _ASA._add_attention_spy = _patched_add_spy
+except Exception:
+    pass
+
+# ── scipy.signal.kaiser compat (removed in scipy 1.14+, needed by parallel_wavegan)
+try:
+    import scipy.signal as _sig
+    if not hasattr(_sig, "kaiser"):
+        from scipy.signal.windows import kaiser as _kaiser
+        _sig.kaiser = _kaiser
+except Exception:
+    pass
