@@ -37,6 +37,12 @@ from tts_lab_dispatch import (
 )
 from tts_lab_ui import build_page
 from tts_lab_engines import _process_persian_text
+from voice_library import (
+    list_voices, get_voice, get_voice_path, get_stats,
+    add_voice, remove_voice, get_embedding,
+    download_common_voice_persian, import_from_uploads,
+    VOICE_LIBRARY_DIR, VOICES_DIR,
+)
 
 app = FastAPI(title="Arthur TTS Lab")
 
@@ -221,6 +227,117 @@ async def preview_text(text: str = "", provider: str = "none"):
         return JSONResponse({"processed_text": "", "provider": provider})
     result = _process_persian_text(text, provider)
     return JSONResponse({"processed_text": result, "provider": provider})
+
+
+# ── Voice Library endpoints ──────────────────────────────────────────────────
+
+@app.get("/voice-library")
+async def voice_library_list(
+    gender: str = "",
+    min_duration: float = 0,
+    max_duration: float = 999,
+    min_quality: float = 0,
+    limit: int = 200,
+):
+    """List voices in the library with optional filters."""
+    voices = list_voices(
+        gender=gender,
+        min_duration=min_duration,
+        max_duration=max_duration,
+        min_quality=min_quality,
+        limit=limit,
+    )
+    return JSONResponse({"voices": voices, "count": len(voices)})
+
+
+@app.get("/voice-library/stats")
+async def voice_library_stats():
+    """Get voice library statistics."""
+    return JSONResponse(get_stats())
+
+
+@app.get("/voice-library/{voice_id}")
+async def voice_library_get(voice_id: str):
+    """Get metadata for a specific voice."""
+    v = get_voice(voice_id)
+    if not v:
+        raise HTTPException(404, f"Voice not found: {voice_id}")
+    return JSONResponse(v)
+
+
+@app.get("/voice-library/{voice_id}/audio")
+async def voice_library_audio(voice_id: str):
+    """Stream the WAV audio for a voice (for <audio> preview)."""
+    from fastapi.responses import Response
+    path = get_voice_path(voice_id)
+    if not path:
+        raise HTTPException(404, f"Voice audio not found: {voice_id}")
+    return Response(content=path.read_bytes(), media_type="audio/wav")
+
+
+@app.post("/voice-library/{voice_id}/use-ref")
+async def voice_library_use_ref(voice_id: str, engine: str = ""):
+    """Copy a voice library clip to the uploads directory so it appears in
+    the reference WAV dropdown for the specified engine."""
+    path = get_voice_path(voice_id)
+    if not path:
+        raise HTTPException(404, f"Voice not found: {voice_id}")
+    import shutil
+    dest = UPLOAD_DIR / f"{voice_id}.wav"
+    shutil.copy2(path, dest)
+    v = get_voice(voice_id)
+    return JSONResponse({
+        "ok": True,
+        "audio_prompt_id": voice_id,
+        "voice": v,
+        "url": f"/voice-library/{voice_id}/audio",
+    })
+
+
+@app.post("/voice-library/import-uploads")
+async def voice_library_import():
+    """Import existing WAVs from the TTS uploads directory into the library."""
+    loop = asyncio.get_running_loop()
+    count = await loop.run_in_executor(None, import_from_uploads, UPLOAD_DIR)
+    return JSONResponse({"ok": True, "imported": count})
+
+
+@app.post("/voice-library/download")
+async def voice_library_download(
+    count: int = 40,
+    min_duration: float = 3.0,
+    max_duration: float = 12.0,
+    female_ratio: float = 0.5,
+):
+    """Download Persian voices from Common Voice."""
+    loop = asyncio.get_running_loop()
+    n = await loop.run_in_executor(
+        None,
+        download_common_voice_persian,
+        count, min_duration, max_duration, 1, female_ratio,
+    )
+    return JSONResponse({"ok": True, "downloaded": n})
+
+
+@app.delete("/voice-library/{voice_id}")
+async def voice_library_delete(voice_id: str):
+    """Remove a voice from the library."""
+    remove_voice(voice_id)
+    return JSONResponse({"ok": True, "deleted": voice_id})
+
+
+@app.get("/voice-library/{voice_id}/embedding/{emb_type}")
+async def voice_library_embedding(voice_id: str, emb_type: str = "ge2e"):
+    """Get pre-computed speaker embedding info."""
+    emb = get_embedding(voice_id, emb_type)
+    if emb is None:
+        raise HTTPException(404, f"Embedding not available for {voice_id}/{emb_type}")
+    return JSONResponse({
+        "voice_id": voice_id,
+        "emb_type": emb_type,
+        "shape": list(emb.shape),
+        "dtype": str(emb.dtype),
+    })
 
 
 if __name__ == "__main__":

@@ -1114,10 +1114,127 @@ async function pollServerLog() {
 
 setInterval(refreshStatus, 6000);
 setInterval(pollServerLog, 2000);
+// ── Voice Library ──
+let voiceCache = [];
+
+function showVoiceLibrary() {
+  document.querySelectorAll('.engine-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-engine="voicelib"]')?.classList.add('active');
+  document.querySelectorAll('.engine-pane').forEach(p => p.style.display = 'none');
+  document.getElementById('pane-voicelib').style.display = 'block';
+  loadVoiceLibrary();
+  loadVoiceLibraryStats();
+}
+
+async function loadVoiceLibraryStats() {
+  try {
+    const r = await fetch('/voice-library/stats');
+    const s = await r.json();
+    document.getElementById('vl-stats').textContent = s.total_voices + ' voices · ' + s.total_duration_h + 'h';
+    document.getElementById('vl-meta').innerHTML =
+      '<span>📊 ' + s.total_voices + ' voices</span>' +
+      '<span>⏱ ' + s.total_duration_h + ' hours</span>' +
+      '<span>👩 ' + (s.by_gender.female || 0) + 'F</span>' +
+      '<span>👨 ' + (s.by_gender.male || 0) + 'M</span>' +
+      '<span>🧮 ' + s.with_embeddings + ' emb</span>';
+    document.getElementById('vl-count').textContent = s.total_voices + ' voices';
+  } catch(e) { console.log('VL stats error:', e); }
+}
+
+async function loadVoiceLibrary() {
+  const gender = document.getElementById('vl-filter-gender').value;
+  const minDur = document.getElementById('vl-filter-mindur').value;
+  const maxDur = document.getElementById('vl-filter-maxdur').value;
+  const minQual = document.getElementById('vl-filter-qual').value;
+  const params = new URLSearchParams({gender, min_duration: minDur, max_duration: maxDur, min_quality: minQual, limit: 100});
+  try {
+    const r = await fetch('/voice-library?' + params);
+    const data = await r.json();
+    voiceCache = data.voices;
+    renderVoiceCards(data.voices);
+  } catch(e) { console.log('VL error:', e); }
+}
+
+function renderVoiceCards(voices) {
+  const grid = document.getElementById('vl-grid');
+  if (!voices.length) { grid.innerHTML = '<div class="text-muted small p-3">No voices found. Click "Download Voices" to add Persian voices from Common Voice.</div>'; return; }
+  grid.innerHTML = voices.map(v => {
+    const gIcon = v.speaker_gender === 'female' ? '👩' : v.speaker_gender === 'male' ? '👨' : '🎤';
+    const qColor = v.quality_score > 0.8 ? 'var(--ok)' : v.quality_score > 0.5 ? 'var(--warn,#c90)' : 'var(--err,#c44)';
+    const embBadges = [];
+    if (v.has_ge2e_embedding) embBadges.push('<span class="badge bg-success" style="font-size:.65rem">GE2E</span>');
+    if (v.has_campp_embedding) embBadges.push('<span class="badge bg-info" style="font-size:.65rem">CAM++</span>');
+    return '<div class="vl-card" style="background:rgba(255,255,255,0.04);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:6px">' +
+      '<div style="display:flex;justify-content:space-between;align-items:start">' +
+        '<span style="font-size:1.2rem">' + gIcon + '</span>' +
+        '<span style="font-size:.7rem;color:' + qColor + '">q=' + (v.quality_score||0).toFixed(2) + '</span>' +
+      '</div>' +
+      '<div style="font-size:.75rem;color:var(--muted)">⏱ ' + (v.duration_s||0).toFixed(1) + 's · ' + (v.sample_rate||'?') + 'Hz · ' + (v.speaker_age||'?') + '</div>' +
+      '<div style="font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (v.transcription||'').replace(/"/g,'&quot;') + '">' + (v.transcription||'(no transcript)') + '</div>' +
+      '<audio controls preload="none" style="width:100%;height:24px" src="/voice-library/' + v.id + '/audio"></audio>' +
+      '<div style="display:flex;gap:4px;flex-wrap:wrap">' + embBadges.join('') + '</div>' +
+      '<button class="btn btn-sm btn-outline-info mt-1" onclick="useVoiceRef(\'' + v.id + '\')" title="Copy to reference WAV dropdown">📋 Use as reference</button>' +
+    '</div>';
+  }).join('');
+}
+
+async function useVoiceRef(voiceId) {
+  try {
+    const r = await fetch('/voice-library/' + voiceId + '/use-ref', {method: 'POST'});
+    const data = await r.json();
+    if (data.ok) {
+      alert('Voice ' + voiceId + ' added to reference WAV dropdown!\\n\\nSelect it in any engine panel as audio_prompt_id: ' + voiceId);
+      // Refresh all ref dropdowns
+      document.querySelectorAll('[id$="-prompt-id"]').forEach(el => {
+        if (el.tagName === 'SELECT') {
+          const opt = document.createElement('option');
+          opt.value = voiceId;
+          opt.textContent = voiceId;
+          el.appendChild(opt);
+          el.value = voiceId;
+        }
+      });
+    }
+  } catch(e) { alert('Error: ' + e); }
+}
+
+async function downloadVoices() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳ Downloading...';
+  try {
+    const count = prompt('How many voices to download from Common Voice Persian? (5-100)', '30');
+    if (!count) { btn.disabled = false; btn.textContent = '⬇ Download Voices'; return; }
+    const r = await fetch('/voice-library/download?count=' + count + '&min_duration=3&max_duration=12&female_ratio=0.5', {method: 'POST'});
+    const data = await r.json();
+    alert('Downloaded ' + data.downloaded + ' voices!');
+    loadVoiceLibrary();
+    loadVoiceLibraryStats();
+  } catch(e) { alert('Download error: ' + e); }
+  btn.disabled = false;
+  btn.textContent = '⬇ Download Voices';
+}
+
+async function importUploadsToLibrary() {
+  const btn = event.target;
+  btn.disabled = true;
+  btn.textContent = '⏳ Importing...';
+  try {
+    const r = await fetch('/voice-library/import-uploads', {method: 'POST'});
+    const data = await r.json();
+    alert('Imported ' + data.imported + ' voices from uploads!');
+    loadVoiceLibrary();
+    loadVoiceLibraryStats();
+  } catch(e) { alert('Import error: ' + e); }
+  btn.disabled = false;
+  btn.textContent = '📥 Import';
+}
+
 window.addEventListener('load', () => {
   refreshStatus();
   pollServerLog();
   schedulePreview();
+  loadVoiceLibraryStats();
 });
 </script>"""
 
@@ -1199,6 +1316,18 @@ def build_page() -> str:
         )
         first = False
 
+    # ── Voice Library sidebar item ──
+    sidebar_items.append(
+        '<div class="sidebar-section" style="margin-top:8px">🗣 Voice Library</div>'
+        '<button class="engine-btn" data-engine="voicelib" '
+        'onclick="showVoiceLibrary()" style="border-left:3px solid var(--accent)">'
+        '<span class="eng-dot">🗣</span>'
+        '<span class="eng-name">Browse Voices</span>'
+        '<span class="eng-rtf" id="vl-count">—</span>'
+        '<span class="eng-stars">🔊</span>'
+        '</button>'
+    )
+
     gpu_badge = (
         f'<span class="gpu-badge ok">🟢 {DEVICE_NAME} · {VRAM_TOTAL_MB} MB VRAM</span>'
         if DEVICE == "cuda" else
@@ -1255,6 +1384,48 @@ def build_page() -> str:
     </div>
     <div class="engine-panel">
       {"".join(pane_items)}
+      <!-- Voice Library Pane -->
+      <div class="engine-pane" id="pane-voicelib" style="display:none">
+        <div class="engine-header">
+          <span class="engine-title">🗣 Voice Library</span>
+          <span class="rtf-badge" id="vl-stats">— voices</span>
+        </div>
+        <div class="engine-meta" id="vl-meta">
+          <span>📊 Loading stats...</span>
+        </div>
+        <!-- Filter bar -->
+        <div class="param-row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Gender</label>
+            <select id="vl-filter-gender" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto" onchange="loadVoiceLibrary()">
+              <option value="">All</option>
+              <option value="female">Female</option>
+              <option value="male">Male</option>
+            </select>
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Min duration (s)</label>
+            <input type="number" id="vl-filter-mindur" class="form-control form-control-sm bg-dark text-light border-secondary" value="3" min="0" max="60" style="width:80px" onchange="loadVoiceLibrary()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Max duration (s)</label>
+            <input type="number" id="vl-filter-maxdur" class="form-control form-control-sm bg-dark text-light border-secondary" value="15" min="0" max="60" style="width:80px" onchange="loadVoiceLibrary()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Min quality</label>
+            <input type="range" id="vl-filter-qual" class="form-range" min="0" max="1" step="0.1" value="0" style="width:100px" oninput="this.nextElementSibling.textContent=parseFloat(this.value).toFixed(1);loadVoiceLibrary()">
+            <span>0.0</span>
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <button class="btn btn-sm btn-outline-info" onclick="downloadVoices()" title="Download Persian voices from Common Voice">⬇ Download Voices</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="importUploadsToLibrary()" title="Import existing uploads">📥 Import</button>
+          </div>
+        </div>
+        <!-- Voice cards grid -->
+        <div id="vl-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px">
+          <div class="text-muted small">Loading voice library...</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
