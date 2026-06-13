@@ -30,9 +30,46 @@ def check_model_inputs(*args, **kwargs):
         return args[0]
     return lambda fn: fn
 
-class GeneralInterface:
-    \"\"\"Shim for transformers>=4.54 GeneralInterface base class used by masking_utils.\"\"\"
-    pass
+from collections.abc import MutableMapping
+
+class GeneralInterface(MutableMapping):
+    \"\"\"Full MutableMapping implementation restoring what truncation removed.
+
+    AttentionInterface and AttentionMaskInterface inherit from this class
+    and rely on __getitem__, __contains__, register(), valid_keys(), etc.
+    The original generic.py truncation replaced this with an empty stub,
+    breaking every transformer model that uses attention/masking interfaces.
+    \"\"\"
+    _global_mapping = {}
+
+    def __init__(self):
+        self._local_mapping = {}
+
+    def __getitem__(self, key):
+        if key in self._local_mapping:
+            return self._local_mapping[key]
+        return self._global_mapping[key]
+
+    def __setitem__(self, key, value):
+        self._local_mapping[key] = value
+
+    def __delitem__(self, key):
+        if key in self._local_mapping:
+            del self._local_mapping[key]
+
+    def __iter__(self):
+        merged = {**self._global_mapping, **self._local_mapping}
+        return iter(merged)
+
+    def __len__(self):
+        return len(self._global_mapping.keys() | self._local_mapping.keys())
+
+    @classmethod
+    def register(cls, key: str, value):
+        cls._global_mapping.update({key: value})
+
+    def valid_keys(self):
+        return list(self.keys())
 """
     with open(path, 'w') as f:
         f.write(base + shim)
