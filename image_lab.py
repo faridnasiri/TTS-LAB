@@ -81,28 +81,56 @@ from image_lab_utils import ensure_dirs
 # Lifespan
 # ---------------------------------------------------------------------------
 
+IDLE_UNLOAD_SECONDS = 900  # 15 minutes — unload model from GPU if no generation requests
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("=== Arthur Image & Video Lab starting ===")
     ensure_dirs()
     probe_availability()
-    # Pre-load ideogram4 model in background so first request is instant
-    asyncio.create_task(_preload_ideogram4())
-    log.info("=== Image Lab ready on port %d ===", PORT)
+    # Start idle eviction task — unloads GPU model after inactivity
+    _idle_task = asyncio.create_task(_idle_eviction_loop())
+    log.info("=== Image Lab ready on port %d (lazy-load, idle-evict %ds) ===",
+             PORT, IDLE_UNLOAD_SECONDS)
     yield
+    _idle_task.cancel()
     log.info("=== Image Lab shutting down ===")
 
 
+async def _idle_eviction_loop():
+    """Background task: unload the GPU model after IDLE_UNLOAD_SECONDS of inactivity."""
+    import image_lab_engines as engines
+    from image_lab_config import STATE
+    while True:
+        await asyncio.sleep(60)  # check every 60 seconds
+        try:
+            if STATE.active_engine is None:
+                continue  # nothing loaded
+            idle_s = __import__('time').time() - STATE.last_used
+            if idle_s > IDLE_UNLOAD_SECONDS and not STATE.loading and not STATE.generating:
+                from image_lab_config import ENGINES
+                log.info("Idle eviction: %s unused for %.0fs — unloading from GPU",
+                         STATE.active_engine, idle_s)
+                await asyncio.to_thread(engines.unload_engine)
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            pass
+
+
 async def _preload_ideogram4():
-    """Pre-load Ideogram 4 in a background thread so first API call is instant."""
+    """Pre-load Ideogram 4 in a background thread so first API call is instant.
+    NOTE: Disabled by default — models now load lazily on first request and
+    auto-unload after IDLE_UNLOAD_SECONDS of inactivity.  Set IDLE_UNLOAD_SECONDS=0
+    and restart to restore eager preload behavior.
+    """
     import image_lab_engines as engines
     from image_lab_config import ENGINES, STATE
     if not ENGINES.get("ideogram4") or not ENGINES["ideogram4"].available:
         return
     if ENGINES["ideogram4"].loaded or STATE.loading:
-        return  # Already loaded or loading in progress
+        return
 
-    # Free GPU memory from TTS service (port 8000) before loading
     import subprocess
     log.info("Restarting TTS service to free GPU memory for Ideogram 4...")
     subprocess.run(["sudo", "systemctl", "restart", "arthur.service"],
@@ -111,7 +139,7 @@ async def _preload_ideogram4():
 
     log.info("Pre-loading Ideogram 4 model (background thread, ~6-8 min)...")
     try:
-        await asyncio.to_thread(engines._load_ideogram4, "nf4")
+        await asyncio.to_thread(engines._ensure_engine, "ideogram4", "nf4")
         log.info("Ideogram 4 pre-loaded — %.0f MiB VRAM used, ready for requests",
                  __import__('torch').cuda.memory_allocated() / 1024**2)
     except Exception as e:
