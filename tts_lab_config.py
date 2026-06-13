@@ -91,6 +91,19 @@ ORPHEUS_VOICES   = [("tara","tara"),("leah","leah"),("jess","jess"),("leo","leo"
 ZONOS_VARIANTS   = [("transformer","Transformer (quality, ~1.2 GB)"),
                     ("hybrid","Hybrid (faster, ~1.5 GB)")]
 CSM_SPEAKERS     = [(str(i), f"Speaker {i}") for i in range(3)]
+MATCHA_VOICES    = [
+    ("khadijah", "Khadijah — Female, 22050 Hz, FA+EN"),
+    ("musa",     "Musa — Male, 22050 Hz, FA+EN"),
+]
+MATCHA_MODEL_REPOS = {
+    "khadijah": "csukuangfj/matcha-tts-fa_en-khadijah",
+    "musa":     "csukuangfj/matcha-tts-fa_en-musa",
+}
+MATCHA_VOCODER_REPO = "csukuangfj/sherpa-onnx-hifigan"
+MATCHA_VOCODER_FILE = "hifigan_v2.onnx"
+MANATTS_REPO_DIR   = Path("/opt/models/Persian-MultiSpeaker-Tacotron2")
+MANATTS_MODEL_REPO = "MahtaFetrat/Persian-Tacotron2-on-ManaTTS"
+MANATTS_MAX_CHARS  = 200
 
 # ── OuteTTS GGUF defaults ─────────────────────────────────────────────────────
 OUTETTS_DEFAULT_GGUF      = "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf"
@@ -139,12 +152,15 @@ MODEL_INFO = {
     "indextts":   {"label":"IndexTTS-2",    "size":"~1.5 GB",            "rtf_est":"RTF ~0.4 (GPU)",        "ram_est_mb":2000, "heavy":True, "notes":"Zero-shot voice cloning. Reference WAV required.","arthur_fit":4},
     "zonos":      {"label":"Zonos v0.1",    "size":"~1.2 GB",            "rtf_est":"RTF 4.03 (GPU)",        "ram_est_mb":2500, "heavy":True, "notes":"Emotion vector + speaking-rate. 44 kHz.","arthur_fit":4},
     "openvoice":  {"label":"OpenVoice v2",  "size":"~600 MB",            "rtf_est":"RTF ~0.5 (GPU)",        "ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion.","arthur_fit":3},
+    "matcha":     {"label":"Matcha-TTS (FA/EN)","size":"~74 MB per voice",  "rtf_est":"RTF ~0.05 (CPU/GPU)",   "ram_est_mb":400,  "heavy":False,"notes":"Fast flow-matching ONNX. Khadijah (F) + Musa (M). 22050 Hz.","arthur_fit":3},
+    "manatts":    {"label":"ManaTTS (FA)",  "size":"~371 MB + encoder",    "rtf_est":"RTF ~5-10 (GPU)",       "ram_est_mb":2500, "heavy":True, "notes":"Tacotron2+HiFi-GAN. Persian-only. Needs ref WAV. GPU recommended.","arthur_fit":3},
 }
 
 MODEL_ORDER = [
-    "piper","kokoro","melo","chattts","outetts","bark","styletts2","f5tts","dia","xtts",
+    "piper","kokoro","melo","matcha",
+    "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
     "cosyvoice","parler","chatterbox","fishspeech","csm","qwen3tts","orpheus",
-    "neutts","indextts","zonos","openvoice",
+    "neutts","indextts","manatts","zonos","openvoice",
 ]
 
 HEAVY = {n for n, i in MODEL_INFO.items() if i["heavy"]}
@@ -188,6 +204,8 @@ SYNTH_TIMEOUT: dict[str, int] = {
     "qwen3tts": 180,
     "outetts":  120,
     "f5tts":    120,
+    "manatts":  120,
+    "fishspeech":360,
     "chattts":   90,
 }
 DEFAULT_SYNTH_TIMEOUT = 300
