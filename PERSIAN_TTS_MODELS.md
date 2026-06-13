@@ -250,16 +250,65 @@ def _normalize_persian_text(text):
 
 ---
 
-## 9. Voice Cloning (Chatterbox)
+## 9. Voice Library — Persian Reference Voices
 
-The Persian fine-tune supports zero-shot voice cloning via reference WAV. To add a new voice:
+A curated library of Persian reference voices for voice cloning across all engines.
+Accessible via the **🗣 Browse Voices** sidebar button in the UI.
 
-1. Record a **clean 5-15 second** WAV of the target speaker (minimal background noise, 16-24 kHz mono)
-2. In the Chatterbox panel, use the "Voice cloning reference WAV" upload button
-3. Select the uploaded WAV — `audio_prompt_id` auto-populates
-4. Generate — the output will clone the reference speaker's voice
+### Library Stats (2026-06-13)
 
-Uploaded reference WAVs persist in `/tmp/tts_uploads/` and appear in the Reference WAV dropdown on subsequent visits.
+| Source | Voices | Gender | Speakers | Quality |
+|---|---|---|---|---|
+| **Common Voice 25.0** | 200 | 100♀ 100♂ | 175 unique | Validated, q≥0.5 |
+| **ManaTTS dataset** | 15 | All ♀ | 1 speaker | 44.1kHz studio |
+| **Existing uploads** | 8 | Mixed | Various | — |
+| **Total** | **223** | 115♀ 100♂ 8? | 175+ | 975s audio |
+
+### How It Works
+
+1. **Browse** — click 🗣 Browse Voices in the sidebar → filter by gender, duration, quality
+2. **Preview** — embedded audio player on each card plays the voice
+3. **Use as reference** — two buttons:
+   - 📋 **Use as reference** — copies WAV to `/tmp/tts_uploads/`, refreshes ALL engine dropdowns, auto-selects the voice
+   - ▶ **Use for active engine** — copies + sets as reference for the currently selected engine only
+4. **Synthesize** — switch to any engine panel (Chatterbox, ManaTTS, F5-TTS, etc.), the voice is pre-selected in the reference dropdown
+
+The voice is now available for ALL engines that support voice cloning: Chatterbox, ManaTTS, F5-TTS, Fish Speech, OpenVoice, IndexTTS, CosyVoice, XTTS, ChatTTS, OuteTTS, Dia, Parler, Zonos.
+
+### Adding More Voices
+
+```bash
+# Stream from Common Voice Persian (fast — no download needed):
+python3 /opt/arthur/cv_downloader.py --target 500  # import 500 more voices
+python3 /opt/arthur/cv_downloader.py --female-only --target 100  # female only
+
+# Or download from ManaTTS (single speaker, high quality):
+python3 /opt/arthur/download_voices.py --target 50
+
+# Import existing uploads:
+curl -X POST http://localhost:8001/voice-library/import-uploads
+```
+
+### Architecture
+
+| Component | File |
+|---|---|
+| Backend (CRUD, download, stats) | `voice_library.py` |
+| API endpoints (12 routes) | `tts_lab.py:227-308` |
+| UI (card grid, filters, player) | `tts_lab_ui.py:1100-1270` |
+| CV importer (streaming from HF) | `cv_downloader.py` |
+| ManaTTS importer | `download_voices.py` |
+| Voice storage | `/opt/arthur/voice_library/voices/` (40 MB) |
+
+### Speaker Embedding Cache
+
+Pre-computed embeddings enable instant voice switching. Run on demand:
+```bash
+python3 /opt/arthur/voice_library.py --compute-embeddings
+```
+This caches GE2E (ManaTTS) and CAM++ (Chatterbox) embeddings to
+`/opt/arthur/voice_library/embeddings/`.  Subsequent synthesis with those
+voices skips the embedding computation step.
 
 ---
 
@@ -270,8 +319,10 @@ For best Persian pronunciation, use in this order:
 1. **Chatterbox (Persian fine-tune)** — best quality, supports voice cloning via ref WAV, ~3s synthesis
    - For long texts: split into sentences, synthesize each separately
    - For mispronounced words: try adding vowel marks (diacritics)
-   - For custom voices: upload a reference WAV
+   - For custom voices: browse Voice Library (223 voices, 175+ speakers)
 2. **Matcha-TTS (Khadijah/Musa)** — fast, decent quality, proper phonemization, ~0.3s synthesis
 3. **ManaTTS** — natural but slower, needs ref WAV, ~7s synthesis on GPU
+4. **F5-TTS** — good zero-shot cloning with GPU (~0.3× RTF), needs Persian ref WAV; use Voice Library to pick a reference
+5. **Fish Speech** — works for Persian (3.4× RTF), character-based, optional ref WAV
 
 If pronunciation is consistently wrong for specific words, try adding vowel marks (diacritics) in Chatterbox Persian mode.

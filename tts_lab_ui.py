@@ -1173,9 +1173,35 @@ function renderVoiceCards(voices) {
       '<div style="font-size:.7rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + (v.transcription||'').replace(/"/g,'&quot;') + '">' + (v.transcription||'(no transcript)') + '</div>' +
       '<audio controls preload="none" style="width:100%;height:24px" src="/voice-library/' + v.id + '/audio"></audio>' +
       '<div style="display:flex;gap:4px;flex-wrap:wrap">' + embBadges.join('') + '</div>' +
-      '<button class="btn btn-sm btn-outline-info mt-1" onclick="useVoiceRef(\'' + v.id + '\')" title="Copy to reference WAV dropdown">📋 Use as reference</button>' +
+      '<button class="btn btn-sm btn-outline-info mt-1" onclick="useVoiceRef(\'' + v.id + '\')" title="Copy to all engine reference WAV dropdowns">📋 Use as reference</button>' +
+      '<button class="btn btn-sm btn-outline-success mt-1" onclick="useVoiceRefActive(\'' + v.id + '\')" title="Set as reference for the currently selected engine">▶ Use for active engine</button>' +
     '</div>';
   }).join('');
+}
+
+async function refreshRefDropdowns(selectId) {
+  // Fetch /refs and repopulate the given SELECT (or all if selectId is null)
+  try {
+    const r = await fetch('/refs');
+    const data = await r.json();
+    const refs = data.refs || [];
+    const targets = selectId
+      ? [document.getElementById(selectId)]
+      : Array.from(document.querySelectorAll('[id$="-prompt-id"]')).filter(el => el.tagName === 'SELECT');
+    targets.forEach(sel => {
+      if (!sel) return;
+      const currentVal = sel.value;
+      sel.innerHTML = '<option value="">— none —</option>';
+      refs.forEach(ref => {
+        const opt = document.createElement('option');
+        opt.value = ref.id;
+        opt.textContent = ref.name + ' (' + (ref.size/1024).toFixed(0) + 'KB)';
+        sel.appendChild(opt);
+      });
+      // Restore previous selection if still present
+      if (refs.some(r => r.id === currentVal)) sel.value = currentVal;
+    });
+  } catch(e) { console.log('refreshRefDropdowns error:', e); }
 }
 
 async function useVoiceRef(voiceId) {
@@ -1183,19 +1209,47 @@ async function useVoiceRef(voiceId) {
     const r = await fetch('/voice-library/' + voiceId + '/use-ref', {method: 'POST'});
     const data = await r.json();
     if (data.ok) {
-      alert('Voice ' + voiceId + ' added to reference WAV dropdown!\\n\\nSelect it in any engine panel as audio_prompt_id: ' + voiceId);
-      // Refresh all ref dropdowns
+      // Refresh ALL engine reference dropdowns and pre-select this voice
+      await refreshRefDropdowns(null);
       document.querySelectorAll('[id$="-prompt-id"]').forEach(el => {
-        if (el.tagName === 'SELECT') {
-          const opt = document.createElement('option');
-          opt.value = voiceId;
-          opt.textContent = voiceId;
-          el.appendChild(opt);
-          el.value = voiceId;
-        }
+        if (el.tagName === 'SELECT') el.value = voiceId;
       });
+      // Show toast instead of alert
+      const v = data.voice || {};
+      showToast('✅ ' + voiceId + ' ready — select in any engine ref dropdown (g=' + (v.speaker_gender||'?') + ', d=' + (v.duration_s||0) + 's)');
     }
-  } catch(e) { alert('Error: ' + e); }
+  } catch(e) { showToast('Error: ' + e); }
+}
+
+async function useVoiceRefActive(voiceId) {
+  // Use for the currently active engine only
+  if (!activeEngine) { showToast('Select an engine first, then click this button'); return; }
+  try {
+    const r = await fetch('/voice-library/' + voiceId + '/use-ref?engine=' + activeEngine, {method: 'POST'});
+    const data = await r.json();
+    if (data.ok) {
+      const dropdownId = activeEngine + '-prompt-id';
+      await refreshRefDropdowns(dropdownId);
+      const sel = document.getElementById(dropdownId);
+      if (sel) sel.value = voiceId;
+      // Also switch to that engine's pane
+      showToast('✅ ' + voiceId + ' set as reference for ' + activeEngine);
+    }
+  } catch(e) { showToast('Error: ' + e); }
+}
+
+function showToast(msg) {
+  let toast = document.getElementById('vl-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'vl-toast';
+    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;background:#1a8a3f;color:#fff;padding:10px 20px;border-radius:8px;z-index:9999;font-size:.85rem;max-width:400px;box-shadow:0 4px 12px rgba(0,0,0,.3)';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  clearTimeout(toast._timeout);
+  toast._timeout = setTimeout(() => { toast.style.opacity = '0'; }, 4000);
 }
 
 async function downloadVoices() {
