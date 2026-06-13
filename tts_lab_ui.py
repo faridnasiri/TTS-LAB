@@ -265,20 +265,47 @@ def _build_params(name: str) -> str:
         )
 
     if name == "chatterbox":
+        cb_models = [("default", "Default (multilingual)"), ("persian", "Persian fine-tune (FA)")]
         return (
             _row(
+                _grp("Model", _sel("model", cb_models, "default")),
                 _grp('Exaggeration <span class="range-val">0.65</span>', _rng("exaggeration", "0.0", "1.0", "0.05", "0.65", "0=flat, 1=expressive")),
+            )
+            + _row(
                 _grp('CFG weight <span class="range-val">0.5</span>', _rng("cfg_weight", "0.1", "1.0", "0.05", "0.5", "lower=natural")),
                 _grp('Seed <span class="range-val">0</span>', _rng("seed", "0", "9999", "1", "0", "0=random")),
             )
             + f'<div class="param-row">{_upload_widget("cb-file", "cb-status", "cb-prompt-id", "Voice cloning reference WAV (optional)")}</div>'
+            + _row(
+                _grp('Max Length <span class="range-val">20000</span>', _rng("max_length", "500", "20000", "500", "20000", "tokens — higher=longer audio")),
+                _grp('', ''),
+            )
+            + _row(
+                _grp('Text processing',
+                     '<select class="form-select form-select-sm bg-dark text-light border-secondary g2p-select" data-param="use_g2p">'
+                     '<option value="persian_phonemizer">persian-phonemizer — Add vowel marks (G2P)</option>'
+                     '<option value="hazm">hazm — Normalize text (no vowel marks)</option>'
+                     '<option value="parsivar">parsivar — Normalize text (no vowel marks)</option>'
+                     '<option value="none">None — Raw text</option>'
+                     '</select>'),
+                _grp('', ''),
+            )
+            + '<p class="text-muted small mt-1">Persian fine-tune loads 1.6GB T3 weights — first load takes ~30s. '
+            'Increase Max Length for longer speech.</p>'
         )
 
     if name == "fishspeech":
         return (
             f'<div class="param-row">{_upload_widget("fs2-file", "fs2-status", "fs2-prompt-id", "Reference WAV (optional — enables voice cloning)")}</div>'
-            + _row(_grp('Speed <span class="range-val">1.0</span>', _rng("speed", "0.5", "2.0", "0.1", "1.0")))
-            + '<p class="text-muted small mt-1">Without reference: default voice. Upload a 5-30s WAV to clone any voice.</p>'
+            + _row(
+                _grp('Temperature <span class="range-val">0.7</span>', _rng("temperature", "0.1", "1.5", "0.05", "0.7", "lower=more focused")),
+                _grp('Top-P <span class="range-val">0.7</span>', _rng("top_p", "0.1", "1.0", "0.05", "0.7")),
+            )
+            + _row(
+                _grp('Max tokens <span class="range-val">256</span>', _rng("max_new_tokens", "64", "2048", "64", "256", "higher=longer audio")),
+                _grp('Rep. penalty <span class="range-val">1.5</span>', _rng("rep_penalty", "1.0", "2.5", "0.05", "1.5")),
+            )
+            + '<p class="text-muted small mt-1">GPU ~6 tok/s. 256 tokens ≈ 7s audio. Fish Speech supports any language including Persian.</p>'
         )
 
     if name == "csm":
@@ -400,6 +427,91 @@ def _build_params(name: str) -> str:
                 _grp('Tau (blend) <span class="range-val">0.3</span>', _rng("tau", "0.0", "1.0", "0.05", "0.3", "0=original, 1=full clone")),
             )
             + f'<div class="param-row">{_upload_widget("ov-file", "ov-status", "ov-prompt-id", "Reference WAV (optional — voice to clone)")}</div>'
+        )
+
+    if name == "matcha":
+        from tts_lab_config import MATCHA_VOICES
+        vopts = "\n".join(
+            f'<option value="{v}">{label}</option>'
+            for v, label in MATCHA_VOICES)
+        return (
+            _row(
+                _grp("Voice", _sel("voice", [(v, l) for v, l in MATCHA_VOICES], "khadijah")),
+                _grp('Speed <span class="range-val">1.0</span>', _rng("speed", "0.5", "2.0", "0.1", "1.0")),
+                _grp('Temperature <span class="range-val">0.333</span>',
+                     _rng("temperature", "0.0", "2.0", "0.01", "0.333",
+                          "higher=more variation · changes reload model")),
+            )
+            + '<p class="text-muted small mt-1">Matcha-TTS: fast flow-matching. Khadijah=Female, Musa=Male. '
+            'Bilingual Persian+English, 22050 Hz.</p>'
+        )
+
+    if name == "manatts":
+        return (
+            '<div class="alert alert-secondary py-2 small mb-2">'
+            '<strong>ManaTTS</strong> — Persian Tacotron2 + HiFi-GAN. '
+            'Requires a reference WAV for speaker embedding.</div>'
+            + _row(
+                _grp("Reference WAV",
+                     '<select class="form-select form-select-sm bg-dark text-light border-secondary" '
+                     'data-param="audio_prompt_id" id="manatts-ref-select">'
+                     '<option value="">— select a reference WAV —</option>'
+                     '</select>'
+                     '<div class="text-muted small mt-1" id="manatts-ref-info"></div>'),
+            )
+            + '<div class="param-row"><label>Upload new reference WAV</label>'
+            '<div class="d-flex gap-2 align-items-center">'
+            '<input type="file" id="man-file" '
+            'class="form-control form-control-sm bg-dark text-light border-secondary" '
+            'accept="audio/wav,audio/*" style="max-width:320px">'
+            '<button class="btn btn-sm btn-outline-info" '
+            'onclick="uploadManattsRef()">Upload</button>'
+            '<span id="man-status" class="text-muted small"></span>'
+            '</div></div>'
+            + _row(
+                _grp('Text processing',
+                     '<select class="form-select form-select-sm bg-dark text-light border-secondary g2p-select" data-param="use_g2p">'
+                     '<option value="persian_phonemizer">persian-phonemizer — Add vowel marks (G2P)</option>'
+                     '<option value="hazm">hazm — Normalize text (no vowel marks)</option>'
+                     '<option value="parsivar">parsivar — Normalize text (no vowel marks)</option>'
+                     '<option value="none">None — Raw text</option>'
+                     '</select>'),
+                _grp('', ''),
+            )
+            + '<p class="text-muted small mt-1">Upload a 3-10s WAV of a Persian speaker. '
+            'Long text is auto-split into shorter segments.</p>'
+            + '<script>'
+            # Populate dropdown from /refs endpoint
+            'fetch("/refs").then(r=>r.json()).then(data=>{'
+            '  const sel=document.getElementById("manatts-ref-select");'
+            '  let hasSample=false;'
+            '  data.refs.forEach(r=>{'
+            '    const o=document.createElement("option");'
+            '    o.value=r.id; o.textContent=r.name+" ("+(r.size/1024).toFixed(0)+" KB)";'
+            '    sel.appendChild(o);'
+            '    if(r.id==="sample") hasSample=true;'
+            '  });'
+            '  if(hasSample) sel.value="sample";'
+            '  document.getElementById("manatts-ref-info").textContent=data.refs.length+" file(s) available";'
+            '}).catch(()=>{});'
+            # Upload function that refreshes dropdown
+            'async function uploadManattsRef(){'
+            '  const input=document.getElementById("man-file");'
+            '  const status=document.getElementById("man-status");'
+            '  if(!input.files.length) return;'
+            '  const fd=new FormData(); fd.append("file",input.files[0]);'
+            '  status.textContent="Uploading...";'
+            '  try{'
+            '    const r=await fetch("/upload",{method:"POST",body:fd});'
+            '    const d=await r.json();'
+            '    status.textContent="OK: "+d.id;'
+            '    const sel=document.getElementById("manatts-ref-select");'
+            '    const o=document.createElement("option");'
+            '    o.value=d.id; o.textContent=d.filename+" (just uploaded)";'
+            '    sel.appendChild(o); sel.value=d.id;'
+            '  }catch(e){status.textContent="Upload failed: "+e;}'
+            '}'
+            '</script>'
         )
 
     return ""
@@ -658,6 +770,43 @@ document.addEventListener('input', e => {
     if (span) span.textContent = parseFloat(e.target.value).toFixed(
       e.target.step < 0.1 ? 3 : e.target.step < 1 ? 2 : 0);
   }
+});
+
+// ── Text preview via /preview-text ──
+let _previewTimeout = null;
+
+function schedulePreview() {
+  clearTimeout(_previewTimeout);
+  _previewTimeout = setTimeout(updatePreview, 400);
+}
+
+async function updatePreview() {
+  const text = document.getElementById('text-input')?.value.trim();
+  const provider = document.getElementById('preview-provider')?.value || 'persian_phonemizer';
+  const previewDiv = document.getElementById('text-preview');
+  if (!text) { if (previewDiv) previewDiv.textContent = ''; return; }
+  try {
+    const res = await fetch(`/preview-text?text=${encodeURIComponent(text)}&provider=${provider}`);
+    const data = await res.json();
+    if (previewDiv) previewDiv.textContent = data.processed_text || text;
+  } catch(e) { if (previewDiv) previewDiv.textContent = text; }
+}
+
+// Sync G2P dropdowns with the preview provider
+document.addEventListener('change', e => {
+  if (e.target.classList.contains('g2p-select')) {
+    document.getElementById('preview-provider').value = e.target.value;
+    schedulePreview();
+  }
+  if (e.target.id === 'preview-provider') {
+    document.querySelectorAll('.g2p-select').forEach(s => s.value = e.target.value);
+    schedulePreview();
+  }
+});
+
+// Live preview as user types
+document.addEventListener('input', e => {
+  if (e.target.id === 'text-input') schedulePreview();
 });
 
 function getParams(modelId) {
@@ -968,6 +1117,7 @@ setInterval(pollServerLog, 2000);
 window.addEventListener('load', () => {
   refreshStatus();
   pollServerLog();
+  schedulePreview();
 });
 </script>"""
 
@@ -1092,6 +1242,16 @@ def build_page() -> str:
       <label>Arthur's text <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted)">(shared across all engines)</span></label>
       <div class="preset-bar">{presets_html}</div>
       <textarea id="text-input" class="text-box">{ARTHUR_PRESETS[0][1]}</textarea>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+        <label class="text-muted small mb-0" style="white-space:nowrap">Preview with:</label>
+        <select id="preview-provider" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto">
+          <option value="persian_phonemizer">persian-phonemizer — Add vowel marks (G2P)</option>
+          <option value="hazm">hazm — Normalize text (no vowel marks)</option>
+          <option value="parsivar">parsivar — Normalize text (no vowel marks)</option>
+          <option value="none">None — Raw text</option>
+        </select>
+      </div>
+      <div id="text-preview" class="small" style="color:#d4d4d4;min-height:2em;max-height:130px;overflow-y:auto;white-space:pre-wrap;font-family:monospace;padding:6px;margin-top:2px;border:1px solid var(--border);border-radius:4px;background:rgba(0,0,0,0.15)"></div>
     </div>
     <div class="engine-panel">
       {"".join(pane_items)}

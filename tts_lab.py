@@ -26,6 +26,7 @@ from tts_lab_config import (
     MODEL_ORDER, MODEL_INFO, _state, UPLOAD_DIR,
     SYNTH_TIMEOUT, DEFAULT_SYNTH_TIMEOUT,
     ALL_KOKORO_VOICES, ALL_XTTS_SPEAKERS, BARK_PRESETS, OUTETTS_SPEAKERS,
+    MATCHA_VOICES,
     _server_log, _server_log_seq, slog,
 )
 from tts_lab_shims import DEVICE, DEVICE_NAME, VRAM_TOTAL_MB
@@ -35,6 +36,7 @@ from tts_lab_dispatch import (
     _import_cache, _import_cache_lock, _sweep_done,
 )
 from tts_lab_ui import build_page
+from tts_lab_engines import _process_persian_text
 
 app = FastAPI(title="Arthur TTS Lab")
 
@@ -113,6 +115,8 @@ async def voices(model: str):
         "bark":      [v for v, _ in BARK_PRESETS],
         "xtts":      ALL_XTTS_SPEAKERS,
         "cosyvoice": ["English Female", "English Male"],
+        "matcha":    [v for v, _ in MATCHA_VOICES],
+        "manatts":   ["Persian Female (built-in)"],
     }
     return JSONResponse({"voices": vmap.get(model, [])})
 
@@ -191,6 +195,32 @@ async def upload_audio(file: UploadFile = File(...)):
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
     return JSONResponse({"id": uid, "filename": file.filename, "size": dest.stat().st_size})
+
+
+@app.get("/refs")
+async def list_refs():
+    """List available reference WAV files for dropdown selection."""
+    refs = []
+    for p in sorted(UPLOAD_DIR.glob("*.wav"), key=lambda x: x.stat().st_mtime, reverse=True):
+        refs.append({
+            "id": p.stem,
+            "name": p.name,
+            "size": p.stat().st_size,
+        })
+    return JSONResponse({"refs": refs})
+
+
+@app.get("/preview-text")
+async def preview_text(text: str = "", provider: str = "none"):
+    """Preview what the Persian text processor will produce for a given provider.
+
+    Providers: persian_phonemizer, hazm, parsivar, none
+    Returns the processed text for display in the UI.
+    """
+    if not text:
+        return JSONResponse({"processed_text": "", "provider": provider})
+    result = _process_persian_text(text, provider)
+    return JSONResponse({"processed_text": result, "provider": provider})
 
 
 if __name__ == "__main__":

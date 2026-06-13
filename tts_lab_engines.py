@@ -312,7 +312,7 @@ def _synth_styletts2(inst, text, params):
 # ── 8. F5-TTS ─────────────────────────────────────────────────────────────────
 def _load_f5tts():
     from f5_tts.api import F5TTS
-    return F5TTS()
+    return F5TTS(device=DEVICE)
 
 def _synth_f5tts(inst, text, params):
     ref_id   = params.get("audio_prompt_id", "")
@@ -479,8 +479,9 @@ def _synth_parler(inst, text, params):
 
 
 # ── 13. Chatterbox ────────────────────────────────────────────────────────────
-def _load_chatterbox():
-    import types, importlib.machinery
+def _load_chatterbox(model="default"):
+    """Load Chatterbox TTS. model="persian"=FA fine-tune, "multilingual-v2"=23-lang v2."""
+    import types, importlib.machinery, shutil
     for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
                 "torchcodec.decoders._core", "torchcodec.decoders.video_decoder",
                 "torchcodec.encoders"]:
@@ -494,9 +495,32 @@ def _load_chatterbox():
     if perth.PerthImplicitWatermarker is None:
         perth.PerthImplicitWatermarker = perth.DummyWatermarker
     from chatterbox.tts import ChatterboxTTS
+
+    if model == "persian":
+        from huggingface_hub import snapshot_download
+        from chatterbox.models.t3.modules.t3_config import T3Config
+        from chatterbox.models.t3 import T3
+        from chatterbox.models.tokenizers import EnTokenizer
+        from safetensors.torch import load_file
+        fa_dir = Path(snapshot_download(
+            "hootan09/ChatterBox",
+            allow_patterns=["t3_fa.safetensors", "mtl_tokenizer.json"],
+        ))
+        inst = ChatterboxTTS.from_pretrained(device="cpu")
+        t3_new = T3(hp=T3Config.multilingual())
+        t3_state = load_file(str(fa_dir / "t3_fa.safetensors"))
+        t3_new.load_state_dict(t3_state, strict=True)
+        inst.t3 = t3_new.to(DEVICE).eval()
+        inst.ve = inst.ve.to(DEVICE)
+        inst.s3gen = inst.s3gen.to(DEVICE)
+        inst.device = DEVICE
+        inst.tokenizer = EnTokenizer(str(fa_dir / "mtl_tokenizer.json"))
+        return inst
+
     return ChatterboxTTS.from_pretrained(device=DEVICE)
 
 def _synth_chatterbox(inst, text, params):
+    import traceback as _tb
     kw = dict(
         exaggeration=float(params.get("exaggeration", 0.65)),
         cfg_weight=float(params.get("cfg_weight", 0.5)),
@@ -509,7 +533,32 @@ def _synth_chatterbox(inst, text, params):
         p = UPLOAD_DIR / f"{pid}.wav"
         if p.exists():
             kw["audio_prompt_path"] = str(p)
-    wav = inst.generate(text, **kw)
+    # Text processing: G2P diacritics or normalization (hazm/parsivar)
+    text = _process_persian_text(text, params.get("use_g2p", "persian_phonemizer"))
+
+    # Truncate input text if it exceeds the model's 2048-token position embedding limit
+    # Diacritics double the token count, so 2048 tokens ≈ ~1000-1500 Persian characters with marks
+    test_tokens = inst.tokenizer.text_to_tokens(text)
+    max_text = 2048
+    if test_tokens.size(0) > max_text:
+        test_tokens = test_tokens[:max_text]
+        new_len = min(len(text), int(len(text) * max_text / test_tokens.size(0) * 1.1))
+        text = text[:new_len]
+        slog("TRUNC", "chatterbox", f"Text truncated to {new_len} chars ({max_text} tokens)")
+
+    # Override max_new_tokens — hardcoded to 1000 in chatterbox source
+    max_tokens = int(float(params.get("max_length", "20000")))
+    _orig_t3_infer = inst.t3.inference
+    def _patched_infer(*a, **kw2):
+        kw2["max_new_tokens"] = max_tokens  # force override (not setdefault)
+        return _orig_t3_infer(*a, **kw2)
+    inst.t3.inference = _patched_infer
+    try:
+        wav = inst.generate(text, **kw)
+    except Exception:
+        raise RuntimeError(f"chatterbox generate() failed:\n{_tb.format_exc()}")
+    finally:
+        inst.t3.inference = _orig_t3_infer
     arr = wav.squeeze().cpu().numpy().astype(np.float32)
     return _to_wav(arr, inst.sr), inst.sr
 
@@ -556,7 +605,7 @@ def _synth_fishspeech(inst, text, params):
     chunks = list(generate_long(
         model=model, device=DEVICE, decode_one_token=decode_one_token,
         text=text, num_samples=1,
-        max_new_tokens=int(float(params.get("max_new_tokens", 1024))),
+        max_new_tokens=int(float(params.get("max_new_tokens", 256))),
         top_p=float(params.get("top_p", 0.7)),
         repetition_penalty=float(params.get("rep_penalty", 1.5)),
         temperature=float(params.get("temperature", 0.7)),
@@ -902,30 +951,329 @@ def _synth_openvoice(inst, text, params):
         Path(out_tmp).unlink(missing_ok=True)
 
 
+# ── 22. Matcha-TTS ────────────────────────────────────────────────────────────
+# Fast flow-matching TTS via sherpa-onnx. Persian + English, 2 voices.
+# Models auto-download from HuggingFace on first load.
+
+def _load_matcha(voice="khadijah"):
+    import sherpa_onnx
+    from huggingface_hub import snapshot_download as _dl
+    from tts_lab_config import MATCHA_MODEL_REPOS, MATCHA_VOCODER_REPO, MATCHA_VOCODER_FILE
+
+    if voice not in MATCHA_MODEL_REPOS:
+        raise ValueError(
+            f"Unknown matcha voice: {voice!r}. Options: {list(MATCHA_MODEL_REPOS)}"
+        )
+
+    repo_id     = MATCHA_MODEL_REPOS[voice]
+    model_dir   = Path(_dl(repo_id))
+    model_path  = str(model_dir / "model.onnx")
+    tokens_path = str(model_dir / "tokens.txt")
+    data_dir    = str(model_dir / "espeak-ng-data")
+
+    # HiFi-GAN vocoder (separate, shared across voices)
+    vocoder_dir  = Path(_dl(MATCHA_VOCODER_REPO))
+    vocoder_path = str(vocoder_dir / MATCHA_VOCODER_FILE)
+
+    if not Path(model_path).exists():
+        raise FileNotFoundError(f"model.onnx not found in {model_dir}")
+    if not Path(vocoder_path).exists():
+        raise FileNotFoundError(f"{MATCHA_VOCODER_FILE} not found in {vocoder_dir}")
+
+    # sherpa-onnx Matcha config
+    matcha_cfg = sherpa_onnx.OfflineTtsMatchaModelConfig(
+        acoustic_model=model_path,
+        vocoder=vocoder_path,
+        tokens=tokens_path,
+        data_dir=data_dir,
+        noise_scale=0.333,
+        length_scale=1.0,
+    )
+    model_cfg = sherpa_onnx.OfflineTtsModelConfig(
+        matcha=matcha_cfg,
+        num_threads=_N_CORES,
+        provider="cuda" if DEVICE == "cuda" else "cpu",
+        debug=False,
+    )
+    tts_cfg = sherpa_onnx.OfflineTtsConfig(
+        model=model_cfg,
+        max_num_sentences=1,
+    )
+    if not tts_cfg.validate():
+        raise RuntimeError("Matcha-TTS: OfflineTtsConfig validation failed")
+    return sherpa_onnx.OfflineTts(tts_cfg)
+
+
+def _synth_matcha(inst, text, params):
+    speed       = float(params.get("speed", 1.0))
+    temperature = float(params.get("temperature", 0.333))
+
+    # Rebuild engine if temperature differs from what was loaded
+    # (noise_scale is fixed at construction time in sherpa-onnx).
+    # _ensure_loaded handles the eviction — we just generate here.
+    result = inst.generate(
+        text,
+        sid=0,
+        speed=speed,
+    )
+    # sherpa-onnx returns GeneratedAudio with .samples (np.array) and .sample_rate
+    return _to_wav(result.samples, int(result.sample_rate)), int(result.sample_rate)
+
+
+# ── 23. ManaTTS ───────────────────────────────────────────────────────────────
+# Tacotron v1 (SV2TTS pipeline) + HiFi-GAN vocoder. Persian-only.
+# Requires reference WAV for speaker embedding extraction.
+
+# ── Persian text processing (G2P + normalization) ───────────────────────────
+# Cache singletons — created on first use
+_g2p_cache: dict = {}
+
+def _process_persian_text(text: str, provider: str) -> str:
+    """Process Persian text with the selected provider.
+
+    Providers:
+      persian_phonemizer — G2P: adds vowel marks (dictionary + neural)
+      hazm              — Normalize only: Arabic→Persian chars, ZWNJ, spacing (NO vowel marks)
+      parsivar          — Normalize only: chars + digits→ASCII + spacing (NO vowel marks)
+      none              — Raw text, no processing
+    """
+    provider = (provider or "none").strip().lower()
+
+    # Map legacy boolean values
+    if provider in ("1", "true", "yes", "on"):
+        provider = "persian_phonemizer"
+    elif provider in ("0", "false", "no", "off", ""):
+        provider = "none"
+
+    if provider == "none":
+        return text
+
+    if provider == "persian_phonemizer":
+        try:
+            from persian_phonemizer import Phonemizer
+            if "phonemizer" not in _g2p_cache:
+                _g2p_cache["phonemizer"] = Phonemizer(output_format='eraab')
+            return _g2p_cache["phonemizer"].phonemize(text)
+        except Exception:
+            return text
+
+    if provider == "hazm":
+        try:
+            from hazm import Normalizer
+            if "hazm" not in _g2p_cache:
+                _g2p_cache["hazm"] = Normalizer()
+            return _g2p_cache["hazm"].normalize(text)
+        except Exception:
+            return text
+
+    if provider == "parsivar":
+        try:
+            from parsivar import Normalizer
+            if "parsivar" not in _g2p_cache:
+                _g2p_cache["parsivar"] = Normalizer(
+                    statistical_space_correction=True,
+                    date_normalizing_needed=True,
+                )
+            return _g2p_cache["parsivar"].normalize(text)
+        except Exception:
+            return text
+
+    return text
+
+
+def _normalize_persian_text(text: str) -> str:
+    """Normalize Persian text for Tacotron2's limited character vocabulary.
+
+    Converts Persian/Arabic digits to ASCII, Arabic chars to Persian equivalents,
+    and strips characters not in the model's symbol set.
+    """
+    # Persian digits → ASCII
+    persian_digits = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    text = text.translate(persian_digits)
+
+    # Arabic chars → Persian equivalents
+    arabic_to_persian = str.maketrans({
+        "ك": "ک",  # Arabic kaf → Persian kaf
+        "ي": "ی",  # Arabic ye → Persian ye
+        "ة": "ه",  # Arabic ta marbuta → Persian he
+        "ؤ": "و",  # Arabic waw with hamza → vav
+        "أ": "ا",  # Arabic alef with hamza → alef
+        "إ": "ا",  # Arabic alef with hamza below → alef
+        "ئ": "ی",  # Arabic ye with hamza → ye
+        "ء": "",   # Remove hamza
+    })
+    text = text.translate(arabic_to_persian)
+
+    # Strip characters outside the model's known symbol set
+    from synthesizer.persian_utils.symbols import _characters
+    allowed = set(_characters + " _pad_eos~")
+    text = "".join(c for c in text if c in allowed or c.isspace())
+
+    return text.strip()
+
+
+def _split_persian_text(text: str, max_chars: int = 200) -> list:
+    """Split Persian text into chunks respecting sentence boundaries."""
+    import re
+    text = _normalize_persian_text(text)
+    if not text:
+        return []
+    sentences = re.split(r'(?<=[.?!؟])\s+|(?<=[.?!؟])$', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+    chunks = []
+    current = ""
+    for s in sentences:
+        if len(current) + len(s) + 1 <= max_chars:
+            current = (current + " " + s).strip()
+        else:
+            if current:
+                chunks.append(current)
+            current = s
+    if current:
+        chunks.append(current)
+    return chunks or [text.strip()]
+
+
+def _load_manatts():
+    from huggingface_hub import snapshot_download as _dl
+    from tts_lab_config import MANATTS_REPO_DIR, MANATTS_MODEL_REPO
+
+    # 1. Verify implementation repo
+    if not MANATTS_REPO_DIR.exists():
+        raise FileNotFoundError(
+            f"ManaTTS repo not found at {MANATTS_REPO_DIR}.\n"
+            "Clone: git clone https://github.com/MahtaFetrat/Persian-MultiSpeaker-Tacotron2 "
+            f"{MANATTS_REPO_DIR}"
+        )
+    if str(MANATTS_REPO_DIR) not in sys.path:
+        sys.path.insert(0, str(MANATTS_REPO_DIR))
+
+    # 2. Import the cloned repo's inference modules
+    from encoder import inference as encoder_mod
+    from synthesizer.inference import Synthesizer
+
+    # 3. Download model checkpoints from HuggingFace
+    model_dir = Path(_dl(MANATTS_MODEL_REPO, allow_patterns=["*.pt", "*.pth"]))
+
+    # 4. Load encoder
+    encoder_path = model_dir / "encoder.pt"
+    if not encoder_path.exists():
+        # encoder.pt may be bundled in the cloned repo
+        encoder_path = MANATTS_REPO_DIR / "saved_models" / "default" / "encoder.pt"
+    if not encoder_path.exists():
+        raise FileNotFoundError(
+            "encoder.pt not found. Download it and place in the models directory."
+        )
+    encoder_mod.load_model(str(encoder_path))
+
+    # 5. Load synthesizer
+    synth_path = model_dir / "synthesizer.pt"
+    if not synth_path.exists():
+        raise FileNotFoundError(
+            f"synthesizer.pt not found in {model_dir}.\n"
+            f"Download from: https://huggingface.co/{MANATTS_MODEL_REPO}"
+        )
+    synthesizer = Synthesizer(str(synth_path))
+
+    # 6. Load HiFi-GAN vocoder (916MB, downloaded separately)
+    vocoder = None
+    vocoder_paths = [
+        Path("/opt/models/manatts-vocoder/vctk_hifigan.v1/checkpoint-2500000steps.pkl"),
+        model_dir / "vocoder_HiFiGAN.pkl",
+    ]
+    for vp in vocoder_paths:
+        if vp.exists():
+            try:
+                from parallel_wavegan.utils import load_model as load_pwg
+                vocoder = load_pwg(str(vp))
+                vocoder.remove_weight_norm()
+                vocoder = vocoder.eval().to(DEVICE)
+                break
+            except Exception:
+                continue
+
+    return {
+        "synthesizer": synthesizer,
+        "encoder": encoder_mod,
+        "vocoder": vocoder,
+        "sr": int(Synthesizer.sample_rate),
+    }
+
+
+def _synth_manatts(inst, text, params):
+    import torch
+    from tts_lab_config import UPLOAD_DIR, MANATTS_MAX_CHARS
+    from synthesizer.inference import Synthesizer
+
+    # 1. Text processing: G2P diacritics or normalization (hazm/parsivar)
+    text = _process_persian_text(text, params.get("use_g2p", "persian_phonemizer"))
+
+    # 2. Validate reference audio
+    ref_id   = params.get("audio_prompt_id", "")
+    ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
+    if not ref_path or not ref_path.exists():
+        raise RuntimeError(
+            "ManaTTS requires a reference WAV for speaker embedding.\n"
+            "Upload a 3-10s WAV of the target speaker first."
+        )
+
+    encoder    = inst["encoder"]
+    synthesizer = inst["synthesizer"]
+    vocoder    = inst["vocoder"]
+
+    # 2. Load and preprocess reference WAV
+    wav = Synthesizer.load_preprocess_wav(str(ref_path))
+    encoder_wav = encoder.preprocess_wav(wav)
+    embed, _, _ = encoder.embed_utterance(encoder_wav, return_partials=True)
+
+    # 3. Split text and synthesize
+    chunks = _split_persian_text(text, max_chars=MANATTS_MAX_CHARS)
+    embeds = [embed] * len(chunks)
+    specs = synthesizer.synthesize_spectrograms(chunks, embeds)
+    spec  = np.concatenate(specs, axis=1)
+
+    # 4. Vocode
+    if vocoder is not None:
+        x = torch.from_numpy(spec.T).to(DEVICE)
+        with torch.no_grad():
+            wav_out = vocoder.inference(x)
+        wav_out = wav_out.squeeze().cpu().numpy().astype(np.float32)
+    else:
+        import librosa
+        wav_out = librosa.feature.inverse.mel_to_audio(
+            spec, sr=inst["sr"]
+        ).astype(np.float32)
+
+    wav_out = wav_out / np.abs(wav_out).max() * 0.97
+    return _to_wav(wav_out, inst["sr"]), inst["sr"]
+
+
 # ── Dispatch tables ───────────────────────────────────────────────────────────
 LOADERS: dict = {
     "piper":      _load_piper,    "kokoro":    _load_kokoro,
-    "melo":       _load_melo,     "chattts":   _load_chattts,
-    "outetts":    _load_outetts,  "bark":      _load_bark,
-    "styletts2":  _load_styletts2,"f5tts":     _load_f5tts,
-    "dia":        _load_dia,      "xtts":      _load_xtts,
-    "cosyvoice":  _load_cosyvoice,"parler":    _load_parler,
-    "chatterbox": _load_chatterbox,
+    "melo":       _load_melo,     "matcha":    _load_matcha,
+    "chattts":    _load_chattts,  "outetts":   _load_outetts,
+    "bark":       _load_bark,     "styletts2": _load_styletts2,
+    "f5tts":      _load_f5tts,    "dia":       _load_dia,
+    "xtts":       _load_xtts,     "cosyvoice": _load_cosyvoice,
+    "parler":     _load_parler,   "chatterbox":_load_chatterbox,
     "fishspeech": _load_fishspeech,"csm":      _load_csm,
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
     "neutts":     _load_neutts,   "indextts":  _load_indextts,
-    "zonos":      _load_zonos,    "openvoice": _load_openvoice,
+    "manatts":    _load_manatts,  "zonos":     _load_zonos,
+    "openvoice":  _load_openvoice,
 }
 SYNTHERS: dict = {
     "piper":      _synth_piper,    "kokoro":    _synth_kokoro,
-    "melo":       _synth_melo,     "chattts":   _synth_chattts,
-    "outetts":    _synth_outetts,  "bark":      _synth_bark,
-    "styletts2":  _synth_styletts2,"f5tts":     _synth_f5tts,
-    "dia":        _synth_dia,      "xtts":      _synth_xtts,
-    "cosyvoice":  _synth_cosyvoice,"parler":    _synth_parler,
-    "chatterbox": _synth_chatterbox,
+    "melo":       _synth_melo,     "matcha":    _synth_matcha,
+    "chattts":    _synth_chattts,  "outetts":   _synth_outetts,
+    "bark":       _synth_bark,     "styletts2": _synth_styletts2,
+    "f5tts":      _synth_f5tts,    "dia":       _synth_dia,
+    "xtts":       _synth_xtts,     "cosyvoice": _synth_cosyvoice,
+    "parler":     _synth_parler,   "chatterbox":_synth_chatterbox,
     "fishspeech": _synth_fishspeech,"csm":      _synth_csm,
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
     "neutts":     _synth_neutts,   "indextts":  _synth_indextts,
-    "zonos":      _synth_zonos,    "openvoice": _synth_openvoice,
+    "manatts":    _synth_manatts,  "zonos":     _synth_zonos,
+    "openvoice":  _synth_openvoice,
 }
