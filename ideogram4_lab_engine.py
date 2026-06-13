@@ -643,7 +643,7 @@ def generate_ideogram4(
         len(images), elapsed, effective_num_steps, width, height, preset,
     )
 
-    return images
+    return images, prompt  # Return final caption for API response
 
 
 # ---------------------------------------------------------------------------

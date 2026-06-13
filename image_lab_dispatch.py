@@ -4,6 +4,7 @@ image_lab_dispatch.py — FastAPI route handlers for the Image & Video Lab.
 
 from __future__ import annotations
 import asyncio
+import importlib
 import logging
 import os
 from pathlib import Path
@@ -131,6 +132,82 @@ async def generate(
         raise HTTPException(500, f"Generation failed: {exc}")
 
     return JSONResponse({"results": results})
+
+
+# ---------------------------------------------------------------------------
+# /generate/ideogram4/caption — expand plain text → JSON caption (fast, no generation)
+# ---------------------------------------------------------------------------
+
+@router.post("/generate/ideogram4/caption")
+async def ideogram4_caption(
+    prompt:               str   = Form(...),
+    use_magic_prompt:     bool  = Form(True),
+    magic_prompt_aspect_ratio: str = Form("16:9"),
+):
+    """
+    Expand a plain-text prompt into a structured Ideogram 4 JSON caption.
+    No image generation — returns in ~2-5s. Never times out (>120s).
+
+    Priority chain: Ideogram hosted (free) → DeepSeek → OpenRouter.
+
+    Response includes per-provider error details so callers can debug
+    missing API keys or network issues.
+    """
+    if not prompt or not prompt.strip():
+        raise HTTPException(400, "prompt is required")
+
+    try:
+        mod = importlib.import_module("ideogram4_lab_engine")
+    except ImportError:
+        raise HTTPException(503, "Ideogram 4 engine not available")
+
+    caption = prompt
+    provider = "none"
+    errors: list[dict] = []
+
+    if use_magic_prompt and prompt.strip():
+        providers = [
+            ("ideogram_hosted", mod._expand_via_ideogram),
+            ("deepseek",        mod._expand_via_deepseek),
+            ("openrouter",      mod._expand_via_openrouter),
+        ]
+        for prov_name, expand_fn in providers:
+            try:
+                expanded = expand_fn(prompt, magic_prompt_aspect_ratio)
+                if expanded:
+                    caption = expanded
+                    provider = prov_name
+                    break
+                else:
+                    errors.append({
+                        "provider": prov_name,
+                        "error": "expansion returned empty — API key missing or request failed",
+                    })
+            except Exception as exc:
+                errors.append({
+                    "provider": prov_name,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+
+    if provider != "none":
+        log.info("Caption expanded via %s (%d chars)", provider, len(caption))
+    else:
+        log.warning("Caption expansion failed for all providers: %s",
+                    "; ".join(e["provider"] + ": " + e["error"] for e in errors))
+
+    return JSONResponse({
+        "success":      provider != "none",
+        "caption":      caption,
+        "provider":     provider,
+        "aspect_ratio": magic_prompt_aspect_ratio,
+        "errors":       errors,
+        "user_message": (
+            f"Caption expanded via {provider}" if provider != "none"
+            else "All caption providers failed — see 'errors' for details. "
+                 "Ensure IDEOGRAM_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY is set. "
+                 "Returning plain-text prompt as-is (will produce poor results)."
+        ),
+    })
 
 
 # ---------------------------------------------------------------------------
