@@ -322,6 +322,35 @@ def _synth_f5tts(inst, text, params):
     ref_text = params.get("ref_text", "")
     speed    = float(params.get("speed", 1.0))
     nfe      = int(float(params.get("nfe_step", 32)))
+
+    # F5-TTS v1 Base vocab has only 25 Arabic chars: أبةتجحدرزسصطعقكلمنهويَُِْ
+    # Missing 17 Persian chars (اآپثچخذژشضظغفکگیئ) — all map to space token (idx 0),
+    # producing silence/garbled output.  Map to closest in-vocab Arabic equivalents.
+    # NOTE: mappings like پ→ب, چ→ج, ف→ب, ش→س, گ→ق lose phonemic distinctions.
+    # This makes speech understandable but heavily accented.
+    _F5TTS_PERSIAN_MAP = str.maketrans({
+        "ا": "أ",  # ALEF → ALEF HAMZA (lossless)
+        "آ": "أ",  # ALEF MADDA → ALEF HAMZA
+        "پ": "ب",  # PE → BE (labial → labial)
+        "ث": "س",  # SE → SIN (fricative → fricative)
+        "چ": "ج",  # CHE → JEEM
+        "خ": "ح",  # KHE → HE (guttural → guttural)
+        "ذ": "ز",  # ZAL → ZE (dental → dental)
+        "ژ": "ز",  # ZHE → ZE
+        "ش": "س",  # SHIN → SIN (sibilant → sibilant)
+        "ض": "ص",  # ZAD → SAD (emphatic → emphatic)
+        "ظ": "ط",  # ZA → TA (emphatic → emphatic)
+        "غ": "ع",  # GHAYN → AYN (pharyngeal → pharyngeal)
+        "ف": "ب",  # FE → BE (only labial in vocab; "F" sound lost)
+        "ک": "ك",  # Persian KAF → Arabic KAF (lossless)
+        "گ": "ق",  # GAF → QAF
+        "ی": "ي",  # Persian YE → Arabic YE (lossless)
+        "ئ": "ي",  # YE HAMZA → YE
+    })
+    text = text.translate(_F5TTS_PERSIAN_MAP)
+    if ref_text:
+        ref_text = ref_text.translate(_F5TTS_PERSIAN_MAP)
+
     wav, sr, _ = inst.infer(
         ref_file=str(ref_path), ref_text=ref_text,
         gen_text=text, speed=speed, nfe_step=nfe,
