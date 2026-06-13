@@ -43,6 +43,7 @@ curl -X POST http://192.168.0.87:8002/generate/ideogram4 \
 | Method | URL | Description |
 |--------|-----|-------------|
 | `POST` | `/generate/ideogram4` | Generate one image |
+| `POST` | `/generate/ideogram4/caption` | **Expand plain text → JSON caption (fast, no generation)** |
 | `GET` | `/status` | Check engine availability, VRAM, model state |
 | `GET` | `/files/images/{filename}` | Download generated image |
 
@@ -57,13 +58,139 @@ curl -X POST http://192.168.0.87:8002/generate/ideogram4 \
       "filename": "ideogram4_a48b6908-....png",
       "url": "/files/images/ideogram4_a48b6908-....png",
       "base64": "iVBORw0KGgo...",
-      "type": "image"
+      "type": "image",
+      "width": 1280,
+      "height": 720,
+      "params": {
+        "prompt": "...",
+        "width": 1280,
+        "height": 720,
+        "preset": "V4_QUALITY_48",
+        "guidance_scale": 10.0,
+        "seed": 42,
+        "quant": "nf4",
+        "use_magic_prompt": false,
+        "magic_prompt_aspect_ratio": "16:9",
+        "caption": "{...}" 
+      },
+      "created_at": 1781100613.045
     }
   ]
 }
 ```
 
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | UUID for this generation |
+| `engine` | string | `"ideogram4"` |
+| `filename` | string | Saved PNG filename on server |
+| `url` | string | Relative URL to download the image |
+| `base64` | string | Full PNG as base64-encoded string |
+| `type` | string | `"image"` |
+| `width` | int | Output image width in pixels |
+| `height` | int | Output image height in pixels |
+| `params.prompt` | string | Original prompt as submitted |
+| `params.caption` | string | **Final caption used for generation** (see below) |
+| `params.*` | mixed | All submitted parameters echoed back |
+| `created_at` | float | Unix timestamp of generation |
+
+### `params.caption` — The Final Caption
+
+The `caption` field always contains the **exact JSON caption that was used to generate the image**:
+
+- **Direct JSON mode** (`use_magic_prompt=false`): `caption` is your input prompt echoed back.
+- **Magic Prompt mode** (`use_magic_prompt=true`): `caption` is the expanded structured JSON caption from the LLM expansion chain (Ideogram hosted API → DeepSeek → OpenRouter).
+
+This allows callers to:
+1. Send plain text → receive the expanded JSON caption back
+2. Learn the correct Ideogram 4 caption format
+3. Reuse the JSON structure for future direct-JSON calls (faster, no API overhead)
+
 Download: `http://192.168.0.87:8002/files/images/ideogram4_[id].png`
+
+---
+
+---
+
+## 2b. `/generate/ideogram4/caption` — Fast Caption Expansion
+
+Expand a plain-text prompt into a structured Ideogram 4 JSON caption without generating an image. Returns in ~2-5s — never times out.
+
+**Use this when:**
+- You want to learn the correct JSON caption format
+- You want to cache captions and generate images later
+- Your HTTP client has a short timeout (<120s)
+
+### Request
+
+```bash
+curl -X POST http://192.168.0.87:8002/generate/ideogram4/caption \
+  -F 'prompt=A clean 16:9 slide about solar energy, white paper, black text, orange accents' \
+  -F 'use_magic_prompt=true' \
+  -F 'magic_prompt_aspect_ratio=16:9'
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `prompt` | string | **required** | Plain text prompt to expand |
+| `use_magic_prompt` | bool | true | Must be `true` (caption-only endpoint) |
+| `magic_prompt_aspect_ratio` | string | `16:9` | Target ratio: `16:9`, `3:4`, `1:1`, etc. |
+
+### Response (success)
+
+```json
+{
+  "success": true,
+  "caption": "{...full expanded JSON caption (3-5 KB)...}",
+  "provider": "ideogram_hosted",
+  "aspect_ratio": "16:9",
+  "errors": [],
+  "user_message": "Caption expanded via ideogram_hosted"
+}
+```
+
+### Response (all providers failed)
+
+```json
+{
+  "success": false,
+  "caption": "A clean 16:9 slide...",
+  "provider": "none",
+  "aspect_ratio": "16:9",
+  "errors": [
+    {"provider": "ideogram_hosted", "error": "expansion returned empty — API key missing or request failed"},
+    {"provider": "deepseek", "error": "expansion returned empty — API key missing or request failed"},
+    {"provider": "openrouter", "error": "expansion returned empty — API key missing or request failed"}
+  ],
+  "user_message": "All caption providers failed — see 'errors' for details. Ensure IDEOGRAM_API_KEY, DEEPSEEK_API_KEY, or OPENROUTER_API_KEY is set. Returning plain-text prompt as-is (will produce poor results)."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | bool | `true` if expansion succeeded via any provider |
+| `caption` | string | Expanded JSON caption (or original prompt if all failed) |
+| `provider` | string | Which provider succeeded: `ideogram_hosted`, `deepseek`, `openrouter`, or `none` |
+| `aspect_ratio` | string | Echo of the requested aspect ratio |
+| `errors` | array | Per-provider error details (empty on success) |
+| `user_message` | string | Human-readable status for logging/debugging |
+
+### Two-step workflow for remote services
+
+```bash
+# Step 1: Get caption (fast, 2-5s, never times out)
+CAPTION=$(curl -s -X POST http://192.168.0.87:8002/generate/ideogram4/caption \
+  -F 'prompt=...' \
+  -F 'magic_prompt_aspect_ratio=16:9' | jq -r '.caption')
+
+# Step 2: Generate image with cached caption (no API overhead)
+curl -X POST http://192.168.0.87:8002/generate/ideogram4 \
+  -F "prompt=$CAPTION" \
+  -F 'width=1536' -F 'height=864' \
+  -F 'preset=V4_QUALITY_48' -F 'guidance_scale=10.0' -F 'quant=nf4'
+```
+
+**Provider priority:** Ideogram hosted (free, best) → DeepSeek native → OpenRouter → DeepSeek.
 
 ---
 

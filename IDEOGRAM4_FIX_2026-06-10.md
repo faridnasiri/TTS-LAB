@@ -89,13 +89,38 @@ Removed the sed patch that injected `local_files_only=True` into the tokenizer. 
 
 ## Result
 
-| Metric | Before | After |
-|--------|--------|-------|
-| First-request 500 error | ❌ Crash | ✅ Works |
-| Pre-load at startup | ❌ Silent fail | ✅ Successful |
-| Load time | — | ~395 s (6.5 min) |
-| VRAM after load | — | 4,980 MiB used, 10,723 MiB free |
-| Test generation (1280×720, 28 steps) | — | ✅ 194.6 s |
+| Metric | Before | After Fix | After + FA2 + 1536p |
+|--------|--------|-------|------|
+| First-request 500 error | ❌ Crash | ✅ Works | ✅ Works |
+| Pre-load at startup | ❌ Silent fail | ✅ Successful | ✅ Successful |
+| Load time | — | ~395 s (6.5 min) | ~400 s |
+| VRAM after load | — | 4,980 MiB used | 4,980 MiB used |
+| Test gen (1280×720) | — | ✅ 194.6 s | ✅ w/ FA2 |
+| Test gen (1536×864) | — | — | ✅ 656 s |
+| Flash Attention 2 | — | — | ✅ v2.8.3 sm_120 |
+| fp8 quantization | — | — | ❌ OOM on 16 GB |
+
+## Follow-up Optimizations (same day)
+
+See `IDEOGRAM4_OPTIMIZATIONS.md` for detailed comparison vs OpenAI gpt-image-2.
+
+- **Flash Attention 2** v2.8.3 installed (2h compile, 50+ CUDA kernels, sm_120)
+- **1536×864 resolution** confirmed working — matches OpenAI's ~1.5 MP range
+- **Sequential offloading** (3 patches) — TE→CPU, conditional↔CPU during load. Peak VRAM: 11.5 GB → 10 GB
+- **fp8** still won't fit — transformer alone ~15.5 GB on disk, needs 24 GB GPU
+- **Higher guidance (15)** reduces quality — stick with 7–10
+- **FLUX.2 Klein 4B** doesn't fit on 16 GB without CPU offload — separate task
+- **Remaining quality gap** is model-inherent (text rendering, texture detail)
+
+## Recommended production settings
+
+```
+POST /generate/ideogram4
+width=1536 height=864
+preset=V4_QUALITY_48
+guidance_scale=10.0
+quant=nf4
+```
 
 **API:** `POST http://192.168.0.87:8002/generate/ideogram4`
 **Status:** `GET http://192.168.0.87:8002/status`

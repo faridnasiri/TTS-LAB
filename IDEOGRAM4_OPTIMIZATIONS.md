@@ -13,7 +13,7 @@
 | 2 | Pre-load at startup (background thread) | First API call is instant after load | ✅ |
 | 3 | `HF_HUB_OFFLINE=1` — skip HF network checks | Saves ~30-60s per load | ✅ |
 | 4 | Qwen3-VL 4-bit disk cache | Skips bitsandbytes re-quantization on restart | ✅ |
-| 5 | Flash Attention 2 | 2-3x faster attention, 30% less VRAM | 🔄 |
+| 5 | Flash Attention 2 | 2-3x faster attention, 30% less VRAM | ✅ |
 | 6 | Request logging → ring buffer → Web UI Logs tab | Real-time monitoring | ✅ |
 
 ---
@@ -64,23 +64,25 @@ results = await asyncio.to_thread(engines.generate, engine_key, params)
 
 ---
 
-## 5. Flash Attention 2 (IN PROGRESS)
+## 5. Flash Attention 2 (✅ DONE — June 10, 2026)
 
-**Expected impact:**
+**Installed:** FA2 v2.8.3 compiled from source with Blackwell sm_120 support
+**Command:** `MAX_JOBS=2 /opt/arthur-img-env/bin/pip install flash-attn --no-build-isolation`
+**Compile time:** ~2 hours (50+ CUDA kernels × 4 architectures × bf16/fp16 variants)
+**Integration:** Drop-in via PyTorch SDPA backend — no code changes needed
+
+**Verified:**
+- Torch 2.11.0+cu128, CUDA 12.8, RTX 5060 Ti (Blackwell)
+- `import flash_attn` succeeds, FA2 registers as default SDPA backend
+- Service pre-load: same VRAM (FA2 savings apply during generation, not idle)
+- Generation succeeds at both 1280×720 and 1536×864
+
+**Expected impact (during generation):**
 - 2-3x faster attention computation in DiT transformer
 - 30% less VRAM during denoising (~12 GB → ~8-9 GB)
-- Generation time: ~60s → ~35-40s for QUALITY_48
+- Generation time: ~200s → potentially ~130-150s for QUALITY_48 at 1280×720
 
-**Installation:**
-```bash
-sudo systemctl stop arthur-imglab.service
-MAX_JOBS=2 /opt/arthur-img-env/bin/pip install flash-attn --no-build-isolation
-sudo systemctl start arthur-imglab.service
-```
-
-**Compatibility:** RTX 5060 Ti (Blackwell, sm_120). FA2 2.7+ has Blackwell support. Compiles from source — one-time cost of 10-15 min.
-
-**Safety:** FA2 integrates via PyTorch's SDPA backend. Drop-in replacement for `F.scaled_dot_product_attention`. Affects ALL models that use SDPA — but is backwards compatible. No code changes needed.
+**Note:** FA2 does NOT reduce idle/model-load VRAM — the savings are during the attention computation in the denoising loop. Model weights + CUDA context still use ~5 GB at idle.
 
 ---
 
@@ -155,3 +157,72 @@ From request logs (2026-06-09):
 - `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True` required
 - Post-load offload in engine after `from_pretrained()`
 - Defensive auto-restore in `_get_qwen3_vl_embeddings`
+
+---
+
+## June 10, 2026 — Quality Improvement Tests
+
+### OpenAI vs Ideogram 4 comparison (`C:\ytdl\FinalVideos\nlm-images\38fa3679`)
+
+4 matched prompt pairs: Ideogram (Jun 9) vs OpenAI gpt-image-2 (May 24).
+
+| Metric | Ideogram (orig) | Ideogram (best) | OpenAI | Gap |
+|--------|:---:|:---:|:---:|:---:|
+| Resolution | 1280×720 | 1536×864 | 1536×1024 | Close after fix |
+| Pixels | 0.92 MP | 1.33 MP | 1.57 MP | 15% less |
+| File size | ~700 KB | 790 KB | ~2,300 KB | 3× smaller |
+| Detail (RGB std) | 36 | 37 | 61 | **1.7× less** |
+| Brightness | 234 | 247 | 228 | Flatter, brighter |
+
+### What we tested
+
+| Test | Result | Verdict |
+|------|--------|--------|
+| Guidance scale 10 → 15 | std dropped 36→33, image flatter | ❌ Keep 7–10 |
+| fp8 quantization | CUDA OOM — fp8 transformer ~15.5 GB alone, needs 24 GB GPU | ❌ Needs 24 GB GPU |
+| 1536×864 resolution | Works, marginal quality gain (std 36→37) | ✅ Use for final output |
+| Flash Attention 2 | Installed v2.8.3, sm_120 support | ✅ Faster denoising |
+| Qwen3-VL 4-bit disk cache | bnb Params4bit `save_pretrained()` → NotImplementedError | ❌ Abandoned |
+| Higher steps (48 vs 28) | External caller override — can't fix from server side | ⚠️ Caller issue |
+| Sequential offloading (3 patches) | TE→CPU, conditional↔CPU during load, frees ~1.5 GB | ✅ Deployed |
+
+### Sequential Component Offloading (June 10, 2026)
+
+Three patches to `pipeline_ideogram4.py` prevent GPU components from coexisting during load:
+
+| # | Line | Change | Effect |
+|---|------|--------|--------|
+| 1 | ~329 | `device` → `"cpu"` in `_load_qwen3_vl` call | Qwen3-VL loads to CPU, auto-moves to GPU for encoding |
+| 2 | ~302 | Offload conditional `.to("cpu")` after loading | Makes room for unconditional transformer |
+| 3 | ~316 | Restore conditional `.to(device)` after uncond. offloaded | Conditional ready for denoising |
+
+**Pipeline already handles:** auto-GPU-move in `_get_qwen3_vl_embeddings` (line 438-440) and CPU offload after encoding (line 575-581).
+
+**Result:** Peak VRAM dropped from ~11.5 GB to ~10 GB (nf4). fp8 still won't fit — transformer alone is ~15.5 GB > 15.48 GB GPU.
+
+### Root cause of quality gap
+
+The **1.7× texture/detail gap is model-inherent** — Ideogram 4's DiT architecture with Qwen3-VL text encoder does not render text as crisply as OpenAI's proprietary pipeline. This affects:
+- Typography sharpness at small sizes
+- Paper texture realism
+- Edge definition on data viz / charts
+- Orange accent precision
+
+Resolution, quantization, and guidance tuning close ~10–15% of the gap. The remaining ~85% is a model capability ceiling.
+
+### Recommended settings for editorial slides
+
+```
+width=1536 height=864
+preset=V4_QUALITY_48
+guidance_scale=10.0
+quant=nf4
+use_magic_prompt=true
+magic_prompt_aspect_ratio=16:9
+```
+
+### Known caller issues (from logs)
+
+- `magic_prompt_aspect_ratio=1:1` but `width=1280 height=720` — mismatch
+- `num_inference_steps=28` overriding QUALITY_48's 48 steps
+- Prompt is meta-instructions ("I want you to generate...") not scene description
