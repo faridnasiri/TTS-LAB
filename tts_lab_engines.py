@@ -562,20 +562,21 @@ def _load_chatterbox(model="default"):
         v3_dir = Path(snapshot_download(
             "ResembleAI/chatterbox",
             allow_patterns=["t3_mtl23ls_v3.safetensors", "s3gen_v3.safetensors",
-                          "mtl_tokenizer.json", "ve.safetensors"],
+                          "grapheme_mtl_merged_expanded_v1.json", "ve.safetensors"],
         ))
-        slog("LOAD", "chatterbox", "Loading v3 (30-layer, 2GB)...")
+        slog("LOAD", "chatterbox", "Loading v3 (30-layer, 2GB, 2454-token grapheme)...")
         inst = ChatterboxTTS.from_pretrained(device="cpu")
         t3_new = T3(hp=T3Config.multilingual())
         t3_state = load_file(str(v3_dir / "t3_mtl23ls_v3.safetensors"))
         t3_new.load_state_dict(t3_state, strict=True)
         inst.t3 = t3_new.to(DEVICE).eval()
-        # v3 has its own vocoder
+        # v3 has its own vocoder (s3gen_v3)
         inst.s3gen.load_state_dict(load_file(str(v3_dir / "s3gen_v3.safetensors")), strict=False)
         inst.s3gen = inst.s3gen.to(DEVICE)
         inst.ve = inst.ve.to(DEVICE)
         inst.device = DEVICE
-        inst.tokenizer = EnTokenizer(str(v3_dir / "mtl_tokenizer.json"))
+        # v3 uses grapheme tokenizer (2454 tokens) — matches text_emb weight shape
+        inst.tokenizer = EnTokenizer(str(v3_dir / "grapheme_mtl_merged_expanded_v1.json"))
         return inst
 
     return ChatterboxTTS.from_pretrained(device=DEVICE)
