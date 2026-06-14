@@ -1,21 +1,34 @@
 # Arthur TTS Lab
 
-A self-hosted, 21-engine Text-to-Speech benchmark and evaluation lab running on an Ubuntu VM.
-Compare every major open-source TTS model side-by-side through a single web UI on port 8001.
+A self-hosted, 21-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI.
+
+---
+
+## Features
+
+- **21 TTS engines** — every major open-source TTS model in one web UI
+- **5 Image & Video engines** — FLUX.2, SD 3.5, Ideogram4, Wan2.2, FLUX.2 Klein
+- **Side-by-side comparison** — switch engines instantly, compare voices, measure quality
+- **Voice Library** — browse, play, download Persian reference voices from Common Voice
+- **Reference WAV cloning** — upload or select reference audio for zero-shot voice cloning engines
+- **RTF benchmarking** — automated Real-Time Factor measurement across all TTS engines
+- **Persian text processing** — G2P, hazm, parsivar providers with live preview
+- **NVFP4 native quantization** — Blackwell-optimized weights for FLUX.2 and Wan2.2
+- **Single-click deploy** — PowerShell scripts deploy everything to an Ubuntu VM via SSH
 
 ---
 
 ## Quick Start
 
 ```powershell
-# Existing VM — redeploy code + patches + restart (~30 sec):
-cd C:\repos\Spamblocker\tools\tts-lab
+# Deploy to existing VM (~30 sec):
 .\deploy_lab.ps1 -Phase 5
 
-# Brand-new blank VM — everything from zero (~30-60 min):
+# Full deploy to fresh VM (~30-60 min):
 .\deploy_lab.ps1
 
-# Open in browser: http://192.168.0.87:8001
+# Open in browser:
+# http://192.168.0.87:8001
 ```
 
 ---
@@ -38,87 +51,18 @@ Windows dev machine  ──SCP──►  Ubuntu VM (192.168.0.87)
                               arthur-lab.service (systemd)
 ```
 
----
+### Component Layout
 
-## VM Details
-
-| Property | Value |
+| File | Role |
 |---|---|
-| Host | Proxmox node, VM 104 |
-| OS | Ubuntu 22.04 |
-| IP | 192.168.0.87 |
-| Port | 8001 |
-| SSH key | `~/.ssh/id_arthur_vm` |
-| SSH user | `arthur` |
-| venv | `/opt/arthur-bench-env/` (Python 3.11) |
-| Lab code | `/opt/arthur/` |
-| Models | `/opt/models/` (650 GB data disk, ext4) |
-| HF cache | `/opt/models/huggingface/` |
-| Service | `arthur-lab.service` (systemd, runs as root) |
-| PyTorch | CPU-only (no GPU passthrough on this VM) |
-| RAM | 32 GB |
-| Disk | 650 GB (nvme-lvm expanded) |
-
----
-
-## 21 Engines
-
-| # | Key | Label | Model Size | RTF (GPU) | Arthur Fit | Notes |
-|---|---|---|---|---|---|---|
-| 1 | `piper` | Piper TTS | 61-116 MB | 0.36x | ** | ONNX CPU-only. Real-time on any hardware. 6 voices. |
-| 2 | `kokoro` | Kokoro-82M | 89 MB | 2.77x | ***** | 54 voices, 9 languages. `bm_lewis` = best Arthur voice. |
-| 3 | `melo` | MeloTTS | 200 MB | 0.30x | *** | 5 English accents. `EN-BR` sounds slightly older. |
-| 4 | `chattts` | ChatTTS | 1.2-2.3 GB | 2.59x | **** | Speed prompts `[speed_N]`, speaker sampling. |
-| 5 | `outetts` | OuteTTS 1.0 | 384 MB (Q4) | 1.45x | **** | GGUF via llama.cpp. Default: `OuteTTS-1.0-0.6B-Q4_K_M.gguf` |
-| 6 | `bark` | Bark | 2.5 GB | 4.64x | ***** | Emotion tokens: `[laughs]` `[sighs]` `[clears throat]` |
-| 7 | `styletts2` | StyleTTS 2 | 0.7 GB | 0.35x | **** | Fast + high quality. Style transfer from reference WAV. |
-| 8 | `f5tts` | F5-TTS | 1.2 GB | needs ref WAV | **** | Best zero-shot voice cloning. Needs 5-15 s reference WAV. |
-| 9 | `dia` | Dia-1.6B | 3 GB | 6.75x | ***** | Dialogue-native. `[S1]`/`[S2]` speakers + emotion tags. |
-| 10 | `xtts` | XTTS-v2 | 1.8 GB | 0.91x | ***** | 58 speakers, 17 languages. Voice cloning. |
-| 11 | `cosyvoice` | CosyVoice2 | 2 GB | ~0.6x | *** | Needs manual install. Zero-shot + cross-lingual. |
-| 12 | `parler` | Parler-TTS | 2.5-3.3 GB | ~4.9x | **** | Natural-language voice description prompts. |
-| 13 | `chatterbox` | Chatterbox | 3.0 GB | 1.67x | ***** | Exaggeration slider + voice cloning. |
-| 14 | `fishspeech` | Fish Speech | ~1.1 GB | ~0.14x | **** | Zero-shot voice cloning, reference WAV optional. |
-| 15 | `csm` | Sesame CSM 1B | ~2 GB | ~0.08x | **** | Multi-speaker, context-aware. Gated HF model. |
-| 16 | `qwen3tts` | Qwen3-TTS | ~3 GB | ~4.4x | *** | 9 built-in speakers. `Qwen3-TTS-12Hz-1.7B-CustomVoice` |
-| 17 | `orpheus` | Orpheus 3B | ~3 GB | ~0.8x | ***** | Emotion: `<laugh>` `<sigh>` `<chuckle>` `<gasp>`. Needs CUDA. |
-| 18 | `neutts` | NeuTTS Air | TBD | TBD | *** | Not yet configured - edit `_load_neutts()`. |
-| 19 | `indextts` | IndexTTS-2 | ~1.5 GB | ~0.4x | **** | Zero-shot cloning. Reference WAV required. |
-| 20 | `zonos` | Zonos v0.1 | ~1.2 GB | 4.03x | **** | Emotion vector + speaking-rate. 44 kHz output. |
-| 21 | `openvoice` | OpenVoice v2 | ~600 MB | ~0.5x | *** | MeloTTS base + tone-color conversion. |
-
-> **RTF** = Real-Time Factor. RTF 1.0 = generates 1 s of audio per 1 s of compute.
-> RTF < 1 = faster than real-time. All RTF figures measured on RTX 5060 Ti 16 GB unless noted.
-
----
-
-## Deploy Script — [deploy_lab.ps1](deploy_lab.ps1)
-
-Single PowerShell script, 8 idempotent phases. Run from the Windows dev machine.
-
-```powershell
-.\deploy_lab.ps1 [-VM <ip>] [-User <user>] [-Phase <1-8>] [-SkipPhases "n,n"] [-GPU]
-```
-
-| Phase | What it does | Skip when |
-|---|---|---|
-| 1 | apt packages, 8 GB swap, data disk mount, Python 3.11 venv | VM already bootstrapped |
-| 2 | PyTorch (CPU or CUDA) + onnxruntime + soundfile | Already installed |
-| 3 | All 21 engine pip installs (best-effort, logged per engine) | Already installed |
-| 4 | Model downloads - Piper ONNX, Kokoro, Parler, IndexTTS-2 | Models already on disk |
-| 5 | SCP 7 `tts_lab_*.py` modules + 3 patch scripts to VM | — (always fast, ~30 s) |
-| 6 | Re-apply transformers/parler_tts compat patches | — (idempotent, always safe) |
-| 7 | Write `arthur-lab.service`, `systemctl enable`, restart | — (always needed) |
-| 8 | HTTP 200 check, `/status` table, Piper smoke-test synthesis | — |
-
-```powershell
-.\deploy_lab.ps1              # fresh VM: phases 1-8
-.\deploy_lab.ps1 -Phase 5    # redeploy code only (most common)
-.\deploy_lab.ps1 -Phase 6    # re-patch + restart
-.\deploy_lab.ps1 -Phase 7    # restart service only
-.\deploy_lab.ps1 -GPU        # use CUDA PyTorch wheels
-.\deploy_lab.ps1 -SkipPhases "4"   # skip model downloads
-```
+| `tts_lab.py` | FastAPI app, lifespan, top-level route wiring |
+| `tts_lab_shims.py` | **Imported FIRST** — `sys.modules` stubs for `transformers` compat |
+| `tts_lab_config.py` | `MODEL_INFO` catalogue, all voice lists, per-engine state, paths |
+| `tts_lab_utils.py` | Shared helpers: `wav_to_bytes()`, `resample()`, temp file helpers |
+| `tts_lab_engines.py` | All 21 `_load_X()` + `_synth_X()` pairs |
+| `tts_lab_dispatch.py` | `_ensure_loaded()`, `_do_synth()`, HTTP handler implementations |
+| `tts_lab_ui.py` | Full HTML/JS web UI — sidebar, waveform player, engine tabs, debug drawer |
+| `voice_library.py` | Voice Library — browse, import, manage reference voices |
 
 ---
 
@@ -128,14 +72,14 @@ Single PowerShell script, 8 idempotent phases. Run from the Windows dev machine.
 |---|---|---|
 | `GET` | `/` | Web UI |
 | `GET` | `/status` | JSON: all engines, availability, RAM estimates |
-| `POST` | `/synthesize/{engine}` | Synthesise audio - returns WAV binary |
+| `POST` | `/synthesize/{engine}` | Synthesise audio — returns WAV binary |
 | `POST` | `/synthesize/{engine}` (multipart) | With reference WAV upload |
 | `GET` | `/logs` | Last 200 server-side log entries (ring buffer) |
 | `POST` | `/refresh` | Re-probe all engine availability without restart |
 | `GET` | `/models/{engine}` | Engine metadata |
 | `POST` | `/models/{engine}/load` | Force-load an engine into memory |
 
-### Synthesise request body
+### Synthesise Request
 
 ```json
 {
@@ -155,177 +99,177 @@ Parameters are engine-specific — unused ones are silently ignored.
 
 ---
 
-## Source Code Map
+## 21 Engines
 
-| File | Role |
-|---|---|
-| [tts_lab.py](tts_lab.py) | FastAPI app, lifespan, top-level route wiring |
-| [tts_lab_shims.py](tts_lab_shims.py) | **Imported FIRST** — `sys.modules` stubs for `transformers.masking_utils`, `modeling_layers`, `indextts` alias, `SequenceSummary` |
-| [tts_lab_config.py](tts_lab_config.py) | `MODEL_INFO` catalogue, all voice lists, Arthur presets, per-engine `_state` dict, paths |
-| [tts_lab_utils.py](tts_lab_utils.py) | Shared helpers: `wav_to_bytes()`, `resample()`, `bytes_to_numpy()`, temp file helpers |
-| [tts_lab_engines.py](tts_lab_engines.py) | All 21 `_load_X()` + `_synth_X()` pairs, `LOADERS` dict, `SYNTHERS` dict |
-| [tts_lab_dispatch.py](tts_lab_dispatch.py) | `_ensure_loaded()`, `_do_synth()`, `_check_available()`, HTTP handler implementations |
-| [tts_lab_ui.py](tts_lab_ui.py) | Full HTML/JS web UI — sidebar, waveform player, engine tabs, debug log drawer, ref-WAV upload |
+| # | Key | Label | Model Size | Voice Cloning | Notes |
+|---|---|---|---|---|---|
+| 1 | `piper` | Piper TTS | 61-116 MB | — | ONNX CPU-only. Real-time on any hardware. 6 voices. |
+| 2 | `kokoro` | Kokoro-82M | 89 MB | — | 54 voices, 9 languages. |
+| 3 | `melo` | MeloTTS | 200 MB | — | 5 English accents. |
+| 4 | `chattts` | ChatTTS | 1.2-2.3 GB | — | Speed prompts `[speed_N]`, speaker sampling. |
+| 5 | `outetts` | OuteTTS 1.0 | 384 MB (Q4) | — | GGUF via llama.cpp. |
+| 6 | `bark` | Bark | 2.5 GB | — | Emotion tokens: `[laughs]` `[sighs]` `[clears throat]`. |
+| 7 | `styletts2` | StyleTTS 2 | 0.7 GB | ✅ | Style transfer from reference WAV. |
+| 8 | `f5tts` | F5-TTS | 1.2 GB | ✅ | Best zero-shot voice cloning. Needs 5-15 s reference. |
+| 9 | `dia` | Dia-1.6B | 3 GB | ✅ | Dialogue-native. `[S1]`/`[S2]` speakers + emotion tags. |
+| 10 | `xtts` | XTTS-v2 | 1.8 GB | ✅ | 58 speakers, 17 languages. |
+| 11 | `cosyvoice` | CosyVoice2 | 2 GB | ✅ | Zero-shot + cross-lingual. |
+| 12 | `parler` | Parler-TTS | 2.5-3.3 GB | — | Natural-language voice description prompts. |
+| 13 | `chatterbox` | Chatterbox | 3.0 GB | ✅ | Exaggeration slider + voice cloning. |
+| 14 | `fishspeech` | Fish Speech | ~1.1 GB | ✅ | Zero-shot cloning, reference WAV optional. |
+| 15 | `csm` | Sesame CSM 1B | ~2 GB | — | Multi-speaker, context-aware. |
+| 16 | `qwen3tts` | Qwen3-TTS | ~3 GB | — | 9 built-in speakers. |
+| 17 | `orpheus` | Orpheus 3B | ~3 GB | — | Emotion: `<laugh>` `<sigh>` `<chuckle>` `<gasp>`. |
+| 18 | `neutts` | NeuTTS Air | TBD | — | Not yet configured. |
+| 19 | `indextts` | IndexTTS-2 | ~1.5 GB | ✅ | Zero-shot cloning. Reference WAV required. |
+| 20 | `zonos` | Zonos v0.1 | ~1.2 GB | ✅ | Emotion vector + speaking-rate. 44 kHz output. |
+| 21 | `openvoice` | OpenVoice v2 | ~600 MB | ✅ | MeloTTS base + tone-color conversion. |
 
 ---
 
-## Compatibility Patch Scripts
+## Image Lab — 5 Image & Video Engines
 
-Three scripts re-applied on every deploy (Phase 6). All idempotent — guarded by marker strings.
+The project also includes a separate Image & Video generation lab on port 8002:
 
-### [patch_parler_tts.py](patch_parler_tts.py)
-Patches `parler_tts` 0.2.3 for `transformers` 4.51+ API breakages:
+| # | Key | Label | Type | VRAM | Notes |
+|---|---|---|---|---|---|
+| 1 | `flux2` | FLUX.2 [dev] | Image | ~16 GB | 32B rectified flow transformer. GGUF quantised. I2I editing. |
+| 2 | `flux2klein` | FLUX.2 Klein 4B | Image | ~13 GB | Compact 4B model. Apache 2.0. Step-distilled. Runs on RTX 5060 Ti at BF16. |
+| 3 | `sd35` | SD 3.5 Large | Image | ~12 GB | 8B MMDiT. GGUF quantised. Turbo/Lightning speed presets. |
+| 4 | `wan` | Wan2.2 | Video | ~14 GB | T2V + I2V. Up to 5s cinematic video. Dual-transformer GGUF. |
+| 5 | `ideogram4` | Ideogram 4 | Image | ~6-10 GB | 9.3B DiT + Qwen3-VL text encoder. Native text rendering. NF4/FP8 quants. Magic-prompt expansion via OpenRouter. |
 
-| Patch | Problem | Fix |
+> **Optional:** ComfyUI integration toggle via `IMGLAB_USE_COMFYUI=1` env var.
+
+### Image Lab API
+
+| Method | Path | Description |
 |---|---|---|
-| `_pad/bos/eos_token_tensor` | Removed from `GenerationConfig` in 4.51 | Replaced with `torch.tensor(generation_config.pad_token_id)` |
-| `generation_config.update()` | Now returns `None` instead of `model_kwargs` | `generation_config.update(**kw); model_kwargs = kw` |
-| `_prepare_attention_mask_for_generation` | Signature changed `(inputs, pad_t, eos_t)` | Replaced with inline `torch.ones(...)` mask |
-| `_get_initial_cache_position` | Signature changed to `(seq_len, device, model_kwargs)` | Shimmed via `(a, b=None, c=None)` |
-| `GenerationMixin` | `PreTrainedModel` no longer inherits it in 4.50 | Added `_ParlerGenMixin` to class MRO |
-| `ParlerTTSConfig.__init__` | Raises if called with no args | Early return — 4.53 calls it empty in `to_diff_dict()` |
+| `GET` | `/` | Image Lab Web UI (port 8002) |
+| `POST` | `/generate/{engine}` | Generate image or video |
+| `GET` | `/gallery` | Browse generated images/videos |
+| `DELETE` | `/gallery/{id}` | Delete gallery entry |
+| `POST` | `/generate/ideogram4/caption` | Expand prompt via Ideogram4 caption endpoint |
 
-### [patch_transformers_stubs.py](patch_transformers_stubs.py)
-Creates missing modules present in `transformers 4.54+` but absent in `4.53.2`:
+Image Lab deploys separately: `.\deploy_image_lab.ps1`
 
-- `transformers/masking_utils.py` — stub with `create_masks_for_generate()`
-- `transformers/modeling_layers.py` — stub with `GradientCheckpointingLayer`
-- `transformers/modeling_utils.py` — appends `SequenceSummary` + `ALL_ATTENTION_FUNCTIONS`
-
-### [fix_transformers_shims.py](fix_transformers_shims.py)
-Patches `transformers/utils/__init__.py` and `transformers/utils/generic.py`:
-
-- `auto_docstring()` decorator shim (added in 4.54)
-- `check_model_inputs()` decorator shim
-- `GeneralInterface` base class (used by `masking_utils.AttentionMaskInterface`)
+See [`docs/image-lab/`](docs/image-lab/) for detailed documentation.
 
 ---
 
-## Engine Bug Fixes Applied
+## Deploy Script
 
-All fixes are **permanently recorded in source** (`tts_lab_engines.py`, `tts_lab_shims.py`) or in the **patch scripts** re-applied on every deploy. Nothing is ad-hoc.
+Single PowerShell script, 8 idempotent phases:
 
-| Engine | Error Encountered | Root Cause | Fix | Where |
-|---|---|---|---|---|
-| **parler** | `Config has to be initialized with text_encoder…` | `transformers 4.53` calls `ParlerTTSConfig()` with no args inside `to_diff_dict()` | Early return when kwargs empty | [patch_parler_tts.py](patch_parler_tts.py) |
-| **parler** | `AttributeError: _pad_token_tensor` | Removed from `GenerationConfig` in 4.51 | Replaced with `torch.tensor(generation_config.pad_token_id)` | [patch_parler_tts.py](patch_parler_tts.py) |
-| **parler** | `generate()` returns `None` | `generation_config.update()` returns `None` in 4.51 (was `model_kwargs`) | `generation_config.update(**kw); model_kwargs = kw` | [patch_parler_tts.py](patch_parler_tts.py) |
-| **parler** | `generate()` returns `None` (2nd cause) | `PreTrainedModel` no longer inherits `GenerationMixin` in 4.50 | Added `_ParlerGenMixin` to class MRO | [patch_parler_tts.py](patch_parler_tts.py) |
-| **parler** | `TypeError: _prepare_attention_mask_for_generation takes 3 args` | Signature changed `(inputs, pad_t, eos_t)` → `(inputs, gen_cfg, model_kwargs)` | Replaced call with inline `torch.ones(…)` mask | [patch_parler_tts.py](patch_parler_tts.py) |
-| **parler** | `_get_initial_cache_position() takes 3 positional args but 4 given` | Signature changed `(input_ids, model_kwargs)` → `(seq_len, device, model_kwargs)` | Shimmed via `(a, b=None, c=None)` accepting both signatures | [patch_parler_tts.py](patch_parler_tts.py) |
-| **parler** | `property has no setter` on `GenerationConfig` | Earlier shim added a read-only property that XTTS tried to write | Removed property shim; source patch is sufficient | [tts_lab_shims.py](tts_lab_shims.py) |
-| **parler** | `PermissionError` loading model | Service runs as root; HF hub cache owned by user `arthur` | Resolve local snapshot path directly, bypass hub auth | [tts_lab_engines.py](tts_lab_engines.py) |
-| **xtts** | `property has no setter` crash on load | Shared `GenerationConfig` property shim had no setter | Removed conflicting shim from startup | [tts_lab_shims.py](tts_lab_shims.py) |
-| **indextts** | `cannot import name 'IndexTTS' from 'indextts.infer_v2'` | IndexTTS v2 renamed class to `IndexTTS2` | `from indextts.infer_v2 import IndexTTS2 as IndexTTS` | [tts_lab_engines.py](tts_lab_engines.py) |
-| **indextts** | `AttributeError: 'IndexTTS2' object has no attribute 'load_model'` | IndexTTS v2 loads weights in `__init__`, no separate `load_model()` | Removed `model.load_model()` call | [tts_lab_engines.py](tts_lab_engines.py) |
-| **indextts** | `ImportError: cannot import name 'SequenceSummary'` | `SequenceSummary` removed from `transformers` in 4.51 | Added `SequenceSummary` stub to `modeling_utils.py` | [patch_transformers_stubs.py](patch_transformers_stubs.py) |
-| **qwen3tts** | `ModuleNotFoundError: No module named 'transformers.masking_utils'` | `masking_utils` added in `transformers 4.54`, we have 4.53 | Created `masking_utils.py` stub in site-packages | [patch_transformers_stubs.py](patch_transformers_stubs.py) |
-| **qwen3tts** | `ModuleNotFoundError: No module named 'transformers.modeling_layers'` | `modeling_layers` added in `transformers 4.54` | Created `modeling_layers.py` stub in site-packages | [patch_transformers_stubs.py](patch_transformers_stubs.py) |
-| **qwen3tts** | `ImportError: cannot import name 'GeneralInterface'` | `GeneralInterface` base class missing from `utils.generic` in 4.53 | Added `GeneralInterface` class to `generic.py` shim | [fix_transformers_shims.py](fix_transformers_shims.py) |
-| **qwen3tts** | `AttributeError: 'Qwen3TTSSpeakerEncoderConfig' has no '_attn_implementation_autoset'` | Config subclass not calling `super().__init__()` correctly with 4.53 | Set attribute via shim at import time | [tts_lab_shims.py](tts_lab_shims.py) |
-| **openvoice** | `Cannot copy out of meta tensor` on load | `ToneColorConverter` sub-modules initialised on meta device | Iterate all sub-modules, replace `.is_meta` params with empty tensors before `load_ckpt()` | [tts_lab_engines.py](tts_lab_engines.py) |
-| **cosyvoice** | `set_audio_backend` removed in `torchaudio 2.1+` | API removed upstream | Set `TORCHAUDIO_USE_BACKEND_DISPATCHER=0` env var before import | [patch_torchaudio.py](patch_torchaudio.py) |
-| **cosyvoice** | `NameError: name '_np' is not defined` | Typo in `_synth_cosyvoice()` | Renamed `_np` → `np` | [tts_lab_engines.py](tts_lab_engines.py) |
-| **bark** | Shows 🔴 missing despite being installed | `_check_available()` incorrectly flagged bark as GPU-required | Removed `bark` from `_GPU_REQUIRED` set — it runs on CPU | [tts_lab_dispatch.py](tts_lab_dispatch.py) |
-| **outetts** | Shows 🔴 missing despite being installed | Same as bark — wrongly in `_GPU_REQUIRED` set | Removed `outetts` from `_GPU_REQUIRED` set | [tts_lab_dispatch.py](tts_lab_dispatch.py) |
-| **all engines** | `auto_docstring` / `check_model_inputs` `ImportError` | Decorators added in `transformers 4.54`, absent in 4.53 | Shim both decorators into `utils/__init__.py` and `utils/generic.py` | [fix_transformers_shims.py](fix_transformers_shims.py) |
-| **all engines** | 48 `WARNING: Ignoring invalid distribution ~xxx` on every pip call | Interrupted pip upgrades left tilde-prefixed ghost `.dist-info` dirs | `find … -name '~*' -exec rm -rf` in Phase 1 bootstrap | [deploy_lab.ps1](deploy_lab.ps1) |
+```powershell
+.\deploy_lab.ps1 [-VM <ip>] [-User <user>] [-Phase <1-8>] [-SkipPhases "n,n"] [-GPU]
+```
+
+| Phase | What it does |
+|---|---|
+| 1 | apt packages, 8 GB swap, data disk mount, Python 3.11 venv |
+| 2 | PyTorch (CPU or CUDA) + onnxruntime + soundfile |
+| 3 | All 21 engine pip installs (best-effort, logged per engine) |
+| 4 | Model downloads — Piper ONNX, Kokoro, Parler, IndexTTS-2 |
+| 5 | SCP 7 `tts_lab_*.py` modules + patch scripts to VM |
+| 6 | Re-apply transformers/parler_tts compat patches |
+| 7 | Write `arthur-lab.service`, `systemctl enable`, restart |
+| 8 | HTTP 200 check, `/status` table, Piper smoke-test synthesis |
+
+```powershell
+.\deploy_lab.ps1              # fresh VM: phases 1-8
+.\deploy_lab.ps1 -Phase 5    # redeploy code only (most common)
+.\deploy_lab.ps1 -Phase 6    # re-patch + restart
+.\deploy_lab.ps1 -Phase 7    # restart service only
+.\deploy_lab.ps1 -GPU        # use CUDA PyTorch wheels
+.\deploy_lab.ps1 -SkipPhases "4"   # skip model downloads
+```
+
+---
+
+## VM Details
+
+| Property | Value |
+|---|---|
+| Host | Proxmox node, VM 104 |
+| OS | Ubuntu 22.04 |
+| IP | 192.168.0.87 |
+| Port | 8001 |
+| SSH key | `~/.ssh/id_arthur_vm` |
+| venv | `/opt/arthur-bench-env/` (Python 3.11) |
+| Lab code | `/opt/arthur/` |
+| Models | `/opt/models/` (650 GB data disk) |
+| HF cache | `/opt/models/huggingface/` |
+| Service | `arthur-lab.service` (systemd) |
+| PyTorch | CPU-only |
+| RAM | 32 GB |
+
+---
+
+## Compatibility Patches
+
+The project targets `transformers 4.53.2` and applies 5 patch scripts on every deploy to bridge API gaps with newer transformers versions and engine-specific quirks. All patches are idempotent.
+
+| Patch | Purpose |
+|---|---|
+| [`patches/patch_parler_tts.py`](patches/patch_parler_tts.py) | `parler_tts` 0.2.3 → `transformers` 4.51+ compat (6 fixes) |
+| [`patches/patch_transformers_stubs.py`](patches/patch_transformers_stubs.py) | Missing `transformers` 4.54+ modules (masking_utils, modeling_layers, SequenceSummary) |
+| [`patches/fix_transformers_shims.py`](patches/fix_transformers_shims.py) | Decorator shims (`auto_docstring`, `check_model_inputs`) + `GeneralInterface` |
+| [`patches/patch_torchaudio.py`](patches/patch_torchaudio.py) | `torchaudio` backend compat for CosyVoice |
+| [`patches/patch_torchaudio_init.py`](patches/patch_torchaudio_init.py) | Additional torchaudio import guards |
+
+See the [patches/](patches/) directory for details.
 
 ---
 
 ## Testing
 
-### Quick synthesis test — [quick_test.sh](quick_test.sh)
-```sh
-scp -i ~/.ssh/id_arthur_vm quick_test.sh arthur@192.168.0.87:/tmp/
-ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87 "bash /tmp/quick_test.sh"
-```
-
-### Slow-loading engines — [test_slow_engines.sh](test_slow_engines.sh)
-```sh
-scp -i ~/.ssh/id_arthur_vm test_slow_engines.sh arthur@192.168.0.87:/tmp/
-ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87 "bash /tmp/test_slow_engines.sh"
-```
-
-### Full E2E test suite — [e2e_test.ps1](e2e_test.ps1)
-```powershell
-.\e2e_test.ps1
-.\e2e_test.ps1 -VM 10.0.0.5
-```
-
-E2E sections: SSH, service health, HTTP 200, `/status`, fix verifications (2),
-synthesis tests, ref-WAV engine checks, GPU engine graceful-fail, journal crash scan.
-
----
-
-## Known Issues
-
-See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for full detail.
-
-| Engine | Issue | Fix needed |
-|---|---|---|
-| `csm` | Package not installed — gated HF model | `huggingface-cli login` then install |
-| `orpheus` | Needs CUDA — not available on this CPU VM | Install on GPU VM |
-| `neutts` | `_load_neutts()` raises `NotImplementedError` | Identify package + implement |
-| `qwen3tts` | `_attn_implementation_autoset` intermittent | Shim in [tts_lab_shims.py](tts_lab_shims.py) |
-
----
-
-## Benchmark Results
-
-| Date | Hardware | Results |
-|---|---|---|
-| 2026-03-26 | CPU baseline | [BENCHMARK_RESULTS_2026-03-26.md](BENCHMARK_RESULTS_2026-03-26.md) |
-| 2026-04-20 | RTX 5060 Ti 16 GB | [BENCHMARK_RESULTS_2026-04-20_RTX5060Ti.md](BENCHMARK_RESULTS_2026-04-20_RTX5060Ti.md) |
-| 2026-04-23 | RTX 5060 Ti — Qwen3 SDPA | [BENCHMARK_RESULTS_2026-04-23.md](BENCHMARK_RESULTS_2026-04-23.md) |
-
----
-
-## Session Notes
-
-| Date | Session | Topic |
-|---|---|---|
-| 2026-03-25 | [SESSION_2026-03-25_CODEBASE_COMPLETION.md](SESSION_2026-03-25_CODEBASE_COMPLETION.md) | Initial 13-engine build |
-| 2026-03-25 | [SESSION_2026-03-25_MODEL_EXPANSION_REFERENCE.md](SESSION_2026-03-25_MODEL_EXPANSION_REFERENCE.md) | Model expansion reference |
-| 2026-03-26 | [SESSION_2026-03-26_DEPLOY_AND_STABILITY.md](SESSION_2026-03-26_DEPLOY_AND_STABILITY.md) | Deploy stability, GPU passthrough |
-| 2026-03-26 | [SESSION_2026-03-26_NEW_ENGINES.md](SESSION_2026-03-26_NEW_ENGINES.md) | Engines 14-21 added |
-| 2026-04-21 | [SESSION_2026-04-21_TESTING_FISHSPEECH_INDEXTTS.md](SESSION_2026-04-21_TESTING_FISHSPEECH_INDEXTTS.md) | Fish Speech + IndexTTS debugging |
-| 2026-04-22 | [SESSION_2026-04-22_GPU_FLASH_ATTN.md](SESSION_2026-04-22_GPU_FLASH_ATTN.md) | Flash-attn verdict, SM 12.0 |
-| 2026-04-22 | [SESSION_2026-04-22_QWEN3TTS.md](SESSION_2026-04-22_QWEN3TTS.md) | Qwen3-TTS first integration |
-| 2026-04-23 | [SESSION_2026-04-23_QWEN3TTS_UI_UPGRADE.md](SESSION_2026-04-23_QWEN3TTS_UI_UPGRADE.md) | Qwen3 params + UI sidebar redesign |
-| 2026-04-25 | [SESSION_2026-04-25_ENGINE_FIXES.md](SESSION_2026-04-25_ENGINE_FIXES.md) | 7-fix transformers 4.53 compat marathon |
-| 2026-04-25 | [SESSION_2026-04-25_FIX2_INDEXTTS_QWEN3TTS.md](SESSION_2026-04-25_FIX2_INDEXTTS_QWEN3TTS.md) | IndexTTS v2 API + Qwen3 config shim |
-
----
-
-## File Reference
-
-| File | Purpose |
+| Script | Description |
 |---|---|
-| [deploy_lab.ps1](deploy_lab.ps1) | **PRIMARY** — zero-to-hero 8-phase deploy |
-| [e2e_test.ps1](e2e_test.ps1) | Full 10-section end-to-end test suite |
-| [quick_test.sh](quick_test.sh) | Fast synthesis smoke test (10 engines, 180 s timeout) |
-| [test_slow_engines.sh](test_slow_engines.sh) | 5-min timeout test for indextts/qwen3tts/openvoice |
-| [tts_benchmark.py](tts_benchmark.py) | Automated RTF benchmark across all engines |
-| [bench_all.py](bench_all.py) | Batch benchmark runner |
-| [bench_warm.py](bench_warm.py) | Warm-cache benchmark (excludes load time) |
-| [download_models.sh](download_models.sh) | Downloads all model files to `/opt/models/` |
-| [requirements.txt](requirements.txt) | Core pip dependencies for the lab service |
-| [requirements_benchmark.txt](requirements_benchmark.txt) | Additional benchmark-only dependencies |
-| [fix_tts_env.sh](fix_tts_env.sh) | Emergency venv repair script |
-| [patch_parler_tts.py](patch_parler_tts.py) | `parler_tts` → `transformers` 4.51+ compat patches |
-| [patch_transformers_stubs.py](patch_transformers_stubs.py) | Creates missing `transformers` 4.54+ module stubs |
-| [fix_transformers_shims.py](fix_transformers_shims.py) | Patches decorators + `GeneralInterface` into `transformers.utils` |
-| [patch_torchaudio.py](patch_torchaudio.py) | `torchaudio` backend compat for CosyVoice |
-| [_arthur-lab.service](_arthur-lab.service) | Reference systemd unit file |
-| [VM_SETUP_REFERENCE.md](VM_SETUP_REFERENCE.md) | Proxmox VM setup, disk expansion, network |
-| [GPU_QA_REFERENCE.md](GPU_QA_REFERENCE.md) | SM 12.0 (Blackwell) library compatibility table |
-| [GPU_UPGRADE_ANALYSIS.md](GPU_UPGRADE_ANALYSIS.md) | GPU upgrade analysis and flash-attn verdict |
-| [TTS_MODEL_COMPARISON.md](TTS_MODEL_COMPARISON.md) | Side-by-side quality comparison notes v1 |
-| [TTS_MODEL_COMPARISON2.md](TTS_MODEL_COMPARISON2.md) | Side-by-side quality comparison notes v2 |
-| [KNOWN_ISSUES.md](KNOWN_ISSUES.md) | Current bugs and planned fixes |
-| [SESSION_SUMMARY.md](SESSION_SUMMARY.md) | Rolling cross-session summary |
-| [archive/](archive/) | Old one-off debug scripts (preserved, not deployed) |
+| [`scripts/test/e2e_test.ps1`](scripts/test/e2e_test.ps1) | Full 10-section E2E test suite (SSH, health, synthesis, ref-WAV, crash scan) |
+| [`scripts/test/quick_test.sh`](scripts/test/quick_test.sh) | Fast synthesis smoke test (10 engines, 180 s timeout) |
+| [`scripts/test/test_slow_engines.sh`](scripts/test/test_slow_engines.sh) | 5-min timeout test for indextts/qwen3tts/openvoice |
+
+---
+
+## Benchmarks
+
+Automated RTF measurement across all engines. Results are in [`docs/benchmarks/`](docs/benchmarks/).
+
+| Script | Description |
+|---|---|
+| [`scripts/benchmark/tts_benchmark.py`](scripts/benchmark/tts_benchmark.py) | Automated RTF benchmark across all engines |
+| [`scripts/benchmark/bench_all.py`](scripts/benchmark/bench_all.py) | Batch benchmark runner (calls running server) |
+| [`scripts/benchmark/bench_warm.py`](scripts/benchmark/bench_warm.py) | Warm-cache benchmark (excludes load time) |
+
+---
+
+## Adding a New Engine
+
+1. Add entry to `MODEL_INFO` dict in `tts_lab_config.py`
+2. Add key to `MODEL_ORDER` list in `tts_lab_config.py`
+3. Add `_load_xxx()` and `_synth_xxx()` in `tts_lab_engines.py`
+4. Register both in `LOADERS` and `SYNTHERS` dicts at bottom of `tts_lab_engines.py`
+5. Add package name to `pkg_map` in `_check_available()` in `tts_lab_dispatch.py`
+6. Deploy: `.\deploy_lab.ps1 -Phase 5`
+
+---
+
+## Documentation
+
+| Document | Topic |
+|---|---|
+| [`docs/sessions/SESSION_SUMMARY.md`](docs/sessions/SESSION_SUMMARY.md) | Rolling cross-session summary |
+| [`docs/reference/TTS_MODEL_COMPARISON.md`](docs/reference/TTS_MODEL_COMPARISON.md) | Side-by-side quality comparison notes v1 |
+| [`docs/reference/TTS_MODEL_COMPARISON2.md`](docs/reference/TTS_MODEL_COMPARISON2.md) | Side-by-side quality comparison notes v2 |
+| [`docs/reference/PERSIAN_TTS_MODELS.md`](docs/reference/PERSIAN_TTS_MODELS.md) | Comprehensive Persian/Farsi TTS reference |
+| [`docs/reference/KNOWN_ISSUES.md`](docs/reference/KNOWN_ISSUES.md) | Current bugs and planned fixes |
+| [`docs/reference/VM_SETUP_REFERENCE.md`](docs/reference/VM_SETUP_REFERENCE.md) | Proxmox VM setup, disk expansion, network |
+| [`docs/reference/GPU_QA_REFERENCE.md`](docs/reference/GPU_QA_REFERENCE.md) | SM 12.0 (Blackwell) library compatibility |
+| [`docs/reference/GPU_UPGRADE_ANALYSIS.md`](docs/reference/GPU_UPGRADE_ANALYSIS.md) | GPU upgrade analysis and flash-attn verdict |
+| [`docs/image-lab/`](docs/image-lab/) | Image Lab subsystem documentation |
+
+Full session notes are in [`docs/sessions/`](docs/sessions/).
 
 ---
 
@@ -339,18 +283,7 @@ See [KNOWN_ISSUES.md](KNOWN_ISSUES.md) for full detail.
 | `SUNO_USE_SMALL_MODELS` | `False` | Use full Bark models |
 | `CUDA_VISIBLE_DEVICES` | *(empty)* | Hide GPU — force CPU on this VM |
 | `TOKENIZERS_PARALLELISM` | `false` | Suppress tokenizer fork warning |
-| `HF_TOKEN` | *(injected from VM keychain)* | Access gated HF models |
-
----
-
-## Adding a New Engine
-
-1. Add entry to `MODEL_INFO` dict in [tts_lab_config.py](tts_lab_config.py)
-2. Add key to `MODEL_ORDER` list in [tts_lab_config.py](tts_lab_config.py)
-3. Add `_load_xxx()` and `_synth_xxx()` in [tts_lab_engines.py](tts_lab_engines.py)
-4. Register both in `LOADERS` and `SYNTHERS` dicts at bottom of [tts_lab_engines.py](tts_lab_engines.py)
-5. Add package name to `pkg_map` in `_check_available()` in [tts_lab_dispatch.py](tts_lab_dispatch.py)
-6. Deploy: `.\deploy_lab.ps1 -Phase 5`
+| `HF_TOKEN` | *(from VM keychain)* | Access gated HF models |
 
 ---
 
@@ -374,16 +307,19 @@ sudo systemctl restart arthur-lab
 
 # Re-apply patches manually (after pip upgrade)
 source /opt/arthur-bench-env/bin/activate
-python3 /opt/arthur/patch_transformers_stubs.py
-python3 /opt/arthur/fix_transformers_shims.py
-python3 /opt/arthur/patch_parler_tts.py
+python3 /opt/arthur/patches/patch_transformers_stubs.py
+python3 /opt/arthur/patches/fix_transformers_shims.py
+python3 /opt/arthur/patches/patch_parler_tts.py
 
 # Check all 21 engines
 curl -s http://localhost:8001/status | python3 -m json.tool
 
-# Refresh availability badges without restarting
-curl -sX POST http://localhost:8001/refresh | python3 -m json.tool
-
 # Quick synthesis test
 bash /tmp/quick_test.sh
 ```
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

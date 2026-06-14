@@ -45,13 +45,13 @@ $labFiles = @(
     "tts_lab_shims.py",
     "tts_lab_ui.py",
     "tts_lab_utils.py",
-    "bench_all.py",
-    "bench_warm.py",
-    "patch_parler_tts.py",
-    "patch_torchaudio.py",
-    "patch_torchaudio_init.py",
-    "patch_transformers_stubs.py",
-    "fix_transformers_shims.py"
+    "scripts\benchmark\bench_all.py",
+    "scripts\benchmark\bench_warm.py",
+    "patches\patch_parler_tts.py",
+    "patches\patch_torchaudio.py",
+    "patches\patch_torchaudio_init.py",
+    "patches\patch_transformers_stubs.py",
+    "patches\fix_transformers_shims.py"
 )
 
 Write-Host ""

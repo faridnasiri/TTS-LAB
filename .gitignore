@@ -18,34 +18,16 @@ __pycache__/
 
 # Claude Code local settings (contains API keys)
 .claude/settings.local.json
+.claude/worktrees/
 
-# Temp debug artifacts from ideogram4 integration
-_check*.txt
-_check*.py
-_check*.sh
-_debug*.txt
-_dl*.txt
-_final*.txt
-_fix*.py
-_journal*.txt
-_load*.txt
-_logs*.txt
-_magic*.txt
-_patch_*.py
-_progress*.txt
-_ps*.txt
-_ram*.txt
-_result*.txt
-_state*.txt
-_status*.txt
-_te_config*.txt
-_test_2*.txt
-_test_5*.txt
-_test_now*.txt
-_test_out*.txt
-_test_progress*.txt
-_test_result*.txt
-_v1_template*.txt
-_xfmr*.txt
+# Nested git repo (Image Lab subsystem)
 ideogram4/
-ke.tx.txt
+
+# Runtime output
+output/
+scripts/
+
+# Large binaries
+*.wav
+*.mp3
+*.ogg

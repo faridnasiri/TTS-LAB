@@ -218,8 +218,8 @@ Run-Phase 5 "SCP code files to VM" {
         "$PSScriptRoot\image_lab_dispatch.py",
         "$PSScriptRoot\image_lab_ui.py",
         "$PSScriptRoot\image_lab_utils.py",
-        "$PSScriptRoot\gguf_download.py",
-        "$PSScriptRoot\nvfp4_save.py",
+        "$PSScriptRoot\scripts\download\gguf_download.py",
+        "$PSScriptRoot\scripts\utils\nvfp4_save.py",
         "$PSScriptRoot\ideogram4_lab_engine.py"
     )
 

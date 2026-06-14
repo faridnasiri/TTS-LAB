@@ -332,9 +332,9 @@ if (should_run 5) {
         @{ L = "tts_lab_engines.py";        R = "/opt/arthur/tts_lab_engines.py"        },
         @{ L = "tts_lab_dispatch.py";       R = "/opt/arthur/tts_lab_dispatch.py"       },
         @{ L = "tts_lab_ui.py";             R = "/opt/arthur/tts_lab_ui.py"             },
-        @{ L = "patch_parler_tts.py";       R = "/opt/arthur/patch_parler_tts.py"       },
-        @{ L = "patch_transformers_stubs.py"; R = "/opt/arthur/patch_transformers_stubs.py" },
-        @{ L = "fix_transformers_shims.py"; R = "/opt/arthur/fix_transformers_shims.py" }
+        @{ L = "patches\patch_parler_tts.py";       R = "/opt/arthur/patch_parler_tts.py"       },
+        @{ L = "patches\patch_transformers_stubs.py"; R = "/opt/arthur/patch_transformers_stubs.py" },
+        @{ L = "patches\fix_transformers_shims.py"; R = "/opt/arthur/fix_transformers_shims.py" }
     )
 
     foreach ($f in $coreFiles) {
