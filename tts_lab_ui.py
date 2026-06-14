@@ -39,16 +39,22 @@ def _row(*cols) -> str:
 
 def _upload_widget(prompt_file_id, prompt_status_id, prompt_hidden_id,
                    label="Reference audio WAV (5-30s)") -> str:
-    """Upload button + visible dropdown (populated from /refs on page load)."""
+    """Upload button + visible dropdown (populated from /refs on page load) + ▶ play button."""
     return (
         f'<div class="param-group" style="max-width:100%;width:100%"><label>{label}</label>'
         f'<div class="d-flex flex-column gap-1">'
-        # Visible dropdown — populated by refreshRefDropdowns() on page load
+        # Visible dropdown + play button — populated by refreshRefDropdowns() on page load
+        f'<div class="d-flex gap-2 align-items-center">'
         f'<select class="form-select form-select-sm bg-dark text-light border-secondary" '
         f'data-param="audio_prompt_id" id="{prompt_hidden_id}" '
-        f'onchange="document.getElementById(\'{prompt_hidden_id}\').dataset.voice=this.value">'
+        f'onchange="document.getElementById(\'{prompt_hidden_id}\').dataset.voice=this.value" '
+        f'style="flex:1">'
         f'<option value="">— none (use default voice) —</option>'
         f'</select>'
+        f'<button class="btn btn-sm btn-outline-success" style="white-space:nowrap;min-width:44px" '
+        f'onclick="playRefPreview(\'{prompt_hidden_id}\')" '
+        f'title="Play selected reference voice">▶</button>'
+        f'</div>'
         f'<div class="d-flex gap-2 align-items-center">'
         f'<input type="file" id="{prompt_file_id}" '
         f'class="form-control form-control-sm bg-dark text-light border-secondary" '
@@ -461,10 +467,15 @@ def _build_params(name: str) -> str:
             'Requires a reference WAV for speaker embedding.</div>'
             + _row(
                 _grp("Reference WAV",
+                     '<div class="d-flex gap-2 align-items-center">'
                      '<select class="form-select form-select-sm bg-dark text-light border-secondary" '
-                     'data-param="audio_prompt_id" id="manatts-ref-select">'
+                     'data-param="audio_prompt_id" id="manatts-ref-select" style="flex:1">'
                      '<option value="">— select a reference WAV —</option>'
                      '</select>'
+                     '<button class="btn btn-sm btn-outline-success" style="white-space:nowrap;min-width:44px" '
+                     'onclick="playRefPreview(\'manatts-ref-select\')" '
+                     'title="Play selected reference voice">▶</button>'
+                     '</div>'
                      '<div class="text-muted small mt-1" id="manatts-ref-info"></div>'),
             )
             + '<div class="param-row"><label>Upload new reference WAV</label>'
@@ -1038,6 +1049,23 @@ async function uploadPrompt(fileId, statusId, hiddenId) {
     status.textContent = '❌ ' + e;
     dbg('ERROR', '—', 'Upload failed: ' + e.toString());
   }
+}
+
+/* ── Play reference voice preview ── */
+let _refPreviewAudio = null;
+function playRefPreview(selectId) {
+  const sel = document.getElementById(selectId);
+  if (!sel || !sel.value) { showToast('⚠️ Select a reference voice first'); return; }
+  const voiceId = sel.value;
+  const url = `/voice-library/${voiceId}/audio`;
+  if (_refPreviewAudio) { _refPreviewAudio.pause(); _refPreviewAudio = null; }
+  const audio = new Audio(url);
+  audio.preload = 'auto';
+  _refPreviewAudio = audio;
+  audio.onplay = () => { showToast('▶ Playing: ' + (sel.options[sel.selectedIndex]?.text || voiceId)); };
+  audio.onended = () => { _refPreviewAudio = null; };
+  audio.onerror = () => { showToast('⚠️ Cannot play this voice'); _refPreviewAudio = null; };
+  audio.play().catch(() => { showToast('⚠️ Playback failed'); _refPreviewAudio = null; });
 }
 
 /* ═══════════════════════════════════════════════════════════════

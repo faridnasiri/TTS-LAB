@@ -56,6 +56,7 @@ inst.tokenizer = EnTokenizer("mtl_tokenizer.json")  # subword, 2352 tokens
 5. **SDPA attention + output_attentions** — `AlignmentStreamAnalyzer` requires `output_attentions=True` which SDPA doesn't support. Fixed via shim in `tts_lab_shims.py` that forces `_attn_implementation = "eager"` before attention spy creation.
 	   - **Regression (2026-06-12):** An "optimization" added a `finally` block that restored `_attn_implementation` to its previous value (SDPA) after hook *registration*. But the spy hooks fire during the model *forward pass*, not during registration. So the config was back to `"sdpa"` by the time the model ran → SDPA returned `None` for attention weights → spy hooks captured `None` → `torch.stack(self.last_aligned_attns)` crashed with `TypeError: expected Tensor as element 0 in argument 0, but got NoneType`. Fix: removed the `finally` restore — eager attention must persist for the entire lifetime of the spy-hooked layers. See `tts_lab_shims.py` lines 366-385.
 6. **`scipy.signal.kaiser` removed** — scipy 1.16 removed this function, breaking `parallel_wavegan`. Fixed by aliasing `scipy.signal.windows.kaiser` back to `scipy.signal.kaiser` in shims.
+7. **"آ" (ALEF MADDA) not in tokenizer** — the mTL tokenizer (2352 tokens) is missing U+0622 (ALEF WITH MADDA ABOVE), U+0623 (ALEF WITH HAMZA ABOVE), and U+0625 (ALEF WITH HAMZA BELOW). These map to `<unk>` (token 1), producing silence/garbled output for words like "آب" (water), "آسمان" (sky), "آمدن" (to come). See [§ آ Character Fix](#آ-character-fix) below for full details.
 
 ### Multilingual Variants (Failed)
 - **`t3_23lang.safetensors`** (2352 tokens): Sounded like Urdu for Persian
@@ -63,8 +64,64 @@ inst.tokenizer = EnTokenizer("mtl_tokenizer.json")  # subword, 2352 tokens
 
 **Conclusion:** Only the dedicated Persian fine-tune (`t3_fa.safetensors`) produces acceptable Persian speech.
 
-### Diacritics
-The tokenizer supports all Persian vowel marks (ًٌٍَُِّْ). The model *can* accept diacritized input (e.g., `سَلام` instead of `سلام`), but whether it helps depends on if the training data included diacritized text. Needs empirical testing.
+### آ Character Fix — Tokenizer Gap (2026-06-14)
+
+**Problem:** The Persian fine-tune tokenizer (`mtl_tokenizer.json`, 2352 BPE tokens) is missing three Arabic-script characters essential for Persian:
+
+| Character | Unicode | Name | Persian Usage | In Tokenizer? |
+|-----------|--------|------|---------------|---------------|
+| آ | U+0622 | ALEF WITH MADDA ABOVE | Extremely common — word-initial long /ɒː/ (آب، آسمان، آتش، آن) | ❌ Missing |
+| أ | U+0623 | ALEF WITH HAMZA ABOVE | Rare in Persian (mostly Arabic loanwords) | ❌ Missing |
+| إ | U+0625 | ALEF WITH HAMZA BELOW | Very rare in Persian | ❌ Missing |
+
+When any of these characters hits the tokenizer, there is no matching token → the BPE tokenizer maps them to `<unk>` (token 1) → the T3 module produces silence or noise for that position → the word is garbled or missing from the audio.
+
+**Root cause:** The hootan09 Persian fine-tune inherited the base English tokenizer (2352 tokens, originally designed for 704 English graphemes expanded to cover Arabic script). While it covers 34 of 37 Persian characters, the three missing ones are alef variants — and "آ" is the most critical since it's the primary way to write word-initial long /ɒː/ in Persian.
+
+**Tokenization gap:**
+```
+"آب" (water) → tokenizer → [UNK, beh] → model produces silence + "b"
+"آسمان" (sky) → tokenizer → [UNK, sin, mim, alef, nun] → only "smān" audible
+```
+
+Note: The v3/multilingual grapheme tokenizer (`grapheme_mtl_merged_expanded_v1.json`, 2454 tokens) has all three characters natively (آ=idx 2356, أ=idx 2353, إ=idx 2354), but the Persian fine-tune was trained with the subword tokenizer, not the grapheme one.
+
+**Failed attempts:**
+
+1. **Embedding expansion (approach 1):** Added "آ", "أ", "إ" at new indices 2352-2354 in the tokenizer, then expanded `text_emb` from `[2352, 1024]` → `[2355, 1024]` with new rows initialized from alef (idx 1456). **Failed:** The T3 model's `text_emb` is actually `[2454, 1024]` (matching multilingual config), so the new indices fell within existing embedding rows — "آ" at idx 2352 mapped to the Euro sign (€) embedding, producing gibberish. Also required `strict=False` loading due to shape mismatch.
+
+2. **Token injection at v3 indices (approach 2):** Mapped "آ" → idx 2356, "أ" → idx 2353, "إ" → idx 2354 in the tokenizer — these are the v3 tokenizer positions where the model already has trained embeddings for these characters. **Failed:** Adding tokens to the BPE vocab without updating the merge table (`merges`) causes the tokenizer to fragment them. "آ" at idx 2356 with no corresponding merge rules gets split into unpredictable subword pieces → "م و ش" output.
+
+**Working solution: Character decomposition**
+
+"آ" (U+0622) = "ا" (U+0627 ALEF) + "ٓ" (U+0653 MADDAH ABOVE). This is a Unicode canonical fact — ALEF WITH MADDA ABOVE is a precomposed form of ALEF + MADDAH ABOVE.
+
+Both components exist in the tokenizer:
+- "ا" (ALEF) at idx 1456
+- "ٓ" (MADDAH ABOVE) at idx 1457
+
+So we decompose the precomposed character into its two constituent tokens, both of which the model understands:
+
+```
+"آب" → "آب" → tokenizer → [ALEF, MADDAH, BEH] → [1456, 1457, 1462]
+```
+
+The model was trained on diacritized Persian text and understands that ALEF + MADDAH ABOVE = long /ɒː/. The `persian_phonemizer` G2P adds further vowel marks around this position.
+
+Implementation in `_synth_chatterbox()` ([tts_lab_engines.py:602-610](tts_lab_engines.py#L602)):
+```python
+# BEFORE tokenization: decompose آ into tokens the model knows
+if getattr(inst, "_needs_persian_char_map", False):
+    text = text.replace("آ", "آ")   # ALEF MADDA → ALEF + MADDAH ABOVE
+    text = text.replace("أ", "ا")    # ALEF HAMZA ABOVE → ALEF
+    text = text.replace("إ", "ا")    # ALEF HAMZA BELOW → ALEF
+```
+
+The `_needs_persian_char_map` flag is set to `True` during Persian model load ([tts_lab_engines.py:553](tts_lab_engines.py#L553)) and `False` for v3 (which has these characters natively).
+
+**Why `str.replace()` not `str.translate()`:** `maketrans`/`translate` maps one character to one character. "آ"→"آ" is one-to-two decomposition, requiring `replace()`.
+
+**Result:** "آب" now has the same vowel quality as the "ا" in "صالح" (the long /ɒː/), not the short /æ/ of plain alef at word start. The MADDAH ABOVE diacritic provides the explicit long-vowel signal that plain "ا" lacks.
 
 ### Text Processing Providers (2026-06-12)
 

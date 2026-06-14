@@ -551,6 +551,7 @@ def _load_chatterbox(model="default"):
         inst.s3gen = inst.s3gen.to(DEVICE)
         inst.device = DEVICE
         inst.tokenizer = EnTokenizer(str(fa_dir / "mtl_tokenizer.json"))
+        inst._needs_persian_char_map = True  # mTL tokenizer missing آ/أ/إ — text-level mapping in synth
         return inst
 
     if model == "v3":
@@ -597,6 +598,16 @@ def _synth_chatterbox(inst, text, params):
             kw["audio_prompt_path"] = str(p)
     # Text processing: G2P diacritics or normalization (hazm/parsivar)
     text = _process_persian_text(text, params.get("use_g2p", "persian_phonemizer"))
+
+    # Map Persian characters missing from the Persian fine-tune tokenizer (2352 tokens).
+    # آ (ALEF MADDA) → آ (ALEF + MADDAH ABOVE) — preserves the long /ɒː/ vowel
+    # أ/إ (ALEF HAMZA variants) → ا (ALEF)
+    # The tokenizer has MADDAH ABOVE (U+0653) as a separate token (idx 1457),
+    # so "آ" tokenizes as [ALEF, MADDAH] — the model understands long ā.
+    if getattr(inst, "_needs_persian_char_map", False):
+        text = text.replace("آ", "آ")  # آ → آ
+        text = text.replace("أ", "ا")         # أ → ا
+        text = text.replace("إ", "ا")         # إ → ا
 
     # Truncate input text if it exceeds the model's 2048-token position embedding limit
     # Diacritics double the token count, so 2048 tokens ≈ ~1000-1500 Persian characters with marks
