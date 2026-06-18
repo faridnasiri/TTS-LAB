@@ -8,7 +8,7 @@ Each engine exposes:
 Bottom of file: LOADERS and SYNTHERS dicts used by tts_lab_dispatch.
 """
 from __future__ import annotations
-import io, os, sys, tempfile, wave
+import io, os, re, sys, tempfile, time, wave
 import numpy as np
 from pathlib import Path
 
@@ -582,58 +582,221 @@ def _load_chatterbox(model="default"):
 
     return ChatterboxTTS.from_pretrained(device=DEVICE)
 
+# ── Sentence splitting for long-form synthesis ──────────────────────────────────
+_SENTENCE_RE = re.compile(r'(?<=[.!?۔！？])\s+')
+
+def _split_for_tts(text: str, max_chars: int = 250) -> list[str]:
+    """Split text into chunks suitable for TTS generation.
+
+    Splits at sentence boundaries, grouping 1-3 sentences per chunk up to
+    max_chars.  Short chunks are left intact; long sentences that exceed
+    max_chars are further split at commas/semicolons.
+    """
+    raw = _SENTENCE_RE.split(text)
+    chunks: list[str] = []
+    buf = ""
+    for sent in raw:
+        sent = sent.strip()
+        if not sent:
+            continue
+        # Long single sentence → split at weaker boundaries
+        if len(sent) > max_chars:
+            if buf.strip():
+                chunks.append(buf.strip())
+                buf = ""
+            subs = re.split(r'(?<=[,،；;])\s+', sent)
+            sub_buf = ""
+            for sub in subs:
+                if len(sub_buf) + len(sub) > max_chars and sub_buf:
+                    chunks.append(sub_buf.strip())
+                    sub_buf = sub
+                else:
+                    sub_buf += (" " + sub) if sub_buf else sub
+            if sub_buf.strip():
+                chunks.append(sub_buf.strip())
+            continue
+        if len(buf) + len(sent) > max_chars and buf:
+            chunks.append(buf.strip())
+            buf = sent
+        else:
+            buf += (" " + sent) if buf else sent
+    if buf.strip():
+        chunks.append(buf.strip())
+    return chunks
+
+
 def _synth_chatterbox(inst, text, params):
     import traceback as _tb
+
     kw = dict(
         exaggeration=float(params.get("exaggeration", 0.65)),
         cfg_weight=float(params.get("cfg_weight", 0.5)),
+        repetition_penalty=float(params.get("repetition_penalty", 1.5)),
     )
-    seed = params.get("seed")
-    if seed and int(float(seed)) != 0:
-        kw["seed"] = int(float(seed))
+    import torch as _torch
+    _seed = int(float(params.get("seed", "0") or "0"))
+    if _seed != 0:
+        _torch.manual_seed(_seed)
+        _torch.cuda.manual_seed_all(_seed)
+        np.random.seed(_seed)
+        slog("SEED", "chatterbox", f"Seed set to {_seed}")
+        # CUDA determinism — makes repeated runs with the same seed
+        # produce identical audio. Restored per-chunk in _generate_one.
+        _torch.backends.cudnn.deterministic = True
+        _torch.backends.cudnn.benchmark = False
     pid = params.get("audio_prompt_id")
     if pid:
         p = UPLOAD_DIR / f"{pid}.wav"
         if p.exists():
             kw["audio_prompt_path"] = str(p)
-    # Text processing: G2P diacritics or normalization (hazm/parsivar)
-    text = _process_persian_text(text, params.get("use_g2p", "persian_phonemizer"))
 
-    # Map Persian characters missing from the Persian fine-tune tokenizer (2352 tokens).
-    # آ (ALEF MADDA) → آ (ALEF + MADDAH ABOVE) — preserves the long /ɒː/ vowel
-    # أ/إ (ALEF HAMZA variants) → ا (ALEF)
-    # The tokenizer has MADDAH ABOVE (U+0653) as a separate token (idx 1457),
-    # so "آ" tokenizes as [ALEF, MADDAH] — the model understands long ā.
+    # ── Text preprocessing (applied once, before splitting) ──
+    provider = params.get("use_g2p", "persian_phonemizer")
+    text = _process_persian_text(text, provider)
+
+    # ── Persian text normalization (non-destructive, no spacing changes) ──
+    # Persian → Western digits: the mTL tokenizer has both, but Western
+    # digits are at rank ~265 vs ~1655 — the model knows them 6× better.
+    _PERSIAN_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+    # Arabic → Persian character variants (unify to Persian script)
+    _ARABIC_VARIANTS = str.maketrans("يك", "یک")
+    text = text.translate(_PERSIAN_DIGITS)
+    text = text.translate(_ARABIC_VARIANTS)
+
+    # Decompose Persian characters missing from the mTL tokenizer (2352 tokens)
     if getattr(inst, "_needs_persian_char_map", False):
-        text = text.replace("آ", "آ")  # آ → آ
-        text = text.replace("أ", "ا")         # أ → ا
-        text = text.replace("إ", "ا")         # إ → ا
+        text = text.replace("آ", "آ")  # ALEF MADDA → ALEF + MADDAH ABOVE
+        text = text.replace("أ", "ا")   # ALEF HAMZA ABOVE → ALEF
+        text = text.replace("إ", "ا")   # ALEF HAMZA BELOW → ALEF
 
-    # Truncate input text if it exceeds the model's 2048-token position embedding limit
-    # Diacritics double the token count, so 2048 tokens ≈ ~1000-1500 Persian characters with marks
-    test_tokens = inst.tokenizer.text_to_tokens(text)
-    max_text = 2048
-    if test_tokens.size(0) > max_text:
-        test_tokens = test_tokens[:max_text]
-        new_len = min(len(text), int(len(text) * max_text / test_tokens.size(0) * 1.1))
-        text = text[:new_len]
-        slog("TRUNC", "chatterbox", f"Text truncated to {new_len} chars ({max_text} tokens)")
+    # ── Chunk long text at sentence boundaries ──
+    # Persian fine-tune was trained on short utterances (avg 5-8s).
+    # The alignment-stream-analyzer FORCES EOS when it detects token
+    # repetition (2× same token).  Longer chunks cause the model to
+    # wander into repetition territory → early termination.  Keep each
+    # chunk small so the model stays within its training distribution.
+    _is_persian = getattr(inst, "_needs_persian_char_map", False)
+    _CHUNK_CHARS = 80 if _is_persian else 150
+    chunks = _split_for_tts(text, max_chars=_CHUNK_CHARS)
+    # Safety net: force-split ANY chunk that exceeds _CHUNK_CHARS × 1.5.
+    # This catches comma-split sub-parts that are still too long, and
+    # texts with no sentence breaks.  Without this, the model hits
+    # token repetition → EOS forced → chunk silently truncated.
+    _max_chunk = int(_CHUNK_CHARS * 1.25)  # 100 for persian, 187 for others
+    _clean: list[str] = []
+    for _ch in chunks:
+        if len(_ch) > _max_chunk:
+            for _j in range(0, len(_ch), _CHUNK_CHARS):
+                _clean.append(_ch[_j:_j + _CHUNK_CHARS])
+        else:
+            _clean.append(_ch)
+    if len(_clean) != len(chunks):
+        slog("CHUNK", "chatterbox",
+             f"Force-split: {len(chunks)} → {len(_clean)} chunks "
+             f"(sizes: {[len(c) for c in _clean]})")
+    chunks = _clean
+    silence_ms = float(params.get("chunk_silence_ms", 350))
+    if silence_ms < 0:
+        silence_ms = 0
 
-    # Override max_new_tokens — hardcoded to 1000 in chatterbox source
-    max_tokens = int(float(params.get("max_length", "20000")))
-    _orig_t3_infer = inst.t3.inference
-    def _patched_infer(*a, **kw2):
-        kw2["max_new_tokens"] = max_tokens  # force override (not setdefault)
-        return _orig_t3_infer(*a, **kw2)
-    inst.t3.inference = _patched_infer
+    # ── Core synthesis helper ──
+    def _generate_one(chunk_text: str):
+        """Synthesise a single chunk of text. Returns (float32_numpy, sr)."""
+        _kw = dict(kw)  # copies exaggeration, cfg_weight, audio_prompt_path
+        # Truncate if a single chunk somehow exceeds the token limit
+        test_tokens = inst.tokenizer.text_to_tokens(chunk_text)
+        if test_tokens.size(0) > 2048:
+            test_tokens = test_tokens[:2048]
+            ratio = 2048 / test_tokens.size(0)
+            chunk_text = chunk_text[:max(1, int(len(chunk_text) * ratio * 1.1))]
+        # Patch max_new_tokens (chatterbox hardcodes 1000 internally)
+        max_tokens = int(float(params.get("max_length", "20000")))
+        _orig_infer = inst.t3.inference
+        _old_deterministic = _torch.backends.cudnn.deterministic
+        _old_benchmark = _torch.backends.cudnn.benchmark
+        def _patched_infer(*a, **_kw2):
+            _kw2["max_new_tokens"] = max_tokens
+            return _orig_infer(*a, **_kw2)
+        inst.t3.inference = _patched_infer
+        try:
+            if _seed != 0:
+                _torch.backends.cudnn.deterministic = True
+                _torch.backends.cudnn.benchmark = False
+            wav = inst.generate(chunk_text, **_kw)
+        except Exception:
+            raise RuntimeError(f"chatterbox generate() failed:\n{_tb.format_exc()}")
+        finally:
+            _torch.backends.cudnn.deterministic = _old_deterministic
+            _torch.backends.cudnn.benchmark = _old_benchmark
+            inst.t3.inference = _orig_infer
+        return wav.squeeze().cpu().numpy().astype(np.float32), inst.sr
+
+    # ── Single chunk — fast path ──
+    if len(chunks) <= 1:
+        arr, sr = _generate_one(chunks[0] if chunks else text)
+        return _to_wav(arr, sr), sr
+
+    # ── Multi-chunk — synthesise and stitch ──
+    slog("CHUNK", "chatterbox",
+         f"Splitting {len(text)} chars → {len(chunks)} chunks "
+         f"(avg {sum(len(c) for c in chunks)//len(chunks)} chars, {silence_ms}ms gap)")
+    all_audio = []
+    sr = inst.sr
+    _t_start = time.perf_counter()
+    _vram_fn = None
     try:
-        wav = inst.generate(text, **kw)
+        if DEVICE == "cuda":
+            import torch.cuda as _cuda
+            _vram_fn = lambda: _cuda.memory_allocated() / (1024**3)
     except Exception:
-        raise RuntimeError(f"chatterbox generate() failed:\n{_tb.format_exc()}")
-    finally:
-        inst.t3.inference = _orig_t3_infer
-    arr = wav.squeeze().cpu().numpy().astype(np.float32)
-    return _to_wav(arr, inst.sr), inst.sr
+        pass
+    _failures = 0
+    _first_error = None
+    for i, chunk in enumerate(chunks):
+        if _seed != 0:
+            _torch.manual_seed(_seed + i)
+            _torch.cuda.manual_seed_all(_seed + i)
+            np.random.seed(_seed + i)
+        _t0 = time.perf_counter()
+        _vram_before = _vram_fn() if _vram_fn else 0
+        try:
+            arr, sr_chunk = _generate_one(chunk)
+        except Exception:
+            _failures += 1
+            if _first_error is None:
+                _first_error = _tb.format_exc()
+            slog("CHUNK", "chatterbox",
+                 f"  [{i+1}/{len(chunks)}] FAILED — {_tb.format_exc()[-150:]}")
+            continue
+        _t1 = time.perf_counter()
+        _vram_after = _vram_fn() if _vram_fn else 0
+        sr = sr_chunk or sr
+        all_audio.append(arr)
+        # Silence gap between chunks (except after the last)
+        if i < len(chunks) - 1 and silence_ms > 0:
+            gap = np.zeros(int(sr * silence_ms / 1000), dtype=np.float32)
+            all_audio.append(gap)
+        _chunk_s = _t1 - _t0
+        _chunk_dur = len(arr) / sr
+        _elapsed = _t1 - _t_start
+        _eta = (_elapsed / (i + 1)) * (len(chunks) - i - 1)
+        slog("CHUNK", "chatterbox",
+             f"  [{i+1}/{len(chunks)}] {_chunk_s:.1f}s gen → {_chunk_dur:.1f}s audio  "
+             f"RTF {_chunk_s/_chunk_dur:.1f}×  "
+             f"VRAM {_vram_after:.2f}GB  "
+             f"elapsed {_elapsed:.0f}s  ETA {_eta:.0f}s")
+    if not all_audio:
+        raise RuntimeError(
+            f"All {_failures}/{len(chunks)} chunks failed.\n"
+            f"First error:\n{_first_error}")
+    if _failures:
+        slog("CHUNK", "chatterbox",
+             f"  ⚠ {_failures}/{len(chunks)} chunks failed — kept {len(all_audio)//2+1} survivors")
+    combined = np.concatenate(all_audio)
+    total_dur = len(combined) / sr
+    slog("CHUNK", "chatterbox",
+         f"  Stitched {len(chunks)} chunks → {total_dur:.1f}s ({len(combined)} samples)")
+    return _to_wav(combined, sr), sr
 
 
 # ── 14. Fish Speech ───────────────────────────────────────────────────────────
