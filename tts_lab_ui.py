@@ -699,6 +699,7 @@ const API = '';
 /* ═══════════════════════════════════════════════════════════════
    DEBUG LOG  — categories: REQUEST LOAD SYNTH RESULT ERROR UPLOAD STATUS PARAMS
    ═══════════════════════════════════════════════════════════════ */
+const MAX_LOG_ENTRIES = 500;
 const _logEntries = [];
 let   _logFilter  = 'ALL';
 
@@ -709,6 +710,7 @@ function dbg(cat, engine, msg) {
   _logEntries.push(entry);
   _applyFilter(entry);
   _renderEntry(entry);
+  _trimLog();
   _updateBadge();
   // auto-scroll only when drawer is open
   const body = document.getElementById('log-body');
@@ -719,10 +721,7 @@ function _applyFilter(entry) {
   entry.show = (_logFilter === 'ALL' || _logFilter === entry.cat);
 }
 
-function _renderEntry(entry) {
-  const body = document.getElementById('log-body');
-  if (!body) return;
-  if (!entry.show) return;
+function _buildEntryRow(entry) {
   const row = document.createElement('div');
   row.className = `log-entry cat-${entry.cat}`;
   const srcTag = entry.src === 'server' ? '<span class="log-src-server">[srv]</span>' : '';
@@ -731,7 +730,24 @@ function _renderEntry(entry) {
     `<span class="log-cat">${entry.cat}</span>` +
     `<span class="log-engine">${entry.engine}${srcTag}</span>` +
     `<span class="log-msg">${_esc(entry.msg)}</span>`;
-  body.appendChild(row);
+  return row;
+}
+
+function _renderEntry(entry) {
+  const body = document.getElementById('log-body');
+  if (!body || !entry.show) return;
+  body.appendChild(_buildEntryRow(entry));
+}
+
+function _trimLog() {
+  // Cap array + DOM to MAX_LOG_ENTRIES; keep DOM children in sync with array
+  const body = document.getElementById('log-body');
+  while (_logEntries.length > MAX_LOG_ENTRIES) {
+    const removed = _logEntries.shift();
+    if (removed.show && body && body.firstChild) {
+      body.removeChild(body.firstChild);
+    }
+  }
 }
 
 function _esc(s) {
@@ -747,7 +763,12 @@ function _rebuildLog() {
   const body = document.getElementById('log-body');
   if (!body) return;
   body.innerHTML = '';
-  _logEntries.forEach(e => { _applyFilter(e); _renderEntry(e); });
+  const frag = document.createDocumentFragment();
+  _logEntries.forEach(e => {
+    _applyFilter(e);
+    if (e.show) frag.appendChild(_buildEntryRow(e));
+  });
+  body.appendChild(frag);
   body.scrollTop = body.scrollHeight;
 }
 
@@ -1144,6 +1165,7 @@ async function pollServerLog() {
         _applyFilter(entry);
         _renderEntry(entry);
       });
+      _trimLog();
       _updateBadge();
       const body = document.getElementById('log-body');
       if (body) body.scrollTop = body.scrollHeight;
@@ -1152,8 +1174,9 @@ async function pollServerLog() {
   } catch(_) {}
 }
 
-setInterval(refreshStatus, 6000);
-setInterval(pollServerLog, 2000);
+// Auto-refresh DISABLED — uncomment to re-enable:
+// setInterval(refreshStatus, 6000);
+// setInterval(pollServerLog, 2000);
 // ── Voice Library ──
 let voiceCache = [];
 

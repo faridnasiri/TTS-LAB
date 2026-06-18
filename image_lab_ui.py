@@ -300,7 +300,8 @@ let lastStatus     = null; // last /status response
 (async function boot() {
   uiLog('info', 'Image Lab UI booting', {url: location.href, ua: navigator.userAgent.slice(0,60)});
   await refreshStatus();
-  setInterval(refreshStatus, 4000);
+  // Auto-refresh DISABLED — uncomment to re-enable:
+  // setInterval(refreshStatus, 4000);
   buildEngineTabs();
   selectEngine(currentEngine);
   loadGallery();
@@ -588,6 +589,10 @@ function uiLog(level, msg, detail) {
     `<span class="ts">${ts}</span><span class="lvl">${lvl}</span>${escHtml(msg)}` +
     (detail !== undefined ? `<span class="detail">${escHtml(typeof detail === 'string' ? detail : JSON.stringify(detail, null, 2))}</span>` : '');
   body.appendChild(entry);
+  // Trim old log entries to prevent DOM bloat (>300 nodes)
+  while (body.children.length > 300) {
+    body.removeChild(body.firstChild);
+  }
   body.scrollTop = body.scrollHeight;
 
   if (level === 'error') {
