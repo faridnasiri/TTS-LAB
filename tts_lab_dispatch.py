@@ -1,19 +1,68 @@
 """
 tts_lab_dispatch.py — availability checks, model loading, synthesis dispatch.
+
+Supports TWO modes:
+  1. REMOTE (containerized): engines run in separate containers.
+     Set {ENGINE}_URL env vars (e.g. PIPER_URL=http://engine-current:8101).
+     All _check_available / _do_synth use HTTP.
+
+  2. LOCAL (bare metal): no URL env vars set.
+     Legacy in-process behavior using find_spec + LOADERS/SYNTHERS.
+     Used when running outside Docker.
+
+The orchestrator container uses REMOTE mode exclusively.
 """
 from __future__ import annotations
-import base64, os, threading, time
+import base64, json, os, threading, time
 from typing import Dict, Tuple
 
-from tts_lab_config  import (
+from tts_lab_config import (
     MODEL_ORDER, MODEL_INFO, HEAVY, _state,
-    OUTETTS_DEFAULT_GGUF, COSYVOICE_DIR, INDEXTTS_DIR, OPENVOICE_MODELS_DIR,
     slog,
 )
-from tts_lab_utils   import _safe_del, _evict_heavy, _wav_dur, _piper_voices, _require_gpu
-from tts_lab_engines import LOADERS, SYNTHERS
+from tts_lab_utils import _wav_dur
 
-# ── Availability cache ────────────────────────────────────────────────────────
+# ── Remote engine URL resolution ─────────────────────────────────
+# Engine containers expose HTTP APIs. URLs are set via env vars.
+# Format: PIPER_URL=http://engine-current:8101
+#         INDEXTTS_URL=http://engine-legacy:8102
+#         ORPHEUS_URL=http://orpheus:8002
+#         VIBEVOICE_SGLANG_URL=http://vibevoice:8000/v1/audio/speech
+#
+# SGLang engines use different URL env var names (historical reasons).
+# All others use {UPPER_NAME}_URL.
+
+def _build_remote_urls() -> Dict[str, str]:
+    """Build remote engine URL map from environment variables."""
+    urls: Dict[str, str] = {}
+
+    for name in MODEL_ORDER:
+        # SGLang engines have special env var names
+        if name == "vibevoice":
+            url = os.environ.get("VIBEVOICE_SGLANG_URL", "")
+        elif name == "higgs":
+            url = os.environ.get("HIGGS_SGLANG_URL", "")
+        elif name == "s2pro":
+            url = os.environ.get("S2PRO_SGLANG_URL", "")
+        else:
+            url = os.environ.get(f"{name.upper()}_URL", "")
+
+        if url:
+            urls[name] = url
+
+    return urls
+
+
+_REMOTE_ENGINES: Dict[str, str] = _build_remote_urls()
+_REMOTE_MODE = len(_REMOTE_ENGINES) > 0
+
+if _REMOTE_MODE:
+    slog("DISPATCH", "SYSTEM", f"Remote mode — {len(_REMOTE_ENGINES)} engine URLs configured")
+else:
+    slog("DISPATCH", "SYSTEM", "Local mode — no engine URLs configured, using in-process dispatch")
+
+
+# ── Availability ─────────────────────────────────────────────────
 _import_cache: Dict[str, Tuple[bool, str]] = {}
 _import_cache_lock = threading.Lock()
 _sweep_done = threading.Event()
@@ -23,14 +72,49 @@ def _available(name: str) -> Tuple[bool, str]:
     with _import_cache_lock:
         if name in _import_cache:
             return _import_cache[name]
-    result = _check_available(name)
+
+    if name in _REMOTE_ENGINES:
+        result = _check_available_remote(name)
+    else:
+        result = _check_available_local(name)
+
     with _import_cache_lock:
         _import_cache[name] = result
     return result
 
 
-def _check_available(name: str) -> Tuple[bool, str]:
-    """Synchronous availability probe using find_spec + fs checks only — no C-ext imports."""
+def _check_available_remote(name: str) -> Tuple[bool, str]:
+    """HTTP health check for remote engine containers."""
+    url = _REMOTE_ENGINES[name]
+    try:
+        import httpx
+        r = httpx.get(f"{url}/health", timeout=10.0)
+        if r.status_code == 200:
+            data = r.json()
+            status = data.get("status", "")
+            if status == "ok":
+                # Check if the specific engine is loaded (for multi-engine containers)
+                engines = data.get("engines", {})
+                if engines:
+                    engine_info = engines.get(name, {})
+                    if engine_info.get("loaded"):
+                        return True, ""
+                    elif not engine_info.get("loaded") and "reason" in engine_info:
+                        return False, engine_info["reason"]
+                    else:
+                        return False, "engine not loaded"
+                # Single-engine containers (orpheus)
+                if data.get("model_loaded"):
+                    return True, ""
+                return False, "model not loaded"
+            return False, data.get("detail", f"status: {status}")
+        return False, f"HTTP {r.status_code}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _check_available_local(name: str) -> Tuple[bool, str]:
+    """Synchronous availability probe using find_spec + fs checks — no C-ext imports."""
     import importlib.util as ilu
     pkg_map = {
         "piper":      "piper",
@@ -68,7 +152,7 @@ def _check_available(name: str) -> Tuple[bool, str]:
     if pkg and not ilu.find_spec(pkg):
         return False, f"pip install {pkg} needed"
 
-    # 2. GPU-required engines (orpheus only — bark/outetts run fine on CPU)
+    # 2. GPU-required engines
     if name == "orpheus":
         try:
             import torch
@@ -77,7 +161,7 @@ def _check_available(name: str) -> Tuple[bool, str]:
         except ImportError:
             pass
 
-    # 3. Orpheus — gated model check (authenticated, uses cached HF token)
+    # 3. Orpheus — gated model check
     if name == "orpheus":
         if not ilu.find_spec("orpheus_tts"):
             return False, "pip install orpheus-speech"
@@ -91,14 +175,14 @@ def _check_available(name: str) -> Tuple[bool, str]:
                            "request access at https://huggingface.co/canopylabs/orpheus-3b-0.1-ft "
                            "then run: huggingface-cli login")
         except Exception:
-            pass  # network error or already cached — let the load attempt proceed
+            pass
 
     # 4. Engine-specific file / directory checks
+    from tts_lab_config import MODELS_DIR, COSYVOICE_DIR, OPENVOICE_MODELS_DIR, MANATTS_REPO_DIR, INDEXTTS_DIR
     if name == "piper":
         if not _piper_voices():
             return False, "No .onnx voice found in models/"
     elif name == "kokoro":
-        from tts_lab_config import MODELS_DIR
         if not (MODELS_DIR / "kokoro-v1.0.onnx").exists():
             return False, "kokoro-v1.0.onnx missing"
     elif name == "cosyvoice":
@@ -158,7 +242,6 @@ def _check_available(name: str) -> Tuple[bool, str]:
         if not ilu.find_spec("sherpa_onnx"):
             return False, "pip install sherpa-onnx"
     elif name == "manatts":
-        from tts_lab_config import MANATTS_REPO_DIR
         if not MANATTS_REPO_DIR.exists():
             return False, (
                 "Clone MahtaFetrat/Persian-MultiSpeaker-Tacotron2 to "
@@ -176,9 +259,30 @@ def _check_available(name: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _piper_voices():
+    """Discover Piper ONNX voice files. Used by _check_available_local."""
+    from pathlib import Path
+    from tts_lab_config import MODELS_DIR
+    voices = sorted(Path(str(MODELS_DIR)).glob("*.onnx"))
+    return [v.stem for v in voices if "kokoro" not in v.name.lower()]
+
+
+# ── Model loading ────────────────────────────────────────────────
 def _ensure_loaded(name: str, params: dict) -> None:
-    """Load the model for `name` into VRAM if not already loaded. Thread-safe."""
+    """Ensure the model is available. In remote mode this is a no-op
+    (engine containers manage their own loading). In local mode this
+    does the full VRAM-aware loading pipeline."""
     st = _state[name]
+
+    # Remote mode: no loading needed. Engine container handles it.
+    if name in _REMOTE_ENGINES:
+        ok, reason = _available(name)
+        if not ok:
+            slog("ERROR", name, f"Remote engine not healthy: {reason}")
+            raise RuntimeError(f"Remote engine '{name}' not available: {reason}")
+        return
+
+    # Local mode: full in-process loading (existing behavior)
     with st["lock"]:
         # Detect voice / model changes that require a reload
         if name == "piper":
@@ -196,21 +300,18 @@ def _ensure_loaded(name: str, params: dict) -> None:
                      f"Voice/temp change: {st.get('loaded_voice')!r}/{st.get('loaded_temperature')!r} "
                      f"→ {wanted_voice!r}/{wanted_temp!r} — evicting")
                 _safe_del(st["instance"]); st["instance"] = None
-
         if name == "chatterbox":
             wanted_model = params.get("model", "default")
             if st["instance"] and st.get("loaded_model") != wanted_model:
                 slog("LOAD", name,
                      f"Model change: {st.get('loaded_model')!r} → {wanted_model!r} — evicting")
                 _safe_del(st["instance"]); st["instance"] = None
-
         if name in ("outetts", "parler", "zonos"):
             key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
-            defaults = {"outetts": OUTETTS_DEFAULT_GGUF,
+            defaults = {"outetts": "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf",
                         "parler": "parler-tts/parler-tts-mini-v1",
                         "zonos": "transformer"}
             wanted = params.get(key, defaults[name])
-            slog("LOAD", name, f"Wanted model: {wanted!r}  |  currently loaded: {st.get('loaded_model')!r}")
             if st["instance"] and st.get("loaded_model") != wanted:
                 slog("LOAD", name, f"Model change detected — evicting current instance")
                 _safe_del(st["instance"]); st["instance"] = None
@@ -221,7 +322,6 @@ def _ensure_loaded(name: str, params: dict) -> None:
                 slog("ERROR", name, f"Not available: {reason}")
                 raise RuntimeError(f"Not available: {reason}")
             if MODEL_INFO[name]["heavy"]:
-                # Log VRAM before eviction
                 try:
                     import torch
                     _free, _total = torch.cuda.mem_get_info()
@@ -246,7 +346,7 @@ def _ensure_loaded(name: str, params: dict) -> None:
                 elif name == "chatterbox":
                     model_arg = params.get("model", "default")
                 elif name == "outetts":
-                    model_arg = params.get("model_path", OUTETTS_DEFAULT_GGUF)
+                    model_arg = params.get("model_path", "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf")
                 elif name == "parler":
                     model_arg = params.get("model_id", "parler-tts/parler-tts-mini-v1")
                 elif name == "zonos":
@@ -254,6 +354,7 @@ def _ensure_loaded(name: str, params: dict) -> None:
                 else:
                     model_arg = None
                 slog("LOAD", name, f"Loading{'  arg=' + repr(model_arg) if model_arg else ''}  …")
+                from tts_lab_engines import LOADERS
                 if model_arg is not None:
                     st["instance"] = LOADERS[name](model_arg)
                 else:
@@ -270,7 +371,7 @@ def _ensure_loaded(name: str, params: dict) -> None:
                     st["loaded_model"] = params.get("model", "default")
                 if name in ("outetts", "parler", "zonos"):
                     key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
-                    defaults = {"outetts": OUTETTS_DEFAULT_GGUF,
+                    defaults = {"outetts": "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf",
                                 "parler": "parler-tts/parler-tts-mini-v1",
                                 "zonos": "transformer"}
                     st["loaded_model"] = params.get(key, defaults[name])
@@ -284,12 +385,20 @@ def _ensure_loaded(name: str, params: dict) -> None:
             slog("LOAD", name, f"Already loaded ({st.get('loaded_model') or st.get('loaded_voice') or 'default'}) — skipping reload")
 
 
+# ── Synthesis ────────────────────────────────────────────────────
 def _do_synth(name: str, text: str, params: dict) -> dict:
     slog("SYNTH", name, f"▶ text={text[:60]!r}{'…' if len(text)>60 else ''}")
     slog("PARAMS", name, f"params={params}")
+
+    # Remote mode: HTTP POST to engine container
+    if name in _REMOTE_ENGINES:
+        return _do_synth_remote(name, text, params)
+
+    # Local mode: in-process synthesis
     _ensure_loaded(name, params)
     st = _state[name]
     t0 = time.perf_counter()
+    from tts_lab_engines import SYNTHERS
     wav, sr = SYNTHERS[name](st["instance"], text, params)
     synth_s = time.perf_counter() - t0
     dur = _wav_dur(wav)
@@ -304,6 +413,73 @@ def _do_synth(name: str, text: str, params: dict) -> dict:
     }
 
 
+def _do_synth_remote(name: str, text: str, params: dict) -> dict:
+    """Synthesize via remote engine container over HTTP."""
+    import httpx
+
+    url = _REMOTE_ENGINES[name]
+
+    # SGLang engines use a different API (OpenAI-compatible /v1/audio/speech)
+    if name in ("vibevoice", "higgs", "s2pro"):
+        return _do_synth_sglang(name, text, params, url)
+
+    # Standard engine server API
+    t0 = time.perf_counter()
+    r = httpx.post(
+        f"{url}/synthesize",
+        json={"engine": name, "text": text, "params": params},
+        timeout=300.0,
+    )
+    r.raise_for_status()
+    result = r.json()
+    synth_s = time.perf_counter() - t0
+    dur_ms = result.get("audio_dur_ms", 0)
+    dur_s = dur_ms / 1000.0 if dur_ms > 0 else 0
+    slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms (remote)  dur {dur_ms} ms  RTF {round(synth_s/dur_s,3) if dur_s>0 else 0}×  {result.get('sample_rate', 0)} Hz")
+    return {
+        "audio_b64":    result["audio_b64"],
+        "sample_rate":  result["sample_rate"],
+        "synth_time_ms": int(synth_s * 1000),
+        "audio_dur_ms": dur_ms,
+        "rtf":          round(synth_s / dur_s, 4) if dur_s > 0 else 0,
+        "load_time_s":  result.get("load_time_s", 0),
+    }
+
+
+def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
+    """Synthesize via SGLang OpenAI-compatible API."""
+    import httpx
+
+    t0 = time.perf_counter()
+    r = httpx.post(
+        url,
+        json={"input": text, **params},
+        timeout=600.0,
+    )
+    r.raise_for_status()
+    result = r.json()
+    synth_s = time.perf_counter() - t0
+
+    # SGLang returns audio as base64 in the response
+    audio_b64 = result.get("audio", result.get("audio_b64", ""))
+    if not audio_b64:
+        raise RuntimeError(f"SGLang response missing audio data: {list(result.keys())}")
+
+    raw = base64.b64decode(audio_b64)
+    dur_s = len(raw) / (result.get("sample_rate", 24000) * 2)  # 16-bit mono estimate
+
+    slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms (SGLang)  dur ~{int(dur_s*1000)} ms  {result.get('sample_rate', 24000)} Hz")
+    return {
+        "audio_b64":    audio_b64,
+        "sample_rate":  result.get("sample_rate", 24000),
+        "synth_time_ms": int(synth_s * 1000),
+        "audio_dur_ms":  int(dur_s * 1000),
+        "rtf":          round(synth_s / dur_s, 4) if dur_s > 0 else 0,
+        "load_time_s":  0,
+    }
+
+
+# ── Startup sweep ────────────────────────────────────────────────
 def _sweep_availability() -> None:
     """Run once at startup: probe every engine and populate _import_cache."""
     for n in MODEL_ORDER:
@@ -312,3 +488,27 @@ def _sweep_availability() -> None:
         except Exception:
             pass
     _sweep_done.set()
+
+
+# ── Heavy engine eviction (local mode only) ─────────────────────
+def _evict_heavy(keep: str = "") -> None:
+    """Evict heavy engines from VRAM, keeping `keep`."""
+    from tts_lab_utils import _safe_del
+    for n in MODEL_ORDER:
+        if n == keep:
+            continue
+        if MODEL_INFO[n].get("heavy"):
+            st = _state[n]
+            with st["lock"]:
+                if st["instance"] is not None:
+                    slog("VRAM", n, "Evicting …")
+                    _safe_del(st["instance"])
+                    st["instance"] = None
+                    st["status"] = "idle"
+                    st["loaded_model"] = None
+                    st["loaded_voice"] = None
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass

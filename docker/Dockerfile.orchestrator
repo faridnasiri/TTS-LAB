@@ -1,0 +1,32 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# ORCHESTRATOR — Thin container, no ML libraries
+# ═══════════════════════════════════════════════════════════════════
+#
+# The orchestrator serves the web UI at port 8001 and routes all
+# engine synthesis requests to engine containers via HTTP.
+#
+# Inherits directly from tts-lab-base (no ML stack).
+# All 28 engines are HTTP-remote. No torch/numpy/transformers needed.
+#
+# SIZE: ~1.5 GB (same as base)
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-base:latest
+
+LABEL org.opencontainers.image.title="TTS Lab - Orchestrator"
+LABEL org.opencontainers.image.description="Web UI + HTTP dispatch — no ML libraries"
+LABEL tts-lab.tier="orchestrator"
+
+# Orchestrator mode — tells tts_lab.py to skip ML imports
+ENV ORCHESTRATOR_MODE=1
+
+# Engine URLs — set by docker-compose at runtime
+# Format: {ENGINE_NAME}_URL=http://container:port
+# Example: PIPER_URL=http://engine-current:8101
+
+EXPOSE 8001
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s \
+    CMD curl -f http://localhost:8001/status || exit 1
+
+CMD ["uvicorn", "tts_lab:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
