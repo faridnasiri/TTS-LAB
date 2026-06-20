@@ -213,15 +213,13 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         if not (ilu.find_spec("generator") or ilu.find_spec("csm_mlx")):
             return False, "Clone: git clone SesameAILabs/csm /opt/models/csm + add .pth"
         try:
-            import urllib.request, urllib.error
-            req = urllib.request.Request(
-                "https://huggingface.co/sesame/csm-1b/resolve/main/config.json")
-            with urllib.request.urlopen(req, timeout=5): pass
-        except urllib.error.HTTPError as _e:
-            if _e.code in (401, 403):
+            from huggingface_hub import hf_hub_download
+            hf_hub_download("sesame/csm-1b", "config.json")
+        except Exception as _e:
+            _s = str(_e).lower()
+            if "gated" in _s or "401" in _s or "403" in _s or "authori" in _s:
                 return False, "sesame/csm-1b is gated — run: huggingface-cli login"
-        except Exception:
-            pass
+            # Other errors (network, etc.) — ignore, probe best-effort
     elif name == "indextts":
         if not ilu.find_spec("indextts"):
             return False, "pip install git+https://github.com/index-tts/index-tts"
