@@ -2,10 +2,9 @@
 """
 tts_lab_engine_server.py — FastAPI server for engine containers.
 
-Each engine container (engine-current, engine-legacy) runs this server.
-It loads all available engines at startup and exposes:
-  GET  /health      → engine status + loaded models
-  POST /synthesize  → {engine, text, params} → audio_b64 + metadata
+LAZY-LOADING: Engines are only loaded on first synthesis request.
+Only ONE engine is kept in VRAM at a time. Before loading a new
+engine, the previous one is evicted and GPU memory is cleared.
 
 Usage:
   python tts_lab_engine_server.py --port 8101 --stack current
@@ -18,10 +17,9 @@ import base64
 import os
 import time
 import traceback
+import threading
 
 # ── Shims MUST be imported before any ML library ────────────────
-# The --stack arg controls which shims module to use.
-# We parse it from sys.argv before imports.
 import sys as _sys
 
 _parser = argparse.ArgumentParser()
@@ -47,12 +45,15 @@ from tts_lab_utils import _wav_dur, _safe_del
 
 app = FastAPI(title=f"TTS Lab — Engine Server ({_STACK} stack)")
 
-# ── Engine loading state ────────────────────────────────────────
-_loaded: dict[str, object] = {}      # engine_name → model instance
-_load_times: dict[str, float] = {}   # engine_name → load time in seconds
-_available_engines: list[str] = []   # engines that passed availability check
-_unavailable: dict[str, str] = {}    # engine_name → reason not available
-_startup_done = False
+# ── Engine state (LAZY — nothing loaded at startup) ─────────────
+_available_engines: list[str] = []   # passed availability probe
+_unavailable: dict[str, str] = {}    # engine_name → reason
+_load_times: dict[str, float] = {}   # engine_name → last load time (cached)
+
+# Current loaded engine — AT MOST ONE
+_current_engine: str | None = None
+_current_instance: object | None = None
+_lock = threading.Lock()
 
 
 class SynthRequest(BaseModel):
@@ -66,60 +67,108 @@ class HealthResponse(BaseModel):
     stack: str
     engines_available: int
     engines_loaded: int
+    current_engine: str | None
     engines: dict[str, dict]
 
 
-@app.on_event("startup")
-async def load_all_engines():
-    global _available_engines, _unavailable, _startup_done
+# ── VRAM management ──────────────────────────────────────────────
 
-    print(f"[engine-server:{_STACK}] Starting up on port {_PORT} ...")
+def _evict_current() -> None:
+    """Unload the currently loaded engine and free GPU memory."""
+    global _current_engine, _current_instance
+    if _current_instance is not None:
+        name = _current_engine
+        print(f"[engine-server:{_STACK}] Evicting {name} ...")
+        try:
+            import torch
+            torch.cuda.synchronize()
+        except Exception:
+            pass
+        _safe_del(_current_instance)
+        _current_instance = None
+        _current_engine = None
+        try:
+            import torch
+            torch.cuda.empty_cache()
+            _free, _total = torch.cuda.mem_get_info()
+            print(f"[engine-server:{_STACK}] VRAM after evict: {_free//1048576} / {_total//1048576} MB free")
+        except Exception:
+            pass
+
+
+def _load_engine(name: str) -> object:
+    """Evict current engine (if any), load `name`, return instance.
+    Thread-safe: only one load at a time."""
+    global _current_engine, _current_instance
+
+    with _lock:
+        # Already loaded? Return it.
+        if _current_engine == name and _current_instance is not None:
+            print(f"[engine-server:{_STACK}] {name} already loaded — reusing")
+            return _current_instance
+
+        # Evict whatever is currently loaded
+        _evict_current()
+
+        # Load the requested engine
+        print(f"[engine-server:{_STACK}] Loading {name} ...")
+        t0 = time.perf_counter()
+        try:
+            instance = LOADERS[name]()
+        except Exception as e:
+            print(f"[engine-server:{_STACK}] {name} LOAD FAILED: {e}")
+            traceback.print_exc()
+            # Try to clear whatever partial state may exist
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load engine '{name}': {e}"
+            )
+
+        elapsed = round(time.perf_counter() - t0, 2)
+        _current_instance = instance
+        _current_engine = name
+        _load_times[name] = elapsed
+        _state[name]["instance"] = instance
+        _state[name]["status"] = "loaded"
+        _state[name]["load_time_s"] = elapsed
+
+        print(f"[engine-server:{_STACK}] {name} loaded in {elapsed}s")
+        return instance
+
+
+# ── Startup: probe availability only, do NOT load engines ────────
+
+@app.on_event("startup")
+async def probe_availability():
+    print(f"[engine-server:{_STACK}] Starting on port {_PORT} (lazy-load mode)")
     print(f"[engine-server:{_STACK}] Probing engine availability ...")
 
-    # Discover which engines in MODEL_ORDER are available in this container
     for name in MODEL_ORDER:
-        # Skip engines that belong to other stacks
-        # (The SGLang engines and orpheus won't have their packages here,
-        # so _available() will naturally return False for them.)
         ok, reason = _available(name)
         if ok:
             _available_engines.append(name)
         else:
             _unavailable[name] = reason
 
-    print(f"[engine-server:{_STACK}] Available: {len(_available_engines)} engines")
+    print(f"[engine-server:{_STACK}] Available: {len(_available_engines)} engines "
+          f"(none loaded — lazy mode)")
     print(f"[engine-server:{_STACK}] Unavailable: {len(_unavailable)} engines")
+    print(f"[engine-server:{_STACK}] Listening on port {_PORT}")
 
-    # Load available engines
-    for name in _available_engines:
-        try:
-            print(f"[engine-server:{_STACK}] Loading {name} ...")
-            t0 = time.perf_counter()
-            instance = LOADERS[name]()
-            elapsed = round(time.perf_counter() - t0, 2)
-            _loaded[name] = instance
-            _load_times[name] = elapsed
-            _state[name]["instance"] = instance
-            _state[name]["status"] = "loaded"
-            _state[name]["load_time_s"] = elapsed
-            print(f"[engine-server:{_STACK}]   {name} loaded in {elapsed}s")
-        except Exception as e:
-            print(f"[engine-server:{_STACK}]   {name} FAILED: {e}")
-            traceback.print_exc()
-            _unavailable[name] = str(e)
 
-    _startup_done = True
-    print(f"[engine-server:{_STACK}] Startup complete. "
-          f"Loaded: {len(_loaded)}/{len(_available_engines)}. "
-          f"Listening on port {_PORT}")
-
+# ── Endpoints ────────────────────────────────────────────────────
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
     engines_status = {}
     for name in _available_engines:
         engines_status[name] = {
-            "loaded": name in _loaded,
+            "loaded": name == _current_engine,
             "load_time_s": _load_times.get(name, 0),
         }
     for name, reason in _unavailable.items():
@@ -129,17 +178,19 @@ async def health():
         }
 
     return HealthResponse(
-        status="ok" if _startup_done else "starting",
+        status="ok",
         stack=_STACK,
         engines_available=len(_available_engines),
-        engines_loaded=len(_loaded),
+        engines_loaded=1 if _current_instance is not None else 0,
+        current_engine=_current_engine,
         engines=engines_status,
     )
 
 
 @app.post("/synthesize")
 async def synthesize(req: SynthRequest):
-    if req.engine not in _loaded:
+    # Validate engine is available
+    if req.engine not in _available_engines:
         if req.engine in _unavailable:
             raise HTTPException(
                 status_code=503,
@@ -147,15 +198,21 @@ async def synthesize(req: SynthRequest):
             )
         raise HTTPException(
             status_code=503,
-            detail=f"Engine '{req.engine}' not loaded"
+            detail=f"Engine '{req.engine}' not available in this container"
         )
 
-    instance = _loaded[req.engine]
+    # Lazy-load (evicts previous engine, loads this one)
+    instance = _load_engine(req.engine)
+
     try:
         t0 = time.perf_counter()
         wav, sr = SYNTHERS[req.engine](instance, req.text, req.params)
         synth_ms = int((time.perf_counter() - t0) * 1000)
         dur_ms = int(_wav_dur(wav) * 1000)
+
+        slog("SYNTH", req.engine,
+             f"synth {synth_ms}ms  dur {dur_ms}ms  "
+             f"RTF {round(synth_ms/dur_ms,4) if dur_ms>0 else 0}×  {sr} Hz")
 
         return {
             "audio_b64": base64.b64encode(wav).decode(),
@@ -168,6 +225,13 @@ async def synthesize(req: SynthRequest):
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/unload")
+async def unload():
+    """Manually evict the current engine. For testing/debugging."""
+    _evict_current()
+    return {"unloaded": True, "current_engine": None}
 
 
 if __name__ == "__main__":
