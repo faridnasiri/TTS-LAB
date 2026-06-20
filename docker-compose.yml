@@ -1,0 +1,268 @@
+version: "3.9"
+
+# ═══════════════════════════════════════════════════════════════════
+# TTS Lab — 6-Container Deployment
+# ═══════════════════════════════════════════════════════════════════
+#
+# Architecture:
+#   orchestrator     — Web UI + HTTP dispatch (port 8001)
+#   engine-current   — 21 engines on torch 2.10 + tf 5.12 (port 8101)
+#   engine-legacy    — 3 engines on torch 1.13 + tf 4.46 (port 8102)
+#   orpheus          — Orpheus 3B via vllm (port 8002, GPU mandatory)
+#   vibevoice        — SGLang: VibeVoice-1.5B (port 8003, GPU)
+#   higgs            — SGLang: Higgs Audio v3 4B (port 8004, GPU)
+#   s2pro            — SGLang: Fish S2-Pro 5B (port 8005, GPU)
+#
+# Usage:
+#   Default (orchestrator + engine-current + engine-legacy):
+#     docker compose up -d
+#
+#   + Orpheus (needs GPU):
+#     docker compose --profile gpu up -d
+#
+#   + SGLang engines (need GPU, each ~7-11 GB VRAM):
+#     docker compose --profile sglang up -d vibevoice
+#
+#   Everything:
+#     docker compose --profile gpu --profile sglang up -d
+#
+#   Stop:
+#     docker compose --profile gpu --profile sglang down
+# ═══════════════════════════════════════════════════════════════════
+
+x-common-env: &common-env
+  HF_HOME: /opt/models/huggingface
+  XDG_CACHE_HOME: /opt/models/cache
+  COQUI_TOS_AGREED: "1"
+  TOKENIZERS_PARALLELISM: "false"
+  PYTHONUNBUFFERED: "1"
+
+x-model-volume: &model-volume
+  volumes:
+    - /opt/models:/opt/models
+    - /tmp/tts_uploads:/tmp/tts_uploads
+    - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+
+x-gpu: &gpu-config
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # Orchestrator — Web UI + HTTP dispatch (no ML libraries)
+  # ═══════════════════════════════════════════════════════════════
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.orchestrator
+    image: tts-lab-orchestrator:latest
+    container_name: tts-lab-orchestrator
+    ports:
+      - "8001:8001"
+    <<: *model-volume
+    environment:
+      <<: *common-env
+      ORCHESTRATOR_MODE: "1"
+      # Engine URLs — all 28 engines are remote HTTP
+      PIPER_URL: http://engine-current:8101
+      KOKORO_URL: http://engine-current:8101
+      MELO_URL: http://engine-current:8101
+      CHATTTS_URL: http://engine-current:8101
+      OUTETTS_URL: http://engine-current:8101
+      BARK_URL: http://engine-current:8101
+      STYLETTS2_URL: http://engine-current:8101
+      F5TTS_URL: http://engine-current:8101
+      DIA_URL: http://engine-current:8101
+      XTTS_URL: http://engine-current:8101
+      COSYVOICE_URL: http://engine-current:8101
+      FISHSPEECH_URL: http://engine-current:8101
+      CHATTERBOX_URL: http://engine-current:8101
+      CHATTERBOXTURBO_URL: http://engine-current:8101
+      OMNIVOICE_URL: http://engine-current:8101
+      OPENVOICE_URL: http://engine-current:8101
+      ZONOS_URL: http://engine-current:8101
+      MATCHA_URL: http://engine-current:8101
+      MANATTS_URL: http://engine-current:8101
+      CSM_URL: http://engine-current:8101
+      QWEN3TTS_URL: http://engine-current:8101
+      # Legacy engines
+      INDEXTTS_URL: http://engine-legacy:8102
+      PARLER_URL: http://engine-legacy:8102
+      # Orpheus
+      ORPHEUS_URL: http://orpheus:8002
+      # SGLang engines (special URL format — already configured in dispatch)
+      VIBEVOICE_SGLANG_URL: http://vibevoice:8000/v1/audio/speech
+      HIGGS_SGLANG_URL: http://higgs:8000/v1/audio/speech
+      S2PRO_SGLANG_URL: http://s2pro:8000/v1/audio/speech
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - tts-lab-net
+    depends_on:
+      - engine-current
+      - engine-legacy
+
+  # ═══════════════════════════════════════════════════════════════
+  # Engine-Current — 21 engines on torch 2.10 + tf 5.12
+  # ═══════════════════════════════════════════════════════════════
+  engine-current:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.engine-current
+    image: tts-lab-engine-current:latest
+    container_name: tts-lab-engine-current
+    <<: *model-volume
+    environment:
+      <<: *common-env
+      SUNO_USE_SMALL_MODELS: "False"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8101/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 180s    # 21 engines take time to load
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Engine-Legacy — 3 engines on torch 1.13 + tf 4.46
+  # ═══════════════════════════════════════════════════════════════
+  engine-legacy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.engine-legacy
+    image: tts-lab-engine-legacy:latest
+    container_name: tts-lab-engine-legacy
+    <<: *model-volume
+    environment:
+      <<: *common-env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8102/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Orpheus 3B — CUDA 12.1 + vllm (GPU mandatory)
+  # ═══════════════════════════════════════════════════════════════
+  orpheus:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.orpheus
+    image: tts-lab-orpheus:latest
+    container_name: tts-lab-orpheus
+    ports:
+      - "8002:8002"
+    <<: *model-volume
+    environment:
+      <<: *common-env
+      HF_TOKEN: ${HF_TOKEN:-}
+    <<: *gpu-config
+    restart: unless-stopped
+    profiles:
+      - gpu
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # SGLang: VibeVoice-1.5B (~7 GB VRAM)
+  # ═══════════════════════════════════════════════════════════════
+  vibevoice:
+    image: lmsysorg/sglang-omni:dev
+    container_name: tts-lab-vibevoice
+    ports:
+      - "8003:8000"
+    volumes:
+      - /opt/models/huggingface:/root/.cache/huggingface
+    command:
+      - --model
+      - microsoft/VibeVoice-1.5B
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    <<: *gpu-config
+    restart: unless-stopped
+    profiles:
+      - sglang
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # SGLang: Higgs Audio v3 4B (~9 GB VRAM)
+  # ═══════════════════════════════════════════════════════════════
+  higgs:
+    image: lmsysorg/sglang-omni:dev
+    container_name: tts-lab-higgs
+    ports:
+      - "8004:8000"
+    volumes:
+      - /opt/models/huggingface:/root/.cache/huggingface
+    command:
+      - --model
+      - bosonai/higgs-audio-v3-tts-4b
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    <<: *gpu-config
+    restart: unless-stopped
+    profiles:
+      - sglang
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # SGLang: Fish S2-Pro 5B (~11 GB VRAM)
+  # ═══════════════════════════════════════════════════════════════
+  s2pro:
+    image: lmsysorg/sglang-omni:dev
+    container_name: tts-lab-s2pro
+    ports:
+      - "8005:8000"
+    volumes:
+      - /opt/models/huggingface:/root/.cache/huggingface
+    command:
+      - --model
+      - fishaudio/s2-pro
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    <<: *gpu-config
+    restart: unless-stopped
+    profiles:
+      - sglang
+    networks:
+      - tts-lab-net
+
+networks:
+  tts-lab-net:
+    driver: bridge
