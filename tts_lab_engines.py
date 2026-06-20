@@ -985,6 +985,17 @@ def _synth_neutts(inst, text, params):
 
 # ── 19. IndexTTS-2 ────────────────────────────────────────────────────────────
 def _load_indextts(model_dir=None):
+    # Fix ExtensionsTrie removed in transformers 5.x — indextts imports it transitively
+    try:
+        import transformers.tokenization_utils as _tku, transformers as _tf
+        for _cls_name in ["ExtensionsTrie", "AddedToken"]:
+            if not hasattr(_tku, _cls_name) or not isinstance(getattr(_tku, _cls_name, None), type):
+                _stub = type(_cls_name, (), {"__init__": lambda s,*a,**kw: None})
+                setattr(_tku, _cls_name, _stub)
+                setattr(_tf, _cls_name, _stub)
+    except Exception:
+        pass
+
     _REMOVED_CACHE_CLASSES = [
         "OffloadedCache", "QuantizedCacheConfig", "QuantizedCache",
         "QuantoQuantizedCache", "HQQQuantizedCache", "SlidingWindowCache", "StaticCacheConfig",
@@ -1484,6 +1495,344 @@ def _synth_manatts(inst, text, params):
     return _to_wav(wav_out, inst["sr"]), inst["sr"]
 
 
+# ── 24. Chatterbox-Turbo ───────────────────────────────────────────────────────
+def _load_chatterboxturbo(model="default"):
+    """Load Chatterbox-Turbo TTS (350M distilled one-step model).
+
+    Same package as Chatterbox but uses ChatterboxTurboTTS class.
+    Models:
+      default — English Turbo (350M, one-step decoder)
+      turbo    — Same as default (alias)
+    """
+    import types, importlib.machinery
+    for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
+                "torchcodec.decoders._core", "torchcodec.decoders.video_decoder",
+                "torchcodec.encoders"]:
+        if _tc not in sys.modules:
+            _m = types.ModuleType(_tc)
+            _is_pkg = "." not in _tc.split("torchcodec.")[-1] or _tc == "torchcodec"
+            _m.__spec__ = importlib.machinery.ModuleSpec(_tc, loader=None, is_package=_is_pkg)
+            _m.__path__ = []
+            sys.modules[_tc] = _m
+    import perth
+    if perth.PerthImplicitWatermarker is None:
+        perth.PerthImplicitWatermarker = perth.DummyWatermarker
+    from chatterbox.tts_turbo import ChatterboxTurboTTS
+    slog("LOAD", "chatterboxturbo", f"Loading ChatterboxTurboTTS (350M, one-step)...")
+    return ChatterboxTurboTTS.from_pretrained(device=DEVICE)
+
+
+def _synth_chatterboxturbo(inst, text, params):
+    import torch
+
+    # Core generation parameters
+    kw = dict(
+        exaggeration=float(params.get("exaggeration", 0.5)),
+        cfg_weight=float(params.get("cfg_weight", 0.5)),
+    )
+
+    # Optional generation parameters
+    def _maybe_float(key, default=None):
+        v = params.get(key, "")
+        if v != "" and v is not None:
+            try:
+                return float(v)
+            except (ValueError, TypeError):
+                pass
+        return default
+
+    def _maybe_int(key, default=None):
+        v = params.get(key, "")
+        if v != "" and v is not None:
+            try:
+                return int(v)
+            except (ValueError, TypeError):
+                pass
+        return default
+
+    temperature = _maybe_float("temperature")
+    if temperature is not None:
+        kw["temperature"] = temperature
+
+    top_p = _maybe_float("top_p")
+    if top_p is not None:
+        kw["top_p"] = top_p
+
+    top_k = _maybe_int("top_k")
+    if top_k is not None:
+        kw["top_k"] = top_k
+
+    repetition_penalty = _maybe_float("repetition_penalty")
+    if repetition_penalty is not None:
+        kw["repetition_penalty"] = repetition_penalty
+
+    min_p = _maybe_float("min_p")
+    if min_p is not None:
+        kw["min_p"] = min_p
+
+    norm_loudness = params.get("norm_loudness", "true").lower()
+    if norm_loudness in ("false", "0", "no"):
+        kw["norm_loudness"] = False
+
+    # Voice cloning reference WAV
+    pid = params.get("audio_prompt_id")
+    if pid:
+        p = UPLOAD_DIR / f"{pid}.wav"
+        if p.exists():
+            kw["audio_prompt_path"] = str(p)
+
+    # Seed (via torch global state — not a generate() parameter)
+    _seed = int(float(params.get("seed", "0") or "0"))
+    if _seed != 0:
+        torch.manual_seed(_seed)
+        torch.cuda.manual_seed_all(_seed)
+        np.random.seed(_seed)
+
+    # Persian text processing (reuse from chatterbox)
+    provider = params.get("use_g2p", "none")
+    text = _process_persian_text(text, provider)
+
+    wav = inst.generate(text, **kw)
+    arr = wav.squeeze().cpu().numpy().astype(np.float32)
+    return _to_wav(arr, inst.sr), inst.sr
+
+
+# ── 25. Microsoft VibeVoice-1.5B ───────────────────────────────────────────────
+def _load_vibevoice():
+    """Load Microsoft VibeVoice-1.5B (next-token diffusion, 3B params).
+
+    English + Chinese only. Built-in AI disclaimer + watermark.
+
+    Serving: VibeVoice has no Python code in its HF repo (no trust_remote_code),
+    and transformers 5.x doesn't natively support 'vibevoice' architecture yet.
+    Use SGLang-Omni server — the recommended serving path per the model card.
+
+    Setup:
+      1. docker pull lmsysorg/sglang-omni:dev
+      2. docker run --gpus all -p 8000:8000 lmsysorg/sglang-omni:dev \\
+           --model microsoft/VibeVoice-1.5B
+      3. Set VIBEVOICE_SGLANG_URL=http://host:8000/v1/audio/speech
+    """
+    slog("LOAD", "vibevoice", "VibeVoice-1.5B — using SGLang-Omni endpoint")
+    return {
+        "sglang_url": os.environ.get("VIBEVOICE_SGLANG_URL", "http://localhost:8000/v1/audio/speech"),
+        "sr": 24000,
+    }
+
+
+def _synth_vibevoice(inst, text, params):
+    """Synthesise via VibeVoice SGLang-Omni server."""
+    import requests
+    url = inst["sglang_url"]
+    payload = {"input": text}
+    try:
+        resp = requests.post(url, json=payload, timeout=float(params.get("timeout", 300)))
+        resp.raise_for_status()
+        wav_bytes = resp.content
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        return _to_wav(arr, sr), sr
+    except Exception as e:
+        raise RuntimeError(
+            f"VibeVoice synthesis failed — is SGLang-Omni server running at {url}?\n"
+            f"Start: docker run --gpus all -p 8000:8000 lmsysorg/sglang-omni:dev "
+            f"--model microsoft/VibeVoice-1.5B\n"
+            f"Or set VIBEVOICE_SGLANG_URL env var.\n"
+            f"Error: {e}"
+        )
+
+
+# ── 26. BosonAI Higgs Audio v3 (4B) ────────────────────────────────────────────
+def _load_higgs():
+    """Load BosonAI Higgs Audio v3 TTS (4B AR decoder, 100+ languages).
+
+    Supports voice cloning, control tokens, 102 languages including Persian.
+
+    Serving: Higgs has no Python code in its HF repo (no trust_remote_code),
+    and transformers 5.x doesn't natively support 'higgs_multimodal_qwen3'.
+    Use SGLang-Omni or vLLM-Omni — the recommended serving paths.
+
+    Setup (SGLang-Omni):
+      1. docker pull lmsysorg/sglang-omni:dev
+      2. docker run --gpus all -p 8000:8000 lmsysorg/sglang-omni:dev \\
+           --model bosonai/higgs-audio-v3-tts-4b
+      3. Set HIGGS_SGLANG_URL=http://host:8000/v1/audio/speech
+
+    Setup (vLLM-Omni):
+      1. pip install vllm-omni
+      2. vllm-omni serve bosonai/higgs-audio-v3-tts-4b
+    """
+    slog("LOAD", "higgs", "Higgs Audio v3 — using SGLang-Omni endpoint")
+    return {
+        "sglang_url": os.environ.get("HIGGS_SGLANG_URL", "http://localhost:8000/v1/audio/speech"),
+        "sr": 24000,
+    }
+
+
+def _synth_higgs(inst, text, params):
+    """Synthesise via Higgs SGLang-Omni server.
+
+    Supports inline control tokens: <|emotion:happy|>, <|sfx:laugh|laugh|>, etc.
+    """
+    import requests
+    url = inst["sglang_url"]
+    payload = {
+        "input": text,
+        "temperature": float(params.get("temperature", 0.8)),
+        "top_k": int(params.get("top_k", 50)),
+        "max_new_tokens": int(params.get("max_new_tokens", 1024)),
+    }
+    # Optional voice cloning references
+    ref_id = params.get("audio_prompt_id", "")
+    if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists():
+        ref_obj = {"audio_path": str(UPLOAD_DIR / f"{ref_id}.wav")}
+        ref_txt = params.get("ref_text", "").strip()
+        if ref_txt:
+            ref_obj["text"] = ref_txt
+        payload["references"] = [ref_obj]
+
+    try:
+        resp = requests.post(url, json=payload, timeout=float(params.get("timeout", 300)))
+        resp.raise_for_status()
+        wav_bytes = resp.content
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        return _to_wav(arr, sr), sr
+    except Exception as e:
+        raise RuntimeError(
+            f"Higgs synthesis failed — is SGLang-Omni server running at {url}?\n"
+            f"Start: docker run --gpus all -p 8000:8000 lmsysorg/sglang-omni:dev "
+            f"--model bosonai/higgs-audio-v3-tts-4b\n"
+            f"Or set HIGGS_SGLANG_URL env var.\n"
+            f"Error: {e}"
+        )
+
+
+# ── 27. K2-FSA OmniVoice (0.6B) ───────────────────────────────────────────────
+def _load_omnivoice():
+    """Load K2-FSA OmniVoice (0.6B diffusion LM, 600+ languages).
+
+    Zero-shot voice cloning + voice design.
+    Apache-2.0 license.
+    """
+    import torch as _torch
+    from omnivoice import OmniVoice
+    _dtype = _torch.bfloat16 if DEVICE == "cuda" else _torch.float32
+    slog("LOAD", "omnivoice", "Loading OmniVoice (~1.2 GB, 0.6B params, 600+ langs)...")
+    return OmniVoice.from_pretrained(
+        "k2-fsa/OmniVoice",
+        device_map=DEVICE if DEVICE == "cuda" else "cpu",
+        dtype=_dtype,
+    )
+
+
+def _synth_omnivoice(inst, text, params):
+    # Language — critical for Persian/Farsi support (600+ languages)
+    language = params.get("language", "").strip()
+    gen_kw = {}
+    if language:
+        gen_kw["language"] = language
+
+    # Voice cloning: reference audio + optional transcript
+    ref_id = params.get("audio_prompt_id", "")
+    ref_wav = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists() else None
+    ref_txt = params.get("ref_text", "").strip() or None
+
+    if ref_wav:
+        gen_kw["ref_audio"] = ref_wav
+        if ref_txt:
+            gen_kw["ref_text"] = ref_txt
+    elif ref_txt:
+        # voice_clone_prompt: text-only clone (no reference audio)
+        gen_kw["voice_clone_prompt"] = ref_txt
+
+    # Voice design / style instruction (no reference audio needed)
+    instruct = params.get("instruct", "").strip()
+    if instruct:
+        gen_kw["instruct"] = instruct
+
+    # Speed control
+    speed_str = params.get("speed", "").strip()
+    if speed_str:
+        try:
+            gen_kw["speed"] = float(speed_str)
+        except (ValueError, TypeError):
+            pass
+
+    # Duration hint (seconds)
+    dur_str = params.get("duration", "").strip()
+    if dur_str:
+        try:
+            gen_kw["duration"] = float(dur_str)
+        except (ValueError, TypeError):
+            pass
+
+    audio = inst.generate(text=text, **gen_kw)
+    # audio is list of np.ndarray with shape (T,) at 24 kHz
+    if isinstance(audio, list):
+        arr = audio[0]
+    else:
+        arr = audio
+    arr = np.array(arr, dtype=np.float32).flatten()
+    return _to_wav(arr, 24000), 24000
+
+
+# ── 28. Fish Audio S2-Pro (5B) ────────────────────────────────────────────────
+def _load_s2pro():
+    """Fish Audio S2-Pro (Dual-AR 5B, 80+ languages).
+
+    S2-Pro requires SGLang for streaming inference.
+    Setup instructions:
+      1. Install SGLang: pip install sglang[all]
+      2. Launch server: python -m sglang.launch_server \\
+           --model fishaudio/s2-pro --tp 1
+      3. Then use the OpenAI-compatible /v1/audio/speech endpoint.
+
+    This stub returns a placeholder; edit _load_s2pro() and _synth_s2pro()
+    to point at your SGLang server.
+    """
+    slog("LOAD", "s2pro", "S2-Pro loaded as stub — configure SGLang server endpoint")
+    return {
+        "sglang_url": os.environ.get("S2PRO_SGLANG_URL", "http://localhost:8000/v1/audio/speech"),
+        "sr": 44100,
+    }
+
+
+def _synth_s2pro(inst, text, params):
+    """Synthesise via S2-Pro SGLang server (OpenAI-compatible /v1/audio/speech).
+
+    Set S2PRO_SGLANG_URL env var to point at your SGLang server.
+    """
+    import requests, base64 as _b64
+    url = inst["sglang_url"]
+    payload = {
+        "input": text,
+        "voice": params.get("voice", "default"),
+    }
+    # Optional: add control tags via inline [tag] syntax in text
+    try:
+        resp = requests.post(url, json=payload, timeout=float(params.get("timeout", 300)))
+        resp.raise_for_status()
+        # Response is raw WAV bytes
+        wav_bytes = resp.content
+        # Parse WAV to get numpy array + sr
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+            arr = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        return _to_wav(arr, sr), sr
+    except Exception as e:
+        raise RuntimeError(
+            f"S2-Pro synthesis failed — is SGLang server running at {url}?\n"
+            f"Start it with: python -m sglang.launch_server --model fishaudio/s2-pro\n"
+            f"Error: {e}"
+        )
+
+
 # ── Dispatch tables ───────────────────────────────────────────────────────────
 LOADERS: dict = {
     "piper":      _load_piper,    "kokoro":    _load_kokoro,
@@ -1493,11 +1842,14 @@ LOADERS: dict = {
     "f5tts":      _load_f5tts,    "dia":       _load_dia,
     "xtts":       _load_xtts,     "cosyvoice": _load_cosyvoice,
     "parler":     _load_parler,   "chatterbox":_load_chatterbox,
+    "chatterboxturbo": _load_chatterboxturbo,
     "fishspeech": _load_fishspeech,"csm":      _load_csm,
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
     "neutts":     _load_neutts,   "indextts":  _load_indextts,
     "manatts":    _load_manatts,  "zonos":     _load_zonos,
     "openvoice":  _load_openvoice,
+    "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
+    "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
 }
 SYNTHERS: dict = {
     "piper":      _synth_piper,    "kokoro":    _synth_kokoro,
@@ -1507,9 +1859,12 @@ SYNTHERS: dict = {
     "f5tts":      _synth_f5tts,    "dia":       _synth_dia,
     "xtts":       _synth_xtts,     "cosyvoice": _synth_cosyvoice,
     "parler":     _synth_parler,   "chatterbox":_synth_chatterbox,
+    "chatterboxturbo": _synth_chatterboxturbo,
     "fishspeech": _synth_fishspeech,"csm":      _synth_csm,
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
     "neutts":     _synth_neutts,   "indextts":  _synth_indextts,
     "manatts":    _synth_manatts,  "zonos":     _synth_zonos,
     "openvoice":  _synth_openvoice,
+    "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
+    "omnivoice":  _synth_omnivoice,"s2pro":     _synth_s2pro,
 }

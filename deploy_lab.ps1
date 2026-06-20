@@ -250,6 +250,7 @@ $PIP qwen-tts                                            && ok "qwen3tts" || war
 $PIP git+https://github.com/index-tts/index-tts.git     && ok "indextts" || warn "indextts"
 $PIP git+https://github.com/Zyphra/Zonos.git            && ok "zonos" || warn "zonos"
 $PIP git+https://github.com/myshell-ai/OpenVoice.git    && ok "openvoice" || warn "openvoice"
+$PIP omnivoice                                           && ok "omnivoice"  || warn "omnivoice"
 echo PHASE3_DONE
 '@
     }

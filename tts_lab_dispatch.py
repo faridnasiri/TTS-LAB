@@ -46,6 +46,7 @@ def _check_available(name: str) -> Tuple[bool, str]:
         "cosyvoice":  None,
         "parler":     "parler_tts",
         "chatterbox": "chatterbox",
+        "chatterboxturbo": "chatterbox",
         "fishspeech": "fish_speech",
         "csm":        None,
         "qwen3tts":   "qwen_tts",
@@ -56,6 +57,10 @@ def _check_available(name: str) -> Tuple[bool, str]:
         "openvoice":  "openvoice",
         "matcha":     "sherpa_onnx",
         "manatts":    None,
+        "vibevoice":  "transformers",
+        "higgs":      "transformers",
+        "omnivoice":  "omnivoice",
+        "s2pro":      None,
     }
 
     # 1. Quick package-present check

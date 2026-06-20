@@ -19,6 +19,42 @@ os.environ.setdefault("XDG_CACHE_HOME",       "/opt/models/cache")
 os.environ.setdefault("SUNO_USE_SMALL_MODELS","False")   # full Bark — 16 GB VRAM
 
 # ── Torch + DEVICE ────────────────────────────────────────────────────────────
+# torch 2.10 + Python 3.11 have an inspect incompatibility: some modules
+# end up with __file__ set to a type object instead of a string, which
+# crashes inspect.getsourcefile.  The crash propagates through lazy_loader
+# → librosa → perth → chatterbox.  Fix by hardening one function minimally:
+# patch getsourcefile to return a safe string when it would crash.
+import inspect as _inspect
+import importlib as _importlib, types as _types
+
+# Increase recursion limit — the inspect chain can get deep when
+# lazy_loader calls inspect.stack() during module imports.
+import sys as _sys
+_sys.setrecursionlimit(10000)
+
+_orig_getsourcefile = _inspect.getsourcefile
+def _patched_getsourcefile(obj):
+    try:
+        return _orig_getsourcefile(obj)
+    except (TypeError, AttributeError):
+        return "/dev/null"
+_inspect.getsourcefile = _patched_getsourcefile
+
+# Pre-stub torch._dynamo._trace_wrapped_higher_order_op to prevent
+# the corrupting import chain that starts from transformers.masking_utils.
+# This module's import triggers torch._dynamo → torch.distributed.tensor
+# → _collective_utils → @register_fake → inspect crash, which corrupts
+# module __file__ attributes.  Stubbing it early stops the chain.
+for _early_stub in [
+    "torch._dynamo._trace_wrapped_higher_order_op",
+]:
+    if _early_stub not in _sys.modules:
+        _m = _types.ModuleType(_early_stub)
+        _m.TransformGetItemToIndex = type("TransformGetItemToIndex", (), {})
+        _m.trace_wrapped = lambda fn, *a, **kw: fn
+        _m.__file__ = "<stub>"
+        _sys.modules[_early_stub] = _m
+
 try:
     import torch
     torch.set_num_threads(_N_CORES)
@@ -31,19 +67,114 @@ except Exception:
 
 # ── Transformers 5.x compatibility shims ─────────────────────────────────────
 # Applied at startup before any TTS import so every engine sees a clean namespace.
+#
+# CRITICAL: do all transformers patching FIRST, before the try block below
+# that may trigger torch._dynamo → tensor → _collective_utils import chains
+# which corrupt module __file__ attributes (torch 2.10 + Python 3.11 bug).
+
+# --- ExtensionsTrie + AddedToken (removed in transformers 5.x) ---
+try:
+    import transformers.tokenization_utils as _tku
+    import transformers as _tf_early
+    for _cls_name in ["ExtensionsTrie", "AddedToken"]:
+        if not hasattr(_tku, _cls_name) or not isinstance(getattr(_tku, _cls_name, None), type):
+            _stub_cls = type(_cls_name, (), {
+                "__init__": lambda self, *a, **kw: None,
+                "__doc__": f"Removed in transformers 5.x — stubbed.",
+            })
+            setattr(_tku, _cls_name, _stub_cls)
+            if not hasattr(_tf_early, _cls_name) or not isinstance(getattr(_tf_early, _cls_name, None), type):
+                setattr(_tf_early, _cls_name, _stub_cls)
+except Exception:
+    pass
+
+# --- check_model_inputs compat (qwen_tts) ---
+try:
+    import transformers.utils.generic as _tug
+    _orig_cmi = _tug.check_model_inputs
+    if _orig_cmi.__code__.co_argcount == 1:
+        def _compat_cmi(func=None):
+            if func is not None:
+                return _orig_cmi(func)
+            return _orig_cmi
+        _tug.check_model_inputs = _compat_cmi
+except Exception:
+    pass
+
+# --- parler-tts config defaults (transformers 5.x removed attrs) ---
+# ParlerTTSConfig lacks tie_encoder_decoder which transformers 5.x checks.
+try:
+    import parler_tts.configuration_parler_tts as _pcfg
+    if not hasattr(_pcfg.ParlerTTSConfig, "tie_encoder_decoder"):
+        _pcfg.ParlerTTSConfig.tie_encoder_decoder = False
+except Exception:
+    pass
+
+# --- qwen_tts config defaults ---
+# Qwen3TTSTalkerConfig lacks pad_token_id which transformers 5.x needs.
+try:
+    import qwen_tts
+    for _cfg_cls_name in ["Qwen3TTSTalkerConfig"]:
+        _cfg_cls = getattr(qwen_tts, _cfg_cls_name, None)
+        if _cfg_cls is not None and not hasattr(_cfg_cls, "pad_token_id"):
+            _cfg_cls.pad_token_id = 0
+except Exception:
+    pass
+
+# Set default config attributes that transformers 5.x expects
+# (pad_token_id for qwen_tts, tie_encoder_decoder for parler, etc.)
+try:
+    import transformers.configuration_utils as _tcfg
+    _orig_cfg_init = _tcfg.PretrainedConfig.__init__
+    def _patched_cfg_init(self, *a, **kw):
+        _orig_cfg_init(self, *a, **kw)
+        for _attr, _default in [
+            ("pad_token_id", 0),
+            ("tie_encoder_decoder", False),
+            ("tie_word_embeddings", True),
+            ("is_encoder_decoder", False),
+        ]:
+            if not hasattr(self, _attr):
+                setattr(self, _attr, _default)
+    _tcfg.PretrainedConfig.__init__ = _patched_cfg_init
+except Exception:
+    pass
+
+# --- Main compat block ---
 try:
     import transformers.pytorch_utils as _tpu
     import transformers as _tf
     import torch as _torch
 
     # isin_mps_friendly: removed from pytorch_utils in transformers 5.x
-    if not hasattr(_tpu, "isin_mps_friendly"):
-        def _isin_mps_friendly(*args, **kwargs):
-            if "elements" in kwargs:
-                kwargs["input"] = kwargs.pop("elements")
-            return _torch.isin(*args, **kwargs)
-        _tpu.isin_mps_friendly = _isin_mps_friendly
-        _tf.pytorch_utils.isin_mps_friendly = _isin_mps_friendly
+    def _isin_mps_friendly(*args, **kwargs):
+        if "elements" in kwargs:
+            kwargs["input"] = kwargs.pop("elements")
+        return _torch.isin(*args, **kwargs)
+    _tpu.isin_mps_friendly = _isin_mps_friendly
+    _tf.pytorch_utils.isin_mps_friendly = _isin_mps_friendly
+
+    # find_pruneable_heads_and_indices + prune_conv1d_layer: removed in transformers 5.x
+    for _fn_name in ["find_pruneable_heads_and_indices", "prune_conv1d_layer", "prune_layer"]:
+        if not hasattr(_tpu, _fn_name):
+            _stub_fn = (lambda: (lambda *a, **kw: ([], {})))() if "find" in _fn_name else (lambda *a, **kw: None)
+            setattr(_tpu, _fn_name, _stub_fn)
+            setattr(_tf.pytorch_utils, _fn_name, _stub_fn)
+
+    # torch.isin compat: CoquiTTS calls torch.isin(inp, test_elements)
+    # which torch 2.10 rejects with keyword args.  Save original and wrap.
+    _orig_isin = _torch.isin
+    def _patched_isin(*args, **kwargs):
+        # Normalise: CoquiTTS passes input= or elements= as keyword
+        if len(args) >= 1:
+            return _orig_isin(*args, **kwargs)
+        # All kwargs — convert to positional
+        elements = kwargs.pop("elements", kwargs.pop("input", None))
+        test_elements = kwargs.pop("test_elements", None)
+        if elements is not None and test_elements is not None:
+            return _orig_isin(elements, test_elements, **kwargs)
+        return _orig_isin(*args, **kwargs)
+    _torch.isin = _patched_isin
 
     # is_torch_greater_or_equal: moved out of import_utils in some 5.x builds
     import transformers.utils.import_utils as _tiu
@@ -53,20 +184,48 @@ try:
     if not hasattr(_tiu, "is_torchcodec_available"):
         _tiu.is_torchcodec_available = lambda: False
 
-    # ExtensionsTrie + AddedToken removed in transformers 5.x
-    try:
-        import transformers.tokenization_utils as _tku
-        for _cls_name in ["ExtensionsTrie", "AddedToken"]:
-            if not hasattr(_tku, _cls_name):
-                _stub_cls = type(_cls_name, (), {
-                    "__init__": lambda self, *a, **kw: None,
-                    "__doc__": f"Removed in transformers 5.x — stubbed.",
-                })
-                setattr(_tku, _cls_name, _stub_cls)
-                if not hasattr(_tf, _cls_name):
-                    setattr(_tf, _cls_name, _stub_cls)
-    except Exception:
-        pass
+    # Fix corrupted module metadata — torch 2.10 + Python 3.11 can leave
+    # modules with non-string __file__ (type objects, None, etc).
+    for _mod_name, _mod in list(sys.modules.items()):
+        try:
+            _f = getattr(_mod, "__file__", None)
+            if _f is not None and not isinstance(_f, str):
+                if hasattr(_mod, "__spec__") and _mod.__spec__ is not None:
+                    _mod.__file__ = _mod.__spec__.origin or f"<{_mod_name}>"
+                else:
+                    _mod.__file__ = f"<{_mod_name}>"
+        except Exception:
+            pass
+
+    # Pre-stub commonly removed transformers 5.x items.
+    # Format: (module_path, name, value_or_type)
+    # value_or_type can be a type (for classes) or any value (for constants)
+    _REMOVED_TF_ITEMS = [
+        # logits_process classes (indextts)
+        ("transformers.generation.logits_process", "HammingDiversityLogitsProcessor", type),
+        ("transformers.generation.logits_process", "HammingDiversityLogitsWarper", type),
+        # pytorch_utils (indextts, parler, xtts — already handled above)
+        # utils constants (indextts)
+        ("transformers.utils", "FLAX_WEIGHTS_NAME", None),
+        ("transformers.utils", "TF2_WEIGHTS_NAME", None),
+        ("transformers.utils", "TF_WEIGHTS_NAME", None),
+        ("transformers.utils", "WEIGHTS_NAME", "pytorch_model.bin"),
+        ("transformers.utils", "WEIGHTS_INDEX_NAME", "pytorch_model.bin.index.json"),
+        ("transformers.utils", "SAFE_WEIGHTS_NAME", "model.safetensors"),
+        ("transformers.utils", "SAFE_WEIGHTS_INDEX_NAME", "model.safetensors.index.json"),
+        ("transformers.utils", "CONFIG_NAME", "config.json"),
+    ]
+    for _mod_path, _name, _kind in _REMOVED_TF_ITEMS:
+        try:
+            _mod = _importlib.import_module(_mod_path)
+            if not hasattr(_mod, _name):
+                if _kind is type:
+                    _val = type(_name, (), {"__init__": lambda s,*a,**kw: None})
+                else:
+                    _val = _kind
+                setattr(_mod, _name, _val)
+        except Exception:
+            pass
 
     # Sub-modules removed in transformers 5.x — inject empty stubs
     import importlib as _il2
@@ -263,7 +422,7 @@ except Exception:
 # ── transformers.masking_utils (added in 4.54, needed by qwen_tts) ───────────
 try:
     import transformers.masking_utils  # noqa — exists on 4.54+
-except ImportError:
+except Exception:
     _mu = types.ModuleType("transformers.masking_utils")
     _mu.create_causal_mask = lambda *a, **kw: None
     _mu.create_sliding_window_causal_mask = lambda *a, **kw: None

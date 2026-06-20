@@ -47,6 +47,10 @@ if 'parler_tts_patched_token_tensors' not in src:
          '    from transformers.generation.utils import GenerationMixin as _ParlerGenMixin\n'),
         (r'class ParlerTTSForConditionalGeneration\(PreTrainedModel\):',
          'class ParlerTTSForConditionalGeneration(PreTrainedModel, _ParlerGenMixin):'),
+        # tie_weights: transformers 5.x passes recompute_mapping=True
+        # which parler 0.2.3 doesn't accept.  Add **kwargs to swallow it.
+        (r'def tie_weights\(self\):',
+         'def tie_weights(self, **kwargs):'),
     ]
     new_src = src
     for pattern, repl in replacements:

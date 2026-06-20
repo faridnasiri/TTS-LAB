@@ -1,0 +1,54 @@
+# ── Model files (mounted at runtime, never in images) ──
+/opt/models/
+models/
+*.onnx
+*.gguf
+*.bin
+*.pth
+*.pkl
+*.ckpt
+*.safetensors
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.pyo
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# ── Virtual environments ──
+venv/
+.venv/
+*-env/
+
+# ── Git ──
+.git/
+.gitignore
+.gitattributes
+
+# ── Docs & plans (not needed at runtime) ──
+docs/
+*.md
+!CLAUDE.md
+
+# ── IDE ──
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Temp files ──
+/tmp/
+*.log
+*.wav
+!reference_voices/*.wav
+
+# ── Deploy scripts (VM-specific) ──
+deploy_lab.ps1
+deploy.ps1
+_remote_install_new_engines.sh
+
+# ── Tests ──
+scripts/test/

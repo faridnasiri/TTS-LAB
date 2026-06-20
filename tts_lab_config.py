@@ -105,6 +105,71 @@ MANATTS_REPO_DIR   = Path("/opt/models/Persian-MultiSpeaker-Tacotron2")
 MANATTS_MODEL_REPO = "MahtaFetrat/Persian-Tacotron2-on-ManaTTS"
 MANATTS_MAX_CHARS  = 200
 
+# ── OmniVoice language catalogue (600+ languages — key ones for the UI) ────────
+OMNIVOICE_LANGUAGES = [
+    ("fa",  "Persian / Farsi (فارسی)"),
+    ("en",  "English"),
+    ("zh",  "Chinese (中文)"),
+    ("ar",  "Arabic (العربية)"),
+    ("fr",  "French (Français)"),
+    ("de",  "German (Deutsch)"),
+    ("es",  "Spanish (Español)"),
+    ("it",  "Italian (Italiano)"),
+    ("pt",  "Portuguese (Português)"),
+    ("ru",  "Russian (Русский)"),
+    ("ja",  "Japanese (日本語)"),
+    ("ko",  "Korean (한국어)"),
+    ("hi",  "Hindi (हिन्दी)"),
+    ("tr",  "Turkish (Türkçe)"),
+    ("ur",  "Urdu (اردو)"),
+    ("he",  "Hebrew (עברית)"),
+    ("nl",  "Dutch (Nederlands)"),
+    ("pl",  "Polish (Polski)"),
+    ("sv",  "Swedish (Svenska)"),
+    ("th",  "Thai (ไทย)"),
+    ("vi",  "Vietnamese (Tiếng Việt)"),
+    ("id",  "Indonesian (Bahasa)"),
+    ("ms",  "Malay (Bahasa Melayu)"),
+    ("bn",  "Bengali (বাংলা)"),
+    ("pa",  "Punjabi (ਪੰਜਾਬੀ)"),
+    ("ta",  "Tamil (தமிழ்)"),
+    ("te",  "Telugu (తెలుగు)"),
+    ("mr",  "Marathi (मराठी)"),
+    ("gu",  "Gujarati (ગુજરાતી)"),
+    ("kn",  "Kannada (ಕನ್ನಡ)"),
+    ("ml",  "Malayalam (മലയാളം)"),
+    ("si",  "Sinhala (සිංහල)"),
+    ("my",  "Burmese (မြန်မာ)"),
+    ("km",  "Khmer (ខ្មែរ)"),
+    ("lo",  "Lao (ລາວ)"),
+    ("fil","Filipino / Tagalog"),
+    ("uk",  "Ukrainian (Українська)"),
+    ("ro",  "Romanian (Română)"),
+    ("hu",  "Hungarian (Magyar)"),
+    ("cs",  "Czech (Čeština)"),
+    ("sk",  "Slovak (Slovenčina)"),
+    ("el",  "Greek (Ελληνικά)"),
+    ("da",  "Danish (Dansk)"),
+    ("fi",  "Finnish (Suomi)"),
+    ("no",  "Norwegian (Norsk)"),
+    ("bg",  "Bulgarian (Български)"),
+    ("sr",  "Serbian (Српски)"),
+    ("hr",  "Croatian (Hrvatski)"),
+    ("sw",  "Swahili (Kiswahili)"),
+    ("am",  "Amharic (አማርኛ)"),
+    ("ha",  "Hausa"),
+    ("yo",  "Yoruba (Èdè Yorùbá)"),
+    ("zu",  "Zulu (isiZulu)"),
+    ("az",  "Azerbaijani (Azərbaycan)"),
+    ("kk",  "Kazakh (Қазақ)"),
+    ("uz",  "Uzbek (Oʻzbek)"),
+    ("tk",  "Turkmen (Türkmen)"),
+    ("ky",  "Kyrgyz (Кыргыз)"),
+    ("tg",  "Tajik (Тоҷикӣ)"),
+    ("ps",  "Pashto (پښتو)"),
+    ("ku",  "Kurdish (Kurdî)"),
+]
+
 # ── OuteTTS GGUF defaults ─────────────────────────────────────────────────────
 OUTETTS_DEFAULT_GGUF      = "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf"
 OUTETTS_DEFAULT_TOKENIZER = "OuteAI/OuteTTS-1.0-0.6B"
@@ -154,13 +219,19 @@ MODEL_INFO = {
     "openvoice":  {"label":"OpenVoice v2",  "size":"~600 MB",            "rtf_est":"RTF ~0.5 (GPU)",        "ram_est_mb":1500, "heavy":True, "notes":"MeloTTS base + tone-color conversion.","arthur_fit":3},
     "matcha":     {"label":"Matcha-TTS (FA/EN)","size":"~74 MB per voice",  "rtf_est":"RTF ~0.05 (CPU/GPU)",   "ram_est_mb":400,  "heavy":False,"notes":"Fast flow-matching ONNX. Khadijah (F) + Musa (M). 22050 Hz.","arthur_fit":3},
     "manatts":    {"label":"ManaTTS (FA)",  "size":"~371 MB + encoder",    "rtf_est":"RTF ~5-10 (GPU)",       "ram_est_mb":2500, "heavy":True, "notes":"Tacotron2+HiFi-GAN. Persian-only. Needs ref WAV. GPU recommended.","arthur_fit":3},
+    "chatterboxturbo": {"label":"Chatterbox-Turbo","size":"~700 MB",       "rtf_est":"RTF ~0.3 (GPU, 1-step)","ram_est_mb":1500, "heavy":True, "notes":"350M distilled one-step TTS. Voice cloning. Paralinguistic tags [chuckle] [laugh].","arthur_fit":4},
+    "vibevoice":  {"label":"VibeVoice-1.5B","size":"~6 GB (BF16)",         "rtf_est":"TBD",                   "ram_est_mb":6500, "heavy":True, "notes":"Microsoft next-token diffusion. EN+ZH. Built-in watermark + disclaimer.","arthur_fit":3},
+    "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"TBD",                   "ram_est_mb":8500, "heavy":True, "notes":"BosonAI 4B AR decoder. 100+ languages. Voice cloning + control tokens.","arthur_fit":3},
+    "omnivoice":  {"label":"OmniVoice",     "size":"~1.2 GB (BF16)",       "rtf_est":"RTF 0.025 (GPU)",       "ram_est_mb":2000, "heavy":True, "notes":"0.6B diffusion LM. 600+ languages. Voice cloning + voice design. Apache-2.0.","arthur_fit":4},
+    "s2pro":      {"label":"Fish S2-Pro",   "size":"~10 GB (BF16, 5B)",   "rtf_est":"RTF 0.195 (H200)",      "ram_est_mb":10000,"heavy":True,"notes":"Dual-AR 5B. 80+ languages. Tag-control [whisper]. Needs SGLang server setup.","arthur_fit":3},
 }
 
 MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
-    "cosyvoice","parler","chatterbox","fishspeech","csm","qwen3tts","orpheus",
+    "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "neutts","indextts","manatts","zonos","openvoice",
+    "vibevoice","higgs","omnivoice","s2pro",
 ]
 
 HEAVY = {n for n, i in MODEL_INFO.items() if i["heavy"]}

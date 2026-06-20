@@ -9,7 +9,7 @@ from tts_lab_config import (
     ALL_KOKORO_VOICES, ALL_XTTS_SPEAKERS, XTTS_LANGUAGES, BARK_PRESETS,
     CHATTTS_SPEEDS, OUTETTS_MODELS, OUTETTS_SPEAKERS, PARLER_MODELS,
     ORPHEUS_VOICES, ZONOS_VARIANTS, CSM_SPEAKERS,
-    OUTETTS_DEFAULT_GGUF,
+    OUTETTS_DEFAULT_GGUF, OMNIVOICE_LANGUAGES,
 )
 from tts_lab_dispatch import _available, _import_cache
 from tts_lab_utils    import _piper_voices
@@ -531,6 +531,175 @@ def _build_params(name: str) -> str:
             '  }catch(e){status.textContent="Upload failed: "+e;}'
             '}'
             '</script>'
+        )
+
+    if name == "chatterboxturbo":
+        cb_turbo_tags = (
+            '<div class="alert alert-info py-2 small mt-2 mb-0">'
+            '<strong>Paralinguistic tags:</strong> '
+            '<code>[chuckle]</code> <code>[laugh]</code> <code>[cough]</code><br>'
+            '<strong>Voice cloning:</strong> Upload a reference WAV to clone any voice.'
+            '</div>'
+        )
+        return (
+            '<div class="alert alert-secondary py-2 small mb-2">'
+            '<strong>Chatterbox-Turbo</strong> — 350M distilled one-step TTS (English). '
+
+            'MIT license. <strong>Turbo is English-only.</strong> </div>'
+            + _row(
+                _grp('Exaggeration <span class="range-val">0.5</span>', _rng("exaggeration", "0.0", "1.0", "0.05", "0.5", "0=flat, 1=expressive")),
+                _grp('CFG weight <span class="range-val">0.5</span>', _rng("cfg_weight", "0.1", "1.0", "0.05", "0.5", "lower=faster, higher=stable")),
+            )
+            + _row(
+                _grp('Temperature <span class="range-val">—</span>', _rng("temperature", "0.1", "2.0", "0.05", "", "blank=default")),
+                _grp('Top-P <span class="range-val">—</span>', _rng("top_p", "0.1", "1.0", "0.05", "", "blank=default")),
+                _grp('Top-K <span class="range-val">—</span>', _rng("top_k", "1", "200", "1", "", "blank=default")),
+            )
+            + _row(
+                _grp('Repetition penalty <span class="range-val">—</span>', _rng("repetition_penalty", "1.0", "3.0", "0.05", "", "blank=default, 1.5=less repeat")),
+                _grp('Min-P <span class="range-val">—</span>', _rng("min_p", "0.0", "0.5", "0.01", "", "blank=default")),
+            )
+            + _row(
+                _grp('Seed <span class="range-val">0</span>', _rng("seed", "0", "9999", "1", "0", "0=random")),
+                _grp('Norm loudness',
+                     '<select class="form-select form-select-sm bg-dark text-light border-secondary" data-param="norm_loudness">'
+                     '<option value="true" selected>true (normalise)</option>'
+                     '<option value="false">false (raw)</option></select>'),
+            )
+            + f'<div class="param-row">{_upload_widget("cbt-file", "cbt-status", "cbt-prompt-id", "Voice cloning reference WAV (optional)")}</div>'
+            + cb_turbo_tags
+        )
+
+    if name == "vibevoice":
+        return (
+            '<div class="alert alert-info py-2 small mb-2">'
+            '<strong>VibeVoice-1.5B</strong> — Microsoft next-token diffusion TTS (3B params). '
+            'English + Chinese only. Built-in AI disclaimer + watermark. '
+            '90-minute max audio, 4 speakers.</div>'
+            + '<div class="alert alert-warning py-2 small mb-2">'
+            '⚠ <strong>Requires SGLang-Omni server.</strong> '
+            'The model has no Python code on HF — transformers can never load it directly. '
+            'SGLang-Omni bundles its own model code, avoiding the transformers dependency.<br>'
+            '<code>docker run --gpus all -p 8000:8000 lmsysorg/sglang-omni:dev '
+            '--model microsoft/VibeVoice-1.5B</code><br>'
+            'Set <code>VIBEVOICE_SGLANG_URL</code> env var to point at the server.</div>'
+            + '<p class="text-muted small mt-1">~6 GB VRAM on GPU. No Persian/Farsi — EN+ZH only.</p>'
+        )
+
+    if name == "higgs":
+        control_hint = (
+            '<div class="alert alert-info py-2 small mt-2 mb-0">'
+            '<strong>🎛 Higgs control tokens</strong> — embed directly in text:<br>'
+            '<strong>Emotion (21):</strong> '
+            '<code>&lt;|emotion:elation|&gt;</code> '
+            '<code>&lt;|emotion:anger|&gt;</code> '
+            '<code>&lt;|emotion:sadness|&gt;</code> '
+            '<code>&lt;|emotion:confusion|&gt;</code> '
+            '<code>&lt;|emotion:fear|&gt;</code><br>'
+            '<strong>Style:</strong> '
+            '<code>&lt;|style:whispering|&gt;</code> '
+            '<code>&lt;|style:shouting|&gt;</code> '
+            '<code>&lt;|style:singing|&gt;</code><br>'
+            '<strong>Prosody:</strong> '
+            '<code>&lt;|prosody:speed_slow|&gt;</code> '
+            '<code>&lt;|prosody:speed_fast|&gt;</code> '
+            '<code>&lt;|prosody:pitch_low|&gt;</code> '
+            '<code>&lt;|prosody:pitch_high|&gt;</code> '
+            '<code>&lt;|prosody:pause|&gt;</code> '
+            '<code>&lt;|prosody:long_pause|&gt;</code><br>'
+            '<strong>SFX (paired with onomatopoeia):</strong> '
+            '<code>&lt;|sfx:cough|&gt;Ahem</code> '
+            '<code>&lt;|sfx:laughter|&gt;Haha</code> '
+            '<code>&lt;|sfx:sigh|&gt;Ahh</code><br>'
+            '<strong>102 languages</strong> (auto-detected) — '
+            'Persian/Farsi is Tier 1 (production quality).<br>'
+            '<em>Place emotion/style/prosody tokens at start of utterance; SFX tokens inline.</em>'
+            '</div>'
+        )
+        return (
+            '<div class="alert alert-info py-2 small mb-2">'
+            '<strong>Higgs Audio v3 4B</strong> — BosonAI AR decoder. '
+            '102 languages including <strong>Persian (Tier 1)</strong>. '
+            'Voice cloning + rich control tokens. 24 kHz.</div>'
+            + '<div class="alert alert-warning py-2 small mb-2">'
+            '⚠ <strong>Requires SGLang-Omni or vLLM-Omni server.</strong> '
+            'No Python code on HF — SGLang bundles its own dependencies, safe to install '
+            'without breaking existing engines.<br>'
+            '<code>docker run --gpus all -p 8000:8000 lmsysorg/sglang-omni:dev '
+            '--model bosonai/higgs-audio-v3-tts-4b</code><br>'
+            'Set <code>HIGGS_SGLANG_URL</code> env var.</div>'
+            + _row(
+                _grp('Temperature <span class="range-val">0.8</span>', _rng("temperature", "0.1", "2.0", "0.05", "0.8")),
+                _grp('Top-K <span class="range-val">50</span>', _rng("top_k", "1", "200", "1", "50")),
+                _grp('Max tokens <span class="range-val">1024</span>', _rng("max_new_tokens", "256", "4096", "64", "1024")),
+            )
+            + f'<div class="param-row">{_upload_widget("hg-file", "hg-status", "hg-prompt-id", "Voice cloning ref WAV (optional)")}</div>'
+            + control_hint
+            + '<p class="text-muted small mt-1">~8 GB VRAM for direct load, or use SGLang server for better throughput.</p>'
+        )
+
+    if name == "omnivoice":
+        # Build language dropdown with Persian first (most important for this lab)
+        lang_opts = "".join(
+            f'<option value="{code}"{" selected" if code == "fa" else ""}>{label}</option>'
+            for code, label in OMNIVOICE_LANGUAGES)
+        ov_lang_sel = (f'<select class="form-select form-select-sm bg-dark text-light border-secondary" '
+                       f'data-param="language" style="max-height:200px">{lang_opts}</select>')
+        ov_hint = (
+            '<div class="alert alert-info py-2 small mt-2 mb-0">'
+            '<strong>OmniVoice</strong> — 0.6B diffusion LM. 600+ languages. '
+            'Apache-2.0. RTF 0.025 (40× real-time).<br>'
+            '🔊 <strong>Persian/Farsi:</strong> Select "fa" language code. '
+            'Non-verbal symbols: <code>[laughter]</code> <code>[sigh]</code> '
+            '<code>[cough]</code> <code>[breathing]</code>'
+            '</div>'
+        )
+        return (
+            _row(
+                _grp('Language (600+ available)', ov_lang_sel),
+                _grp('Speed <span class="range-val">—</span>', _rng("speed", "0.5", "2.0", "0.05", "", "blank=default, 1.0=normal")),
+            )
+            + _row(
+                _grp('Style instruction <span style="font-size:.7rem;color:#aaa">(voice design — no ref WAV needed)</span>',
+                     '<input type="text" class="form-control form-control-sm" data-param="instruct" '
+                     'placeholder="e.g. calm elderly man, warm, slow, gentle…">'),
+            )
+            + f'<div class="param-row">{_upload_widget("ov2-file", "ov2-status", "ov2-prompt-id", "Reference WAV (optional — zero-shot voice cloning)")}</div>'
+            + _row(
+                _grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(improves cloning fidelity)</span>',
+                     '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
+                     'placeholder="Exact words spoken in the reference audio…">'),
+            )
+            + ov_hint
+        )
+
+    if name == "s2pro":
+        s2pro_tags = (
+            '<div class="alert alert-info py-2 small mt-2 mb-0">'
+            '<strong>🎛 Inline control tags</strong> — 15,000+ tags available:<br>'
+            '<code>[whisper in small voice]</code> '
+            '<code>[professional broadcast tone]</code> '
+            '<code>[pitch up]</code> '
+            '<code>[slowly]</code><br>'
+            '<strong>80+ languages</strong> (auto-detected): '
+            'Persian/Farsi, English, Chinese, Japanese, Korean, '
+            'Arabic, French, German, Spanish, and many more.<br>'
+            '<em>Place tags inline in your text.</em>'
+            '</div>'
+        )
+        return (
+            '<div class="alert alert-warning py-2 small mb-2">'
+            '<strong>Fish S2-Pro (5B Dual-AR)</strong> — requires SGLang server.<br>'
+            'Start: <code>python -m sglang.launch_server --model fishaudio/s2-pro</code><br>'
+            'Set env: <code>S2PRO_SGLANG_URL=http://host:port/v1/audio/speech</code></div>'
+            + _row(
+                _grp('Voice',
+                     '<input type="text" class="form-control form-control-sm" data-param="voice" '
+                     'placeholder="default (or any name)">'),
+            )
+            + s2pro_tags
+            + '<p class="text-muted small mt-1">~10 GB VRAM for SGLang. RTF 0.195 on H200. '
+            'Dual-AR: Slow AR (4B) predicts primary semantic tokens; Fast AR (400M) generates residual codebooks.</p>'
         )
 
     return ""

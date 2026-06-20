@@ -17,6 +17,7 @@ from __future__ import annotations
 import tts_lab_shims  # noqa: F401
 
 import asyncio, shutil, threading, traceback, uuid
+from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -203,16 +204,40 @@ async def upload_audio(file: UploadFile = File(...)):
     return JSONResponse({"id": uid, "filename": file.filename, "size": dest.stat().st_size})
 
 
+# Permanent reference voices directory (survives reboots, shipped with deploy)
+REFERENCE_VOICES_DIR = Path("/opt/arthur/reference_voices")
+
+
 @app.get("/refs")
 async def list_refs():
-    """List available reference WAV files for dropdown selection."""
+    """List available reference WAV files for dropdown selection.
+
+    Scans two locations:
+      1. Permanent reference voices (shipped, survive reboots) — listed first
+      2. User-uploaded voices in UPLOAD_DIR — listed after
+    """
     refs = []
+    seen = set()
+
+    # 1. Permanent reference voices (shipped with lab)
+    if REFERENCE_VOICES_DIR.exists():
+        for p in sorted(REFERENCE_VOICES_DIR.glob("*.wav"), key=lambda x: x.stat().st_mtime, reverse=True):
+            seen.add(p.stem)
+            refs.append({
+                "id": p.stem,
+                "name": p.name,
+                "size": p.stat().st_size,
+            })
+
+    # 2. User-uploaded voices (may not survive reboot)
     for p in sorted(UPLOAD_DIR.glob("*.wav"), key=lambda x: x.stat().st_mtime, reverse=True):
-        refs.append({
-            "id": p.stem,
-            "name": p.name,
-            "size": p.stat().st_size,
-        })
+        if p.stem not in seen:
+            refs.append({
+                "id": p.stem,
+                "name": f"{p.name}  (uploaded)",
+                "size": p.stat().st_size,
+            })
+
     return JSONResponse({"refs": refs})
 
 
