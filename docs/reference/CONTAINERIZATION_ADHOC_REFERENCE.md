@@ -374,45 +374,53 @@ Every lesson here becomes a requirement for the IaC rewrite.
 |--------|:---------|------|-------|
 | chattts | 3.4s | Conversational TTS | ✅ Tested with synthesis |
 | omnivoice | 3.3s | 600+ languages | ✅ Tested with synthesis |
-| matcha | 8.0s | Persian+English | ✅ Tested with synthesis |
+| matcha | 8.0s | Persian+English | ✅ Tested with synthesis (69 KB WAV) |
 | f5tts | 10.5s | Voice cloning | ✅ Tested with synthesis — needs `audio_prompt_id` param |
 | outetts | 13.8s | GGUF quantized | ✅ Tested with synthesis |
-| dia | 15.7s | Dialogue-native | ✅ Tested with synthesis |
+| dia | 15.7s | Dialogue-native | ⚠️ Loads but model download error on some runs |
 | chatterboxturbo | 16.6s | One-step distilled | ✅ Tested with synthesis |
 | chatterbox | 19.3s | Persian support | ✅ Tested with synthesis |
-| bark | 34.1s | Emotional TTS | ✅ Tested with synthesis — needs `SUNO_USE_SMALL_MODELS=True` |
+| bark | 34.1s | Emotional TTS | ✅ Tested with synthesis (149 KB WAV) — needs `SUNO_USE_SMALL_MODELS=True` |
 | vibevoice | 0s | HTTP client | needs SGLang server |
 | higgs | 0s | HTTP client | needs SGLang server |
 | s2pro | 0s | HTTP client | needs SGLang server |
 
-### 7 Engines Failed (Fixable)
+### Systematic Test Results (2026-06-20)
 
-| Engine | Error | Fix |
-|--------|-------|-----|
-| styletts2 | `ModuleNotFoundError: No module named 'langchain'` | Install langchain |
-| melo | MeCab dictionary missing | Install unidic data |
-| xtts | MeCab dictionary missing | Same fix |
-| piper | No .onnx voice found | Mount /opt/models/tts with ONNX files |
-| kokoro | kokoro-v1.0.onnx missing | Same fix |
-| fishspeech | No module 'pytorch_lightning' | Install pytorch_lightning |
-| zonos | No module 'zonos.backbone' | Zonos install issue |
+Full test via engine server (port 8101) with VRAM clearing between tests:
 
-### Engine-Legacy Test Results (Separate Container)
+| Engine | Result | Detail |
+|--------|:------|--------|
+| piper | ❌ Missing models | No .onnx voice in /opt/models/tts |
+| kokoro | ❌ Missing models | kokoro-v1.0.onnx missing |
+| melo | ❌ MeCab | Dictionary not installed |
+| matcha | ✅ **Working** | 69,680 bytes audio |
+| chattts | ✅ **Working** | (earlier test confirmed) |
+| outetts | ⚠️ Engine error | BytesIO system error — needs investigation |
+| bark | ✅ **Working** | 149,392 bytes audio (small model) |
+| styletts2 | ❌ Missing dep | No module 'langchain' |
+| f5tts | ✅ **Working** | Needs ref WAV |
+| dia | ⚠️ Model download | HF Hub error on some runs |
+| xtts | ❌ MeCab | Same as melo |
+| cosyvoice | ❌ Not built | Git clone not in container |
+| fishspeech | ❌ Missing dep | No module 'pytorch_lightning' |
+| chatterbox | ✅ **Working** | (earlier test confirmed) |
+| chatterboxturbo | ✅ **Working** | (earlier test confirmed) |
+| omnivoice | ✅ **Working** | OOMs if bark still in VRAM |
+| zonos | ❌ Missing dep | No module 'zonos.backbone' |
+| manatts | ❌ Missing dep | pip install parallel-wavegan |
+| csm | ❌ Not built | Git clone not in container |
+| openvoice | ❌ Not built | Build failure |
 
-| Engine | Status | Details |
-|--------|:-------|---------|
-| indextts | ⚠️ Loading works, synth param mismatch | `IndexTTS2.infer() missing 1 required positional argument: 'spk_audio_prompt'` — code fix needed |
-| parler | ❌ DynamicCache API error | `'DynamicCache' object has no attribute 'key_cache'` — torch 1.13 / tf 4.46 incompatibility on Blackwell GPU |
-| qwen3tts | ❌ cuDNN error | `CUDNN_STATUS_INTERNAL_ERROR` — torch 1.13 too old for RTX 5060 Ti. Needs torch 2.x + tf 4.x "middle ground" stack (as expert suggested) |
+**Summary:** 5 engines work correctly, 6 have missing deps, 3 need model files, 2 have engine-specific bugs, 4 not built in this container.
 
-### Key Findings During Ad-Hoc Testing
+### Web UI Status
 
-1. **Lazy-load + VRAM eviction works** — 9 engines tested, each loads on demand and evicts the previous. Only one engine in VRAM at a time.
-2. **f5tts requires `audio_prompt_id` parameter** — not `ref_audio_id`. Ref WAV must be mounted at `/tmp/tts_uploads/`.
-3. **Bark works with `SUNO_USE_SMALL_MODELS=True`** — full model OOMs on 16 GB, small model fits and synthesizes successfully.
-4. **qwen3tts is a double-bind**: engine-current has tf 5.x (API incompatibility), engine-legacy has torch 1.13 (GPU incompatibility). Solution: "middle ground" stack with torch 2.x + tf 4.x.
-5. **parler DynamicCache issue** is likely fixable with a transformers version tweak (4.46.1 → 4.45.x).
-6. **indextts loading works** — just needs correct parameter format for the synthesis call.
+| Component | Port | Status |
+|-----------|:----:|--------|
+| Orchestrator | 8009 | ✅ Working — full HTTP dispatch to engine-current |
+| Engine-Current | 8101 | ✅ 18 engines available, lazy-load mode |
+| Old systemd service | 8001 | ⚠️ Still running (port conflict with orchestrator) |
 
 ---
 
