@@ -1,7 +1,7 @@
 FROM tts-lab-stack-legacy:latest
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="legacy"
-RUN pip install --no-cache-dir git+https://github.com/index-tts/IndexTTS.git
+RUN pip install --no-cache-dir git+https://github.com/index-tts/index-tts.git
 RUN pip install --no-cache-dir parler-tts==0.2.3
 RUN pip install --no-cache-dir qwen-tts
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && find patches -name "*.py" -exec sed -i "s|/opt/arthur-bench-env/lib/python3.11/site-packages|${SITE_PKGS}|g" {} + && python3 patches/patch_parler_tts.py && echo "parler patch applied"
