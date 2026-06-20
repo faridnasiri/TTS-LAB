@@ -41,7 +41,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from tts_lab_config import MODEL_ORDER, MODEL_INFO, _state, slog
-from tts_lab_dispatch import _available, LOADERS, SYNTHERS
+from tts_lab_dispatch import _available
+from tts_lab_engines import LOADERS, SYNTHERS
 from tts_lab_utils import _wav_dur, _safe_del
 
 app = FastAPI(title=f"TTS Lab — Engine Server ({_STACK} stack)")

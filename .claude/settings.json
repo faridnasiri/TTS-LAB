@@ -3,7 +3,13 @@
     "allow": [
       "Bash(ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i *)",
       "Bash(curl -s *)",
-      "Bash(scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i *)"
+      "Bash(scp -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i *)",
+      "Bash(ssh *192.168.0.87*)",
+      "Bash(scp *192.168.0.87*)",
+      "Bash(docker *)",
+      "Bash(git push *)",
+      "Bash(git add *)",
+      "Bash(git commit *)"
     ]
   }
 }
