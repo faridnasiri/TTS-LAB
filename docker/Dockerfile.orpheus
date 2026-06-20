@@ -1,0 +1,81 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 3 — orpheus (Orpheus 3B on CUDA 12.1 + vllm)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Orpheus 3B requires vllm, which requires:
+#   - CUDA GPU (ONLY engine that refuses to run without GPU)
+#   - CUDA 12.1 toolkit (different from main stack's CUDA 12.8)
+#   - numpy >= 2.0 (conflicts with legacy stack's numpy 1.x)
+#   - protobuf >= 5.0 (conflicts with legacy stack's protobuf 3.x)
+#
+# Uses its own base image (nvidia/cuda:12.1-runtime) — does NOT
+# inherit from tts-lab-base. This is intentional isolation.
+#
+# SIZE: ~7 GB
+# GPU: Required (nvidia-container-toolkit must be installed on host)
+# VRAM: ~6 GB for the model
+# ═══════════════════════════════════════════════════════════════════
+
+FROM nvidia/cuda:12.1-runtime-ubuntu22.04
+
+LABEL org.opencontainers.image.title="TTS Lab - Orpheus 3B"
+LABEL org.opencontainers.image.description="Orpheus 3B TTS via vllm (CUDA required)"
+LABEL tts-lab.tier="3-engine"
+LABEL tts-lab.stack="cuda"
+LABEL tts-lab.gpu="required"
+
+# ── System packages ──────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-venv \
+    python3.11-dev \
+    python3-pip \
+    build-essential \
+    libsndfile1 \
+    libsndfile1-dev \
+    ffmpeg \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Python venv ─────────────────────────────────────────────────
+RUN python3.11 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# ── PyTorch CUDA 12.1 ───────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    torch torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121
+
+# ── vllm + Orpheus ───────────────────────────────────────────────
+# vllm pulls numpy>=2.0 and protobuf>=5.0 as transitive deps.
+# This is WHY Orpheus is a separate container.
+RUN pip install --no-cache-dir vllm \
+    && pip install --no-cache-dir orpheus-speech>=0.1.0
+
+# ── Web server + utilities ──────────────────────────────────────
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    httpx \
+    soundfile \
+    huggingface_hub
+
+# ── Application code (only what Orpheus needs) ───────────────────
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_config.py /opt/arthur/
+COPY tts_lab_utils.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_orpheus_server.py /opt/arthur/
+
+ENV HF_HOME=/opt/models/huggingface
+ENV PYTHONUNBUFFERED=1
+WORKDIR /opt/arthur
+EXPOSE 8002
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
+    CMD curl -f http://localhost:8002/health || exit 1
+
+CMD ["python", "/opt/arthur/tts_lab_orpheus_server.py", "--port", "8002"]
