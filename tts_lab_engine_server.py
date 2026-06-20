@@ -84,12 +84,27 @@ def _evict_current() -> None:
             torch.cuda.synchronize()
         except Exception:
             pass
+        # Clear _state reference FIRST (before _safe_del)
+        # — otherwise _state[name]["instance"] keeps the model alive
+        if name and name in _state:
+            _state[name].pop("instance", None)
+            _state[name]["status"] = "evicted"
         _safe_del(_current_instance)
         _current_instance = None
         _current_engine = None
+        # Force full GC cycle to release all dangling references
+        import gc
+        gc.collect()
         try:
             import torch
             torch.cuda.empty_cache()
+            # Aggressively release the CUDA caching allocator's retained memory
+            if hasattr(torch.cuda, 'memory') and hasattr(torch.cuda.memory, 'caching'):
+                try:
+                    torch.cuda.memory.caching.allocator.empty_cache()
+                except Exception:
+                    pass
+            torch.cuda.synchronize()
             _free, _total = torch.cuda.mem_get_info()
             print(f"[engine-server:{_STACK}] VRAM after evict: {_free//1048576} / {_total//1048576} MB free")
         except Exception:

@@ -93,16 +93,19 @@ def _check_available_remote(name: str) -> Tuple[bool, str]:
             data = r.json()
             status = data.get("status", "")
             if status == "ok":
-                # Check if the specific engine is loaded (for multi-engine containers)
+                # Check if the engine is AVAILABLE (not necessarily loaded).
+                # In lazy-load mode, engines are available but not loaded until
+                # first synthesis — so we check for absence of a "reason" field
+                # (which indicates a failed startup probe), NOT the "loaded" flag.
                 engines = data.get("engines", {})
                 if engines:
                     engine_info = engines.get(name, {})
-                    if engine_info.get("loaded"):
+                    if engine_info:
+                        if "reason" in engine_info:
+                            return False, engine_info["reason"]
+                        # Engine is available — loaded or not (lazy-load mode)
                         return True, ""
-                    elif not engine_info.get("loaded") and "reason" in engine_info:
-                        return False, engine_info["reason"]
-                    else:
-                        return False, "engine not loaded"
+                    return False, f"engine '{name}' not found in container"
                 # Single-engine containers (orpheus)
                 if data.get("model_loaded"):
                     return True, ""
