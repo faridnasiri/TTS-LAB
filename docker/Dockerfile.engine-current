@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml sound
 RUN pip install --no-cache-dir --only-binary av av && pip install --no-cache-dir git+https://github.com/myshell-ai/OpenVoice.git || echo 'OpenVoice skipped'
 # CosyVoice and ManaTTS — complex builds, skipped for now
 # Will add in a follow-up with proper build deps
-RUN pip install --no-cache-dir --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+RUN pip install --no-cache-dir --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 && pip install --no-cache-dir "protobuf>=5.0,<6.0"
 COPY tts_lab_shims.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
 EXPOSE 8101
