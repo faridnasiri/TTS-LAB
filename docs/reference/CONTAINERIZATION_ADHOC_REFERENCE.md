@@ -380,7 +380,7 @@ Full systematic test via engine server (port 8101) with VRAM clearing between te
 All fixes deployed: VRAM leak fix, langchain, MeCab/unidic, lightning, zonos.backbone,
 NLTK data, ONNX model symlink, orchestrator lazy-mode health check.
 
-#### ✅ PASSING (14 engines)
+#### ✅ PASSING (15 engines)
 
 | Engine | Audio | RTF | Synth Time | Notes |
 |--------|------:|:---:|-----------:|-------|
@@ -398,6 +398,7 @@ NLTK data, ONNX model symlink, orchestrator lazy-mode health check.
 | **piper** | 3703ms | 0.43× | 1.6s | **Real-time capable!** ONNX-based. |
 | **styletts2** | 5547ms | 0.22× | 1.2s | **Real-time capable!** Style control. |
 | **zonos** | 5143ms | 4.29× | 22.1s | Voice cloning. Backbone dir fix needed. |
+| **f5tts** | 1610ms | 5.45× | 8.8s | Voice cloning. Needs ref WAV + `huggingface-hub>=1.0`. |
 
 **RTF Legend:** <1.0 = faster than real-time (can stream). 1-3× = near real-time. >3× = slower than real-time.
 
@@ -405,30 +406,34 @@ NLTK data, ONNX model symlink, orchestrator lazy-mode health check.
 
 | Engine | Root Cause | Fix |
 |--------|-----------|-----|
-| **f5tts** | Requires reference audio clip | Expected. Upload 5-15s WAV for testing. |
-| **xtts** | torchcodec incompatible with nightly torch 2.12 | Build torchcodec from source for sm_120, or use stable torch. |
 | **higgs** | SGLang server not running | `docker compose --profile sglang up -d higgs` |
 | **vibevoice** | SGLang server not running | `docker compose --profile sglang up -d vibevoice` |
 | **s2pro** | SGLang server not running | `docker compose --profile sglang up -d s2pro` |
 
-#### ⛔ UNAVAILABLE (6 engines — need setup or not built)
+#### 🔧 PARTIALLY WORKING (2 engines — specific blockers remain)
+
+| Engine | What Works | Blocker | Resolution |
+|--------|-----------|---------|------------|
+| **csm** | Code cloned, deps installed, engine loads | `meta-llama/Llama-3.2-1B` gated | Accept Meta license at [hf.co/meta-llama/Llama-3.2-1B](https://huggingface.co/meta-llama/Llama-3.2-1B) |
+| **orpheus** | pip installed, engine available | vllm 0.19.1 incompatible with torch 2.12 nightly | Build via [Dockerfile.orpheus](docker/Dockerfile.orpheus) (CUDA 12.1 + stable torch + dedicated vllm) |
+
+#### ⛔ UNAVAILABLE (4 engines — not built)
 
 | Engine | Reason | Category |
 |--------|--------|----------|
 | **cosyvoice** | git clone needed | Build failure — openai-whisper Cython |
-| **csm** | Model gated + git clone needed | Requires huggingface-cli login |
 | **manatts** | parallel-wavegan unavailable | No wheel available from PyPI |
 | **neutts** | Not configured | Needs manual setup in tts_lab_engines.py |
 | **openvoice** | pip install needed | Build failure — av package |
-| **orpheus** | Gated model | Requires Hugging Face access request |
 
-#### 🚫 INTENTIONALLY SKIPPED (3 engines — not in scope for current stack)
+#### 🚫 INTENTIONALLY SKIPPED (4 engines)
 
 | Engine | Reason | Plan |
 |--------|--------|------|
-| **qwen3tts** | transformers 5.x incompatibility — `KeyError: 'default'` in ROPE init | Ignored per user request. Needs middle-ground stack (torch 2.x + transformers 4.x). |
-| **indextts** | Needs legacy stack (torch 1.x + tf 4.x) | Ignored per user request. Will be addressed in engine-legacy container. |
-| **parler** | Needs legacy stack (torch 1.x + tf 4.x) | Ignored per user request. Will be addressed in engine-legacy container. |
+| **xtts** | torchcodec incompatible with torch 2.12 nightly | Ignored per user request. Needs stable torch. |
+| **qwen3tts** | transformers 5.x incompatibility — `KeyError: 'default'` in ROPE init | Ignored per user request. Needs middle-ground stack. |
+| **indextts** | Needs legacy stack (torch 1.x + tf 4.x) | Ignored per user request. engine-legacy container. |
+| **parler** | Needs legacy stack (torch 1.x + tf 4.x) | Ignored per user request. engine-legacy container. |
 
 ### Deployed Fixes (this round)
 
@@ -677,7 +682,12 @@ The following changes must be baked into the IaC Dockerfiles:
 | 5 | `Dockerfile.engine-current` | Add fish-speech transitive deps RUN block (lightning, loralib, cachetools, kui, silero-vad, opencc, pyrootutils) |
 | 6 | `Dockerfile.engine-current` | Pin `langchain<0.3.0` + add `einops-exts munch` for styletts2 |
 | 7 | `Dockerfile.engine-current` | Add zonos backbone copy RUN block (clone repo → copy `backbone/` dir) |
-| 8 | `docker-compose.yml` | Add model download init container or document pre-req for ONNX files |
+| 8 | `Dockerfile.engine-current` | Pin `huggingface-hub>=1.0` (0.36.x removed `is_offline_mode` — needed by f5tts via transformers 5.12) |
+| 9 | `Dockerfile.engine-current` | Add f5tts ref WAV note: provide default voice in `/opt/arthur/reference_voices/` |
+| 10 | `Dockerfile.engine-current` | Add CSM deps: `torchtune torchao moshi silentcipher` + git clone CSM repo + `.pth` file |
+| 11 | `docker-compose.yml` | Add model download init container or document pre-req for ONNX files |
+| 12 | `Dockerfile.orpheus` | Orpheus needs separate container (CUDA 12.1 + stable torch + dedicated vllm) — already designed |
+| 13 | `docker-compose.yml` | SGLang containers: pull `lmsysorg/sglang-omni:dev`, run with `--profile sglang` |
 
 ---
 
