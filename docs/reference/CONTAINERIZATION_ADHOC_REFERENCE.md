@@ -446,6 +446,236 @@ NLTK data, ONNX model symlink, orchestrator lazy-mode health check.
 
 ---
 
+## 7b. How Each Engine Was Fixed — Ad-Hoc → IaC Mapping
+
+This section documents the exact steps taken to fix each failing engine during
+ad-hoc deployment. The intent is to **bake every fix into the IaC Dockerfiles**
+so the containers build correctly from scratch — no hotfixes needed.
+
+Each fix is tagged with where it belongs in the IaC:
+
+| Tag | IaC Location |
+|-----|-------------|
+| `[Dockerfile.base]` | Tier 1 — shared OS + system packages |
+| `[Dockerfile.stack.current]` | Tier 2 — torch nightly + transformers + pip packages |
+| `[Dockerfile.engine-current]` | Tier 3 — engine-specific pip installs |
+| `[docker-compose.yml]` | Volume mounts, environment variables |
+| `[code]` | Python source fix — already committed |
+| `[post-build]` | Ran after `docker build` — must be moved into Dockerfile RUN |
+
+### 7b.1 chatterbox / chatterboxturbo — VRAM Leak
+
+**Symptom (round 1):** `CUDA out of memory` when loading after bark. 15.27 GiB in use even after `/unload`.
+
+**Root cause:** `_evict_current()` in `tts_lab_engine_server.py` called `_safe_del(_current_instance)` but `_state[name]["instance"]` still held a reference to the model, preventing Python GC from freeing GPU tensors. `torch.cuda.empty_cache()` alone can't recover memory that's still reachable.
+
+**Exact fix `[code]` — committed in `8eab298`:**
+```python
+# In _evict_current() — BEFORE _safe_del:
+if name and name in _state:
+    _state[name].pop("instance", None)   # ← KEY: drop the _state reference
+    _state[name]["status"] = "evicted"
+_safe_del(_current_instance)
+_current_instance = None
+_current_engine = None
+import gc
+gc.collect()                              # ← force full GC cycle
+# Also call caching allocator:
+if hasattr(torch.cuda, 'memory') and hasattr(torch.cuda.memory, 'caching'):
+    torch.cuda.memory.caching.allocator.empty_cache()
+torch.cuda.empty_cache()
+torch.cuda.synchronize()
+```
+
+**IaC:** No action needed — this is a code fix already committed. The engine server file is `COPY`'d into the container at build time.
+
+---
+
+### 7b.2 melo / xtts — MeCab + unidic
+
+**Symptom:** `[ifs] no such file or directory: .../unidic/dicdir/mecabrc`
+
+**Root cause:** melo and xtts (Coqui TTS) import `fugashi` which wraps MeCab, a Japanese morphological analyzer. MeCab needs the C library + Python bindings + a dictionary (unidic).
+
+**Exact fix `[Dockerfile.base]` — add to apt-get install line:**
+```dockerfile
+RUN apt-get install -y --no-install-recommends \
+    mecab libmecab-dev \
+    # ... other packages
+```
+
+**Exact fix `[Dockerfile.engine-current]` — add RUN lines:**
+```dockerfile
+# MeCab Python bindings + Japanese dictionary (for melo + xtts)
+RUN pip install --no-cache-dir mecab-python3 unidic && \
+    python3 -m unidic download
+```
+
+**Why not in Dockerfile.base:** unidic download is ~526 MB. If kept in base, it bloats every image. Only engine-current needs it. Consider baking into `Dockerfile.stack.current` instead.
+
+---
+
+### 7b.3 fishspeech — Missing Dependencies
+
+**Symptom (round 1):** `No module named 'pytorch_lightning'`
+**Symptom (round 2):** `No module named 'loralib'` (and others after lightning was installed)
+
+**Root cause:** fish-speech was installed with `--no-deps` to avoid conflicts, but its transitive dependencies were never installed.
+
+**Exact fix `[Dockerfile.engine-current]` — add a dedicated RUN block after fish-speech:**
+```dockerfile
+# fish-speech transitive deps (installed --no-deps, so add these manually)
+RUN pip install --no-cache-dir \
+    lightning \          # NOT pytorch_lightning — fish-speech imports 'lightning'
+    loralib \
+    cachetools \
+    kui \
+    silero-vad \
+    opencc-python-reimplemented \
+    pyrootutils
+```
+
+**Note:** fish-speech also needs its code cloned to `/opt/models/fish-speech` if the engine loads from a local path. This is done in `_load_fishspeech()`.
+
+---
+
+### 7b.4 styletts2 — langchain + NLTK Data
+
+**Symptom (round 1):** `No module named 'langchain'`
+**Symptom (round 2):** `No module named 'langchain.text_splitter'` (langchain 1.x removed this)
+**Symptom (round 3):** `Resource 'punkt_tab' not found` (NLTK data missing)
+
+**Root cause:** styletts2 requires `langchain<0.3.0` (the 1.x release moved `text_splitter`) and NLTK `punkt_tab` tokenizer data.
+
+**Exact fix `[Dockerfile.engine-current]`:**
+```dockerfile
+# styletts2 needs OLD langchain (<0.3.0) — the 1.x release removed text_splitter
+RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch
+```
+
+**Exact fix `[Dockerfile.base]` — add to NLTK data download:**
+```dockerfile
+# In Dockerfile.base, after pip install nltk:
+RUN python3 -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+```
+
+**Caution:** styletts2 has many version conflicts with the current stack (needs accelerate<0.26, transformers<5.0, soundfile<0.13). It works despite the warnings — the engine loads and synthesizes correctly. If it breaks in the future, it should move to a separate container with older deps.
+
+---
+
+### 7b.5 zonos — Missing `backbone` Subpackage
+
+**Symptom:** `No module named 'zonos.backbone'`
+
+**Root cause:** zonos 0.1.0 installed from `git+https://github.com/Zyphra/Zonos.git` is missing the `backbone/` subdirectory. The `model.py` file imports `from zonos.backbone import BACKBONES`, but `backbone/` is a directory containing `__init__.py`, `_torch.py`, `_mamba_ssm.py` — and pip didn't package it.
+
+**Exact fix `[Dockerfile.engine-current]` — add after zonos pip install:**
+```dockerfile
+# zonos 0.1.0 packaging bug: backbone/ subpackage is not included in the wheel.
+# Clone the repo and copy the missing directory into site-packages.
+RUN git clone --depth 1 https://github.com/Zyphra/Zonos.git /tmp/zonos-src && \
+    SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    cp -r /tmp/zonos-src/zonos/backbone "$SITE_PKGS/zonos/backbone" && \
+    rm -rf /tmp/zonos-src
+```
+
+**Better approach:** Check if a newer zonos release fixes this packaging bug. If so, pin the minimum version. If not, the clone+copy is the workaround.
+
+---
+
+### 7b.6 piper / kokoro — ONNX Model Files
+
+**Symptom:** `No .onnx voice found in models/` (piper) / `kokoro-v1.0.onnx missing` (kokoro)
+
+**Root cause:** `MODELS_DIR` in `tts_lab_config.py` is `Path(__file__).parent / "models"` = `/opt/arthur/models`. The actual ONNX files are at `/opt/models/tts/`.
+
+**IaC fix `[docker-compose.yml]` — the volume mount already exists:**
+```yaml
+volumes:
+  - /opt/models:/opt/models   # ← already in compose file
+```
+
+**What was missing:** The directory inside the container wasn't pointing to the right place. The proper IaC fix is to either:
+
+**Option A `[code]` — change MODELS_DIR to the volume path:**
+```python
+# In tts_lab_config.py:
+MODELS_DIR = Path("/opt/models/tts")
+```
+
+**Option B `[Dockerfile.base]` — create symlink at build time:**
+```dockerfile
+RUN mkdir -p /opt/models/tts && \
+    rm -rf /opt/arthur/models && \
+    ln -sf /opt/models/tts /opt/arthur/models
+```
+
+**Option B is preferred** — it doesn't require a code change and `/opt/models/tts` is the Docker volume mount point.
+
+**Also ensure models are downloaded `[docker-compose.yml]` or Ansible:**
+```bash
+# Piper voice (64-120 MB each)
+wget -O /opt/models/tts/en_US-ryan-high.onnx \
+  "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/ryan/high/en_US-ryan-high.onnx"
+
+# Kokoro base model (~92 MB)
+wget -O /opt/models/tts/kokoro-v1.0.onnx \
+  "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx"
+wget -O /opt/models/tts/voices-v1.0.bin \
+  "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin"
+```
+
+---
+
+### 7b.7 Orchestrator Lazy-Mode Health Check
+
+**Symptom:** Orchestrator showed 1/28 engines available even though 20 were probe-OK.
+
+**Root cause:** `_check_available_remote()` in `tts_lab_dispatch.py` checked `engine_info.get("loaded")` — but in lazy-load mode, 0 engines are loaded at startup. Engines are available but not in VRAM.
+
+**Exact fix `[code]` — committed in `8eab298`:**
+```python
+# OLD (wrong for lazy mode):
+if engine_info.get("loaded"):
+    return True, ""
+# NEW (correct for lazy mode):
+if "reason" in engine_info:
+    return False, engine_info["reason"]
+return True, ""   # engine is available — loaded or not
+```
+
+**IaC:** No action needed — already committed to `tts_lab_dispatch.py`.
+
+---
+
+### 7b.8 Fixes NOT Applicable to Current Stack
+
+These engines need a **different ML stack** and cannot be fixed by just adding packages:
+
+| Engine | Issue | Required Stack | IaC Path |
+|--------|-------|---------------|----------|
+| **xtts** | torchcodec not compatible with torch 2.12 nightly | Torch 2.10 stable (drops sm_120 support) | Either build torchcodec from source, or wait for torchcodec nightly wheels |
+| **qwen3tts** | `KeyError: 'default'` in ROPE init — transformers 5.x changed rope_type handling | transformers 4.x + torch 2.x | Create "middle-ground" stack: Dockerfile.stack.mid |
+| **f5tts** | Requires reference audio clip | N/A (expected behavior) | Document that f5tts needs `audio_prompt_id` param. Provide default ref WAV in models volume. |
+| **higgs/vibevoice/s2pro** | SGLang server not running | Separate SGLang containers | Already in docker-compose.yml `--profile sglang` |
+
+### 7b.9 Summary: IaC Dockerfile Changes Needed
+
+The following changes must be baked into the IaC Dockerfiles:
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `Dockerfile.base` | Add `mecab libmecab-dev` to apt-get |
+| 2 | `Dockerfile.base` | Add `nltk.download('punkt_tab')` |
+| 3 | `Dockerfile.base` | Add `ln -sf /opt/models/tts /opt/arthur/models` |
+| 4 | `Dockerfile.engine-current` | Add `mecab-python3 unidic` + `unidic download` RUN block |
+| 5 | `Dockerfile.engine-current` | Add fish-speech transitive deps RUN block (lightning, loralib, cachetools, kui, silero-vad, opencc, pyrootutils) |
+| 6 | `Dockerfile.engine-current` | Pin `langchain<0.3.0` + add `einops-exts munch` for styletts2 |
+| 7 | `Dockerfile.engine-current` | Add zonos backbone copy RUN block (clone repo → copy `backbone/` dir) |
+| 8 | `docker-compose.yml` | Add model download init container or document pre-req for ONNX files |
+
+---
+
 ## 8. IaC Rewrite Plan
 
 ### Recommended Toolchain
