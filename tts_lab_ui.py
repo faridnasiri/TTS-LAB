@@ -3,7 +3,18 @@ tts_lab_ui.py — CSS, JS, per-engine param widgets, and HTML page builder.
 """
 from __future__ import annotations
 
-from tts_lab_shims  import DEVICE_NAME, VRAM_TOTAL_MB, DEVICE
+# In orchestrator mode, GPU info and piper voices aren't available.
+try:
+    from tts_lab_shims  import DEVICE_NAME, VRAM_TOTAL_MB, DEVICE
+except (ImportError, ModuleNotFoundError):
+    DEVICE = "remote"
+    DEVICE_NAME = "orchestrator"
+    VRAM_TOTAL_MB = 0
+try:
+    from tts_lab_utils    import _piper_voices
+except (ImportError, ModuleNotFoundError):
+    def _piper_voices(): return ["en_US-ryan-high"]
+
 from tts_lab_config import (
     MODEL_ORDER, MODEL_INFO, ARTHUR_PRESETS, BARK_ARTHUR_PRESETS,
     ALL_KOKORO_VOICES, ALL_XTTS_SPEAKERS, XTTS_LANGUAGES, BARK_PRESETS,
@@ -12,7 +23,6 @@ from tts_lab_config import (
     OUTETTS_DEFAULT_GGUF, OMNIVOICE_LANGUAGES,
 )
 from tts_lab_dispatch import _available, _import_cache
-from tts_lab_utils    import _piper_voices
 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────

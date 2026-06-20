@@ -7,7 +7,16 @@ Exports: all catalogues, MODEL_INFO, MODEL_ORDER, HEAVY, _state, paths
 from __future__ import annotations
 import threading
 from pathlib import Path
-from tts_lab_shims import _N_CORES, DEVICE, DEVICE_NAME, VRAM_TOTAL_MB  # re-exported
+# In orchestrator mode, torch isn't available. tts_lab_shims won't import.
+# Provide safe defaults — the orchestrator doesn't need GPU info anyway.
+try:
+    from tts_lab_shims import _N_CORES, DEVICE, DEVICE_NAME, VRAM_TOTAL_MB
+except (ImportError, ModuleNotFoundError):
+    import os as _os_config
+    _N_CORES = _os_config.cpu_count() or 6
+    DEVICE = "remote"
+    DEVICE_NAME = "orchestrator"
+    VRAM_TOTAL_MB = 0
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 MODELS_DIR    = Path(__file__).parent / "models"
