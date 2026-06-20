@@ -1,0 +1,293 @@
+name: Build and Push Docker Images
+
+# ═══════════════════════════════════════════════════════════════════
+# CI/CD: Builds 7 Docker images and pushes to GitHub Container Registry.
+#
+# Triggered on:
+#   - Push to main that changes Dockerfiles or Python source
+#   - Manual trigger (workflow_dispatch)
+#
+# Build strategy:
+#   - Detect which files changed (skip unchanged images)
+#   - Build in dependency order: base → stacks → engines
+#   - Push to ghcr.io (free, unlimited storage for public repos)
+#   - Docker layer cache via GitHub Actions cache (type=gha)
+#
+# Images produced:
+#   ghcr.io/farid-nasiri/tts-lab-orchestrator:latest    (~1.5 GB)
+#   ghcr.io/farid-nasiri/tts-lab-stack-current:latest   (~5 GB)
+#   ghcr.io/farid-nasiri/tts-lab-stack-legacy:latest    (~4 GB)
+#   ghcr.io/farid-nasiri/tts-lab-engine-current:latest  (~5 GB)
+#   ghcr.io/farid-nasiri/tts-lab-engine-legacy:latest   (~4 GB)
+#   ghcr.io/farid-nasiri/tts-lab-orpheus:latest         (~7 GB)
+#   ghcr.io/farid-nasiri/tts-lab-base:latest            (~1.5 GB)
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docker/**'
+      - 'tts_lab.py'
+      - 'tts_lab_shims.py'
+      - 'tts_lab_shims_legacy.py'
+      - 'tts_lab_config.py'
+      - 'tts_lab_utils.py'
+      - 'tts_lab_engines.py'
+      - 'tts_lab_dispatch.py'
+      - 'tts_lab_ui.py'
+      - 'tts_lab_engine_server.py'
+      - 'tts_lab_orpheus_server.py'
+      - 'patches/**'
+      - 'voice_library.py'
+      - '.github/workflows/build-images.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  # ── Detect changed files ────────────────────────────────────────
+  detect-changes:
+    runs-on: ubuntu-22.04
+    outputs:
+      base: ${{ steps.filter.outputs.base }}
+      stack_current: ${{ steps.filter.outputs.stack_current }}
+      stack_legacy: ${{ steps.filter.outputs.stack_legacy }}
+      engine_current: ${{ steps.filter.outputs.engine_current }}
+      engine_legacy: ${{ steps.filter.outputs.engine_legacy }}
+      orpheus: ${{ steps.filter.outputs.orpheus }}
+      orchestrator: ${{ steps.filter.outputs.orchestrator }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            base:
+              - 'docker/Dockerfile.base'
+              - 'tts_lab.py'
+              - 'tts_lab_shims.py'
+              - 'tts_lab_config.py'
+              - 'tts_lab_utils.py'
+              - 'tts_lab_engines.py'
+              - 'tts_lab_dispatch.py'
+              - 'tts_lab_ui.py'
+              - 'patches/**'
+            stack_current:
+              - 'docker/Dockerfile.stack.current'
+            stack_legacy:
+              - 'docker/Dockerfile.stack.legacy'
+            engine_current:
+              - 'docker/Dockerfile.engine-current'
+              - 'tts_lab_engine_server.py'
+            engine_legacy:
+              - 'docker/Dockerfile.engine-legacy'
+              - 'tts_lab_engine_server.py'
+              - 'tts_lab_shims_legacy.py'
+            orpheus:
+              - 'docker/Dockerfile.orpheus'
+              - 'tts_lab_orpheus_server.py'
+            orchestrator:
+              - 'docker/Dockerfile.orchestrator'
+
+  # ── Build & push base ──────────────────────────────────────────
+  build-base:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.base == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.base
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── Build & push stack:current ─────────────────────────────────
+  build-stack-current:
+    needs: [detect-changes, build-base]
+    if: |
+      always() &&
+      (needs.detect-changes.outputs.stack_current == 'true' ||
+       needs.detect-changes.outputs.base == 'true')
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull base image for cache
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest || true
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.stack.current
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-stack-current:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ── Build & push stack:legacy ──────────────────────────────────
+  build-stack-legacy:
+    needs: [detect-changes, build-base]
+    if: |
+      always() &&
+      (needs.detect-changes.outputs.stack_legacy == 'true' ||
+       needs.detect-changes.outputs.base == 'true')
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull base image for cache
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest || true
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.stack.legacy
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-stack-legacy:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ── Build & push engine-current ────────────────────────────────
+  build-engine-current:
+    needs: [detect-changes, build-stack-current]
+    if: |
+      always() && !cancelled() &&
+      (needs.detect-changes.outputs.engine_current == 'true' ||
+       needs.detect-changes.outputs.stack_current == 'true' ||
+       needs.detect-changes.outputs.base == 'true')
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull stack image for cache
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-stack-current:latest || true
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.engine-current
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-engine-current:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ── Build & push engine-legacy ─────────────────────────────────
+  build-engine-legacy:
+    needs: [detect-changes, build-stack-legacy]
+    if: |
+      always() && !cancelled() &&
+      (needs.detect-changes.outputs.engine_legacy == 'true' ||
+       needs.detect-changes.outputs.stack_legacy == 'true' ||
+       needs.detect-changes.outputs.base == 'true')
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull stack image for cache
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-stack-legacy:latest || true
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.engine-legacy
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-engine-legacy:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ── Build & push orchestrator ──────────────────────────────────
+  build-orchestrator:
+    needs: [detect-changes, build-base]
+    if: |
+      always() && !cancelled() &&
+      (needs.detect-changes.outputs.orchestrator == 'true' ||
+       needs.detect-changes.outputs.base == 'true')
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pull base image for cache
+        run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest || true
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.orchestrator
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-orchestrator:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILDKIT_INLINE_CACHE=1
+
+  # ── Build & push orpheus ───────────────────────────────────────
+  build-orpheus:
+    needs: [detect-changes]
+    if: |
+      always() && !cancelled() &&
+      needs.detect-changes.outputs.orpheus == 'true'
+    runs-on: ubuntu-22.04
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.orpheus
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-orpheus:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
