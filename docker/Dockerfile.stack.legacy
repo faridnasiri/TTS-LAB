@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 2 — tts-lab-stack:legacy
+# ═══════════════════════════════════════════════════════════════════
+#
+# ML Stack — Legacy. Frozen for 3 engines broken by torch 2.10 / tf 5.12.
+#
+# WHY THIS EXISTS:
+#   indextts  — 176 imports from transformers internals removed in 5.x
+#   parler    — torch.meta_tensor removed in torch 2.x
+#   qwen3tts  — config.pad_token_id removed in transformers 5.x
+#
+#   These APIs were PHYSICALLY DELETED from the libraries.
+#   No amount of patching can resurrect them. These engines need
+#   the actual old library binaries.
+#
+# COMPONENTS:
+#   torch 1.13.1+cu117  — last version with meta tensor support
+#   torchaudio 0.13.1    — matching torchaudio
+#   transformers 4.46.1  — last version with old config API + all internals
+#   numpy 1.x            — pinned by torch 1.x compatibility
+#   protobuf 3.x         — pinned by transformers 4.x compatibility
+#   onnxruntime          — compatible version
+#
+# PATCHES: Minimal. ZERO framework patches needed — these engines
+# were BUILT for these library versions. Only parler TTS compat
+# patch applied (its own bug, not a version incompatibility).
+#
+# THIS STACK IS FROZEN. Torch 1.13 will never get security patches.
+# Do not upgrade these versions without testing all 3 engines.
+#
+# SIZE: ~2.5 GB added on top of base
+# REBUILT: Almost never — frozen legacy versions
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-base:latest
+
+LABEL org.opencontainers.image.title="TTS Lab - ML Stack legacy"
+LABEL org.opencontainers.image.description="torch 1.13, transformers 4.46 — for indextts, parler, qwen3tts"
+LABEL tts-lab.tier="2-stack"
+LABEL tts-lab.stack-version="legacy"
+
+# ── PyTorch 1.13 CUDA 11.7 ──────────────────────────────────────
+RUN pip install --no-cache-dir \
+    torch==1.13.1 \
+    torchaudio==0.13.1 \
+    --index-url https://download.pytorch.org/whl/cu117
+
+# ── ML ecosystem (pinned to known-compatible versions) ──────────
+RUN pip install --no-cache-dir \
+    "numpy>=1.21,<2.0" \
+    "protobuf>=3.20,<4.0" \
+    "transformers==4.46.1" \
+    "accelerate==0.26.0" \
+    "onnxruntime>=1.15.0" \
+    "safetensors>=0.3.0"
+
+# ── Minimal patches ──────────────────────────────────────────────
+# Only parler-tts compat — its own code issue, not a version conflict.
+# ZERO framework patches. These engines were built for tf 4.46 / torch 1.13.
+RUN python /opt/arthur/patches/patch_parler_tts.py \
+    && echo "Legacy patches applied (parler-tts only)"
