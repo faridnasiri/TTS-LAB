@@ -1,63 +1,9 @@
-# syntax=docker/dockerfile:1
-# ═══════════════════════════════════════════════════════════════════
-# TIER 2 — tts-lab-stack:current
-# ═══════════════════════════════════════════════════════════════════
-#
-# ML Stack — Current (matches production VM as of 2026-06-19).
-# 21 engines work on this stack.
-#
-# COMPONENTS:
-#   torch 2.10.0+cu128  — CUDA 12.8 build
-#   torchaudio 2.10.0    — Audio I/O for PyTorch
-#   transformers 5.12.1  — HuggingFace model framework (latest major)
-#   numpy 2.x            — pulled by torch 2.10 (no upper pin)
-#   protobuf 5.x         — pulled by transformers 5.12
-#   onnxruntime latest   — ONNX model inference
-#   accelerate latest    — Distributed inference helper
-#   safetensors latest   — Safe model format
-#
-# BUILD-TIME PATCHES (applied at docker build, not runtime):
-#   1. torchcodec metadata stub — chatterbox needs this
-#   2. transformers 5.x stubs — patch_transformers_stubs.py
-#   3. Fix transformers shims — fix_transformers_shims.py
-#   4. Parler-TTS compat patch — patch_parler_tts.py
-#
-# SIZE: ~3.5 GB added on top of base
-# REBUILT: Every 3–6 months (torch/tf releases, security patches)
-# ═══════════════════════════════════════════════════════════════════
-
 FROM tts-lab-base:latest
-
 LABEL org.opencontainers.image.title="TTS Lab - ML Stack current"
-LABEL org.opencontainers.image.description="torch 2.10, transformers 5.12, CUDA 12.8"
+LABEL org.opencontainers.image.description="torch nightly, transformers 5.12, CUDA 12.8"
 LABEL tts-lab.tier="2-stack"
 LABEL tts-lab.stack-version="current"
-
-# ── PyTorch CUDA 12.8 ────────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    torch>=2.10.0 \
-    torchaudio>=2.10.0 \
-    --index-url https://download.pytorch.org/whl/cu128
-
-# ── ML ecosystem ──────────────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    "transformers>=5.12.0" \
-    "accelerate>=0.30.0" \
-    "onnxruntime>=1.18.0" \
-    "safetensors>=0.4.0" \
-    numpy \
-    protobuf
-
-# ── Build-time patches ───────────────────────────────────────────
-# torchcodec metadata — chatterbox/chatterboxturbo need this
-RUN SITE_PACKAGES=$(python -c "import site; print(site.getsitepackages()[0])") \
-    && mkdir -p "${SITE_PACKAGES}/torchcodec-99.0.0.dist-info" \
-    && printf "Metadata-Version: 2.1\nName: torchcodec\nVersion: 99.0.0\n" \
-       > "${SITE_PACKAGES}/torchcodec-99.0.0.dist-info/METADATA" \
-    && echo "torchcodec metadata stub created"
-
-# transformers 5.x compatibility patches (idempotent — safe to re-run)
-RUN python /opt/arthur/patches/patch_transformers_stubs.py \
-    && python /opt/arthur/patches/fix_transformers_shims.py \
-    && python /opt/arthur/patches/patch_parler_tts.py \
-    && echo "Compatibility patches applied"
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+RUN pip install --no-cache-dir "transformers>=5.12.0" "accelerate>=0.30.0" "onnxruntime>=1.18.0" "safetensors>=0.4.0" numpy protobuf
+RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && mkdir -p "${SITE_PKGS}/torchcodec-99.0.0.dist-info" && printf "Metadata-Version: 2.1\nName: torchcodec\nVersion: 99.0.0\n" > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/METADATA" && echo "torchcodec metadata stub created"
+RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && find /opt/arthur/patches -name "*.py" -exec sed -i "s|/opt/arthur-bench-env/lib/python3.11/site-packages|${SITE_PKGS}|g" {} + && python3 /opt/arthur/patches/patch_transformers_stubs.py && python3 /opt/arthur/patches/fix_transformers_shims.py && echo "Compatibility patches applied"

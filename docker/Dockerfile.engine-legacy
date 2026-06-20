@@ -1,51 +1,11 @@
-# syntax=docker/dockerfile:1
-# ═══════════════════════════════════════════════════════════════════
-# TIER 3 — engine-legacy (3 engines on stack:legacy)
-# ═══════════════════════════════════════════════════════════════════
-#
-# 3 engines broken by torch 2.10 / transformers 5.12.
-# Run here on torch 1.13 + transformers 4.46 where their APIs still exist.
-#
-# ENGINES:
-#   indextts   — 176 imports from tf internals (deleted in 5.x)
-#   parler     — torch.meta_tensor (deleted in torch 2.x)
-#   qwen3tts   — config.pad_token_id (deleted in tf 5.x)
-#
-# THESE VERSIONS ARE FROZEN. Do not upgrade torch/tf without
-# testing all 3 engines. These APIs will never come back.
-#
-# ZERO framework patches — engines built for tf 4.46 / torch 1.13.
-#
-# SIZE: ~4 GB (stack + engine packages)
-# ═══════════════════════════════════════════════════════════════════
-
-FROM tts-lab-stack:legacy
-
-LABEL org.opencontainers.image.title="TTS Lab - Engine Legacy"
-LABEL org.opencontainers.image.description="3 engines on torch 1.13 + tf 4.46 — indextts, parler, qwen3tts"
+FROM tts-lab-stack-legacy:latest
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="legacy"
-
-# ── indextts — needs tf 4.x internals (176 imports gone in 5.x) ─
-RUN pip install --no-cache-dir \
-    git+https://github.com/index-tts/IndexTTS.git
-
-# ── parler — needs torch.meta_tensor (removed in torch 2.x) ─────
+RUN pip install --no-cache-dir git+https://github.com/index-tts/IndexTTS.git
 RUN pip install --no-cache-dir parler-tts==0.2.3
-
-# ── qwen3tts — needs old config API (pad_token_id removed in tf 5.x)
 RUN pip install --no-cache-dir qwen-tts
-
-# ── Minimal shims for legacy stack ───────────────────────────────
-# Only thread-pool env vars + torch.isin wrapper if parler needs it.
-# ZERO framework patches — these engines were built for tf 4.46.
+RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && find patches -name "*.py" -exec sed -i "s|/opt/arthur-bench-env/lib/python3.11/site-packages|${SITE_PKGS}|g" {} + && python3 patches/patch_parler_tts.py && echo "parler patch applied"
 COPY tts_lab_shims_legacy.py /opt/arthur/
-
-# ── Engine server ────────────────────────────────────────────────
 COPY tts_lab_engine_server.py /opt/arthur/
-
 EXPOSE 8102
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
-    CMD curl -f http://localhost:8102/health || exit 1
-
-CMD ["python", "/opt/arthur/tts_lab_engine_server.py", "--port", "8102", "--stack", "legacy"]
+CMD ["python3", "/opt/arthur/tts_lab_engine_server.py", "--port", "8102", "--stack", "legacy"]

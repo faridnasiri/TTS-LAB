@@ -27,7 +27,7 @@
 # REBUILT: Every 6–12 months (OS updates, app code changes)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM nvidia/cuda:12.8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
 
 LABEL org.opencontainers.image.title="TTS Lab - Base"
 LABEL org.opencontainers.image.description="Universal foundation for all TTS Lab containers"
@@ -46,7 +46,7 @@ LABEL tts-lab.tier="1-base"
 # git                → Clone engine repos from GitHub
 # wget, curl         → Download models and files
 # python3.11 + dev   → Python runtime (installed on CUDA base)
-# python3-pip        → Package installer
+# python3-pip python-is-python3        → Package installer
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libsndfile1 \
@@ -61,7 +61,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11 \
     python3.11-dev \
     python3.11-venv \
-    python3-pip \
+    python3-pip python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify espeak-ng data is at the path phonemizer expects
@@ -86,11 +86,11 @@ RUN pip install --no-cache-dir \
     "psutil>=5.9.0" \
     "requests>=2.28.0" \
     "soundfile>=0.12.1" \
-    "huggingface_hub>=0.20.0"
+    "huggingface_hub>=0.20.0" nltk
 
 # ── NLTK data (needed by MeloTTS, OpenVoice v2) ──────────────────
 # Downloaded once here so engine containers don't re-download.
-RUN python -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('cmudict', quiet=True)"
+RUN python3 -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('cmudict', quiet=True)"
 
 # ── Application code ─────────────────────────────────────────────
 WORKDIR /opt/arthur

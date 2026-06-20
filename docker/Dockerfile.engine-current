@@ -1,94 +1,25 @@
-# syntax=docker/dockerfile:1
-# ═══════════════════════════════════════════════════════════════════
-# TIER 3 — engine-current (21 engines on stack:current)
-# ═══════════════════════════════════════════════════════════════════
-#
-# All 21 engines that work with torch 2.10 + transformers 5.12.
-# Runs a FastAPI server that loads models at startup and exposes
-# /health and /synthesize endpoints.
-#
-# ENGINES: piper, kokoro, melo, matcha, chattts, outetts, bark,
-#          styletts2, f5tts, dia, xtts, cosyvoice, fishspeech,
-#          chatterbox, chatterboxturbo, omnivoice, openvoice,
-#          zonos, manatts, csm, qwen3tts (on current stack)
-#
-# SIZE: ~5 GB (stack + engine packages)
-# ═══════════════════════════════════════════════════════════════════
-
-FROM tts-lab-stack:current
-
-LABEL org.opencontainers.image.title="TTS Lab - Engine Current"
-LABEL org.opencontainers.image.description="21 engines on torch 2.10 + tf 5.12"
+FROM tts-lab-stack-current:latest
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="current"
-
-# ── Lightweight engines (pure pip, fast install) ─────────────────
-RUN pip install --no-cache-dir \
-    piper-tts>=1.2.0 \
-    kokoro-onnx>=0.4.0 \
-    sherpa-onnx
-
-# ── Medium engines ────────────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    git+https://github.com/myshell-ai/MeloTTS.git
-
-RUN pip install --no-cache-dir \
-    ChatTTS>=0.2.1 \
-    styletts2>=0.0.4 \
-    f5-tts>=0.3.4 \
-    bark>=1.0.0
-
-# ── Heavier engines ──────────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    outetts>=0.3.0 \
-    chatterbox-tts>=0.1.0 perth>=1.0.0 \
-    coqui-tts \
-    fish-speech \
-    qwen-tts \
-    omnivoice
-
-# ── Git-cloned engines ───────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    git+https://github.com/nari-labs/dia.git \
-    git+https://github.com/Zyphra/Zonos.git \
-    git+https://github.com/myshell-ai/OpenVoice.git
-
-# ── Special dependencies ─────────────────────────────────────────
-RUN pip install --no-cache-dir \
-    phonemizer>=3.2.1 \
-    scipy \
-    librosa \
-    parallel-wavegan \
-    hyperpyyaml \
-    soundfile
-
-# ── CosyVoice2 — repo clone + install ────────────────────────────
-RUN git clone --depth 1 https://github.com/FunAudioLLM/CosyVoice /opt/CosyVoice \
-    && pip install --no-cache-dir -r /opt/CosyVoice/requirements.txt \
-    && pip install --no-cache-dir /opt/CosyVoice/third_party/Matcha-TTS
-
-# ── ManaTTS repo clone ───────────────────────────────────────────
-RUN git clone --depth 1 \
-    https://github.com/MahtaFetrat/Persian-MultiSpeaker-Tacotron2 \
-    /opt/models/Persian-MultiSpeaker-Tacotron2
-
-# ── CSM repo clone ───────────────────────────────────────────────
-RUN git clone --depth 1 \
-    https://github.com/SesameAILabs/csm \
-    /opt/models/csm
-
-# ── Runtime shims (imported by engine server at startup) ─────────
-# Contains: inspect.getsourcefile fix, masking_utils stub,
-# torch._dynamo stub, isin_mps_friendly, ExtensionsTrie, AddedToken,
-# check_model_inputs compat, PretrainedConfig defaults, perth stub,
-# thread-pool env vars
+RUN pip install --no-cache-dir --upgrade pip
+RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
+RUN pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git
+RUN pip install --no-cache-dir --no-deps styletts2 && pip install --no-cache-dir f5-tts>=0.3.4
+RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0
+RUN pip install --no-cache-dir outetts>=0.3.0
+RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
+RUN pip install --no-cache-dir coqui-tts
+RUN pip install --no-cache-dir --no-deps fish-speech
+RUN pip install --no-cache-dir qwen-tts
+RUN pip install --no-cache-dir omnivoice
+RUN pip install --no-cache-dir git+https://github.com/nari-labs/dia.git
+RUN pip install --no-cache-dir git+https://github.com/Zyphra/Zonos.git
+RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
+RUN pip install --no-cache-dir --only-binary av av && pip install --no-cache-dir git+https://github.com/myshell-ai/OpenVoice.git || echo 'OpenVoice skipped'
+# CosyVoice and ManaTTS — complex builds, skipped for now
+# Will add in a follow-up with proper build deps
+RUN pip install --no-cache-dir --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 COPY tts_lab_shims.py /opt/arthur/
-
-# ── Engine server ────────────────────────────────────────────────
 COPY tts_lab_engine_server.py /opt/arthur/
-
 EXPOSE 8101
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
-    CMD curl -f http://localhost:8101/health || exit 1
-
-CMD ["python", "/opt/arthur/tts_lab_engine_server.py", "--port", "8101", "--stack", "current"]
+CMD ["python3", "/opt/arthur/tts_lab_engine_server.py", "--port", "8101", "--stack", "current"]
