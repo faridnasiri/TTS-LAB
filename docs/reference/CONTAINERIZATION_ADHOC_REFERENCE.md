@@ -401,29 +401,34 @@ NLTK data, ONNX model symlink, orchestrator lazy-mode health check.
 
 **RTF Legend:** <1.0 = faster than real-time (can stream). 1-3× = near real-time. >3× = slower than real-time.
 
-#### ❌ FAILING (6 engines)
+#### ❌ FAILING (3 engines)
 
 | Engine | Root Cause | Fix |
 |--------|-----------|-----|
 | **f5tts** | Requires reference audio clip | Expected. Upload 5-15s WAV for testing. |
 | **xtts** | torchcodec incompatible with nightly torch 2.12 | Build torchcodec from source for sm_120, or use stable torch. |
-| **qwen3tts** | KeyError 'default' in ROPE init | transformers 5.x incompatibility. Needs middle-ground stack (torch 2.x + transformers 4.x). |
 | **higgs** | SGLang server not running | `docker compose --profile sglang up -d higgs` |
 | **vibevoice** | SGLang server not running | `docker compose --profile sglang up -d vibevoice` |
 | **s2pro** | SGLang server not running | `docker compose --profile sglang up -d s2pro` |
 
-#### ⛔ UNAVAILABLE (8 engines — need setup or not built)
+#### ⛔ UNAVAILABLE (6 engines — need setup or not built)
 
 | Engine | Reason | Category |
 |--------|--------|----------|
 | **cosyvoice** | git clone needed | Build failure — openai-whisper Cython |
 | **csm** | Model gated + git clone needed | Requires huggingface-cli login |
-| **indextts** | pip install needed | Legacy stack (torch 1.x + tf 4.x) |
 | **manatts** | parallel-wavegan unavailable | No wheel available from PyPI |
 | **neutts** | Not configured | Needs manual setup in tts_lab_engines.py |
 | **openvoice** | pip install needed | Build failure — av package |
 | **orpheus** | Gated model | Requires Hugging Face access request |
-| **parler** | pip install needed | Legacy stack (torch 1.x + tf 4.x) |
+
+#### 🚫 INTENTIONALLY SKIPPED (3 engines — not in scope for current stack)
+
+| Engine | Reason | Plan |
+|--------|--------|------|
+| **qwen3tts** | transformers 5.x incompatibility — `KeyError: 'default'` in ROPE init | Ignored per user request. Needs middle-ground stack (torch 2.x + transformers 4.x). |
+| **indextts** | Needs legacy stack (torch 1.x + tf 4.x) | Ignored per user request. Will be addressed in engine-legacy container. |
+| **parler** | Needs legacy stack (torch 1.x + tf 4.x) | Ignored per user request. Will be addressed in engine-legacy container. |
 
 ### Deployed Fixes (this round)
 
