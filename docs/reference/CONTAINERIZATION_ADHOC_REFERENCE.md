@@ -372,15 +372,15 @@ Every lesson here becomes a requirement for the IaC rewrite.
 
 | Engine | Load Time | Type | Notes |
 |--------|:---------|------|-------|
-| chattts | 3.4s | Conversational TTS | fast |
-| omnivoice | 3.3s | 600+ languages | sometimes OOM |
-| matcha | 8.0s | Persian+English | bilingual |
-| f5tts | 10.5s | Voice cloning | needs ref WAV |
-| outetts | 13.8s | GGUF quantized | llama.cpp |
-| dia | 15.7s | Dialogue-native | [S1]/[S2] speakers |
-| chatterboxturbo | 16.6s | One-step distilled | 350M params |
-| chatterbox | 19.3s | Persian support | multi-variant |
-| bark | 34.1s | Emotional TTS | heavy VRAM user |
+| chattts | 3.4s | Conversational TTS | ✅ Tested with synthesis |
+| omnivoice | 3.3s | 600+ languages | ✅ Tested with synthesis |
+| matcha | 8.0s | Persian+English | ✅ Tested with synthesis |
+| f5tts | 10.5s | Voice cloning | ✅ Tested with synthesis — needs `audio_prompt_id` param |
+| outetts | 13.8s | GGUF quantized | ✅ Tested with synthesis |
+| dia | 15.7s | Dialogue-native | ✅ Tested with synthesis |
+| chatterboxturbo | 16.6s | One-step distilled | ✅ Tested with synthesis |
+| chatterbox | 19.3s | Persian support | ✅ Tested with synthesis |
+| bark | 34.1s | Emotional TTS | ✅ Tested with synthesis — needs `SUNO_USE_SMALL_MODELS=True` |
 | vibevoice | 0s | HTTP client | needs SGLang server |
 | higgs | 0s | HTTP client | needs SGLang server |
 | s2pro | 0s | HTTP client | needs SGLang server |
@@ -397,9 +397,22 @@ Every lesson here becomes a requirement for the IaC rewrite.
 | fishspeech | No module 'pytorch_lightning' | Install pytorch_lightning |
 | zonos | No module 'zonos.backbone' | Zonos install issue |
 
-### 9 Engines Not in This Container (By Design)
+### Engine-Legacy Test Results (Separate Container)
 
-cosyvoice, parler, csm, orpheus, neutts, indextts, manatts, openvoice, qwen3tts — belong in other containers (legacy, orpheus, or need special build steps).
+| Engine | Status | Details |
+|--------|:-------|---------|
+| indextts | ⚠️ Loading works, synth param mismatch | `IndexTTS2.infer() missing 1 required positional argument: 'spk_audio_prompt'` — code fix needed |
+| parler | ❌ DynamicCache API error | `'DynamicCache' object has no attribute 'key_cache'` — torch 1.13 / tf 4.46 incompatibility on Blackwell GPU |
+| qwen3tts | ❌ cuDNN error | `CUDNN_STATUS_INTERNAL_ERROR` — torch 1.13 too old for RTX 5060 Ti. Needs torch 2.x + tf 4.x "middle ground" stack (as expert suggested) |
+
+### Key Findings During Ad-Hoc Testing
+
+1. **Lazy-load + VRAM eviction works** — 9 engines tested, each loads on demand and evicts the previous. Only one engine in VRAM at a time.
+2. **f5tts requires `audio_prompt_id` parameter** — not `ref_audio_id`. Ref WAV must be mounted at `/tmp/tts_uploads/`.
+3. **Bark works with `SUNO_USE_SMALL_MODELS=True`** — full model OOMs on 16 GB, small model fits and synthesizes successfully.
+4. **qwen3tts is a double-bind**: engine-current has tf 5.x (API incompatibility), engine-legacy has torch 1.13 (GPU incompatibility). Solution: "middle ground" stack with torch 2.x + tf 4.x.
+5. **parler DynamicCache issue** is likely fixable with a transformers version tweak (4.46.1 → 4.45.x).
+6. **indextts loading works** — just needs correct parameter format for the synthesis call.
 
 ---
 
