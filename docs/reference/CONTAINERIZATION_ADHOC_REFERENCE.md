@@ -667,7 +667,46 @@ These engines need a **different ML stack** and cannot be fixed by just adding p
 | **xtts** | torchcodec not compatible with torch 2.12 nightly | Torch 2.10 stable (drops sm_120 support) | Either build torchcodec from source, or wait for torchcodec nightly wheels |
 | **qwen3tts** | `KeyError: 'default'` in ROPE init — transformers 5.x changed rope_type handling | transformers 4.x + torch 2.x | Create "middle-ground" stack: Dockerfile.stack.mid |
 | **f5tts** | Requires reference audio clip | N/A (expected behavior) | Document that f5tts needs `audio_prompt_id` param. Provide default ref WAV in models volume. |
-| **higgs/vibevoice/s2pro** | SGLang server not running | Separate SGLang containers | Already in docker-compose.yml `--profile sglang` |
+| **higgs/vibevoice/s2pro** | SGLang image transformers too old | See §7b.10 below for full analysis | Already in docker-compose.yml `--profile sglang` — blocked upstream |
+
+### 7b.10 SGLang Engines — Upstream Blocker (2026-06-20)
+
+**What we tried:**
+- Pulled `lmsysorg/sglang-omni:dev` — image is available (~8 GB base)
+- Started container with `--model microsoft/VibeVoice-1.5B --trust-remote-code --port 8003`
+- Container initializes but fails at model config parsing
+
+**Error:**
+```
+ValueError: The checkpoint you are trying to load has model type `vibevoice`
+but Transformers does not recognize this architecture.
+```
+
+**Root cause chain:**
+1. VibeVoice / Higgs / S2-Pro are very new models (2025-2026)
+2. Their `config.json` declares model architectures (`vibevoice`, `higgs`, `s2pro`) that must be registered in the `transformers` library
+3. `lmsysorg/sglang-omni:dev` bundles **transformers 5.6.0** — pinned exactly by SGLang 0.5.12.post1 (`sglang==0.5.12.post1 requires transformers==5.6.0`)
+4. transformers 5.6.0 was released before these models existed — their architectures are not in the registry
+5. Upgrading to transformers 5.12.1 (which might support them) breaks SGLang internals (API changes in config parsing, rope handling, etc.)
+6. `--trust-remote-code` flag exists in SGLang CLI but is ignored by the internal config parser — SGLang's `ModelConfig.__init__` calls `AutoConfig.from_pretrained()` without passing `trust_remote_code=True`
+
+**What must happen (upstream):**
+- SGLang project needs to release a newer `sglang-omni` image that bundles transformers ≥ 5.12 with VibeVoice/Higgs/S2-Pro architecture support
+- OR these models need to be added to a transformers release that SGLang 0.5.12 can work with
+
+**IaC plan:** Keep SGLang containers in `docker-compose.yml` with `--profile sglang`. When upstream releases a compatible image, update the image tag and they'll work. Until then, these 3 engines show "SGLang server not running" in the UI.
+
+### 7b.11 Web UI GPU/VRAM Status Fix
+
+**Symptom:** Docker orchestrator (port 8009) showed "🔴 CPU only" and "Loading VRAM…" permanently.
+
+**Root cause:** The orchestrator runs in `ORCHESTRATOR_MODE=1` which sets `DEVICE = "remote"`. The server-rendered GPU badge checked `DEVICE == "cuda"` and showed "CPU only" for any other value. VRAM bars never populated because `/status` returned no GPU data in remote mode.
+
+**Fix (committed `b874ce3`):**
+1. Engine server `/health` endpoint now includes `gpu` field with `name`, `vram_total`, `vram_used`, `vram_free`
+2. Orchestrator `/status` queries engine server's `/health` endpoint for GPU data when `DEVICE == "remote"`
+3. UI GPU badge: server renders placeholder `🔵 Remote GPU — loading…`, JS `refreshStatus()` updates it with real GPU data from `/status`
+4. CSS: added `.gpu-badge.remote` style variant
 
 ### 7b.9 Summary: IaC Dockerfile Changes Needed
 
