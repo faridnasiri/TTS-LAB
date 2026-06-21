@@ -756,9 +756,32 @@ The following changes must be baked into the IaC Dockerfiles:
 | 11 | `docker-compose.yml` | Add model download init container or document pre-req for ONNX files |
 | 12 | `Dockerfile.orpheus` | Orpheus needs separate container (CUDA 12.1 + stable torch + dedicated vllm) — already designed |
 | 13 | `docker-compose.yml` | SGLang containers: pull `lmsysorg/sglang-omni:dev`, run with `--profile sglang` |
-| 14 | `Dockerfile.engine-current` | Pin `dia` to use `Dia-1.6B-0626` (old config format with decoder/encoder_config). `Dia-1.6B` (no suffix) has new config incompatible with dia library. |
+| 14 | `Dockerfile.engine-current` | Pin `dia` to use `Dia-1.6B-0626` + monkey-patch `DecoderInferenceState.new` to enforce min KV cache size ≥ 2048 |
+| 15 | `Dockerfile.engine-current` | After `COPY` of `.py` files, always `RUN find /opt/arthur -name '*.pyc' -delete` to prevent stale bytecode |
 
-### 7b.12 Recent Ad-Hoc Fixes (2026-06-21)
+### 7b.12 Critical: .pyc Bytecode Cache (2026-06-21)
+
+**Symptom:** Code changes deployed via `docker cp` have no effect. Engines keep failing with old error messages even after source files are updated and container restarted.
+
+**Root cause:** Python compiles `.py` → `.pyc` on first import. When you `docker cp` a new `.py` file into a running container, the old `.pyc` in `__pycache__/` is NOT invalidated. Python keeps loading the stale bytecode.
+
+**Detection:** Compare the source file timestamp vs `.pyc` timestamp, or check if the behavior matches the source code.
+
+**Fix:** After every `docker cp` of a `.py` file:
+```bash
+docker exec tts-lab-engine-current find /opt/arthur -name '*.pyc' -delete
+docker restart tts-lab-engine-current
+```
+
+**IaC impact:** Not an issue for Docker builds (clean filesystem). But during ad-hoc debugging, this wasted hours on Dia — code was updated 5+ times but old bytecode kept running.
+
+### 7b.13 Recent Ad-Hoc Fixes (2026-06-21)
+
+**Dia KV cache dimension mismatch `[Dockerfile.engine-current]`:**
+- Symptom: `RuntimeError: The expanded size of the tensor (540) must match the existing size (128)` in `cache.prefill`
+- Root cause: dia library's `DecoderInferenceState.new` sometimes creates KV caches with `max_audio_len=128` (head_dim) instead of the requested `max_tokens` value. Exact cause unclear — may be version-specific or param-passing bug.
+- Fix: monkey-patch `DecoderInferenceState.new` in `_load_dia()` to enforce `max_generation_length >= 2048`. Also bump `auto_tokens` floor to 3072.
+- Committed: `040b8bf`
 
 **OuteTTS BytesIO crash `[Dockerfile.base]`:**
 - Symptom: `soundfile.LibsndfileError: Error opening '<_io.BytesIO object at ...>'`
