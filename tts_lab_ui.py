@@ -773,8 +773,11 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .avail-badge{font-size:.72rem;padding:2px 9px;border-radius:12px;font-weight:700;}
 .avail-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #2a5a2a;}
 .avail-badge.missing{background:#3a1e1e;color:#f44336;border:1px solid #5a2a2a;}
-.engine-meta{font-size:.75rem;color:var(--muted);margin-bottom:14px;}
+.engine-meta{font-size:.75rem;color:var(--muted);margin-bottom:8px;}
 .engine-meta span{margin-right:14px;}
+.desc-input{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:.75rem;resize:vertical;margin-bottom:8px;font-family:inherit;}
+.desc-input:focus{outline:none;border-color:var(--accent);}
+.desc-input::placeholder{color:var(--muted);}
 .params-area{display:flex;flex-direction:column;gap:10px;margin-bottom:16px;}
 .param-row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
 .param-group{display:flex;flex-direction:column;gap:4px;min-width:150px;}
@@ -1363,6 +1366,27 @@ async function pollServerLog() {
 // Auto-refresh DISABLED — uncomment to re-enable:
 // setInterval(refreshStatus, 6000);
 // setInterval(pollServerLog, 2000);
+
+/* ── Engine description notes (persisted in localStorage) ── */
+function saveDescription(engine) {
+  const ta = document.getElementById('desc-' + engine);
+  if (!ta) return;
+  const key = 'tts-lab-desc-' + engine;
+  localStorage.setItem(key, ta.value);
+}
+
+function loadDescriptions() {
+  document.querySelectorAll('.desc-input').forEach(ta => {
+    const engine = ta.id.replace('desc-', '');
+    const key = 'tts-lab-desc-' + engine;
+    const saved = localStorage.getItem(key);
+    if (saved) ta.value = saved;
+  });
+}
+
+// Load saved descriptions on page load
+document.addEventListener('DOMContentLoaded', loadDescriptions);
+
 // ── Voice Library ──
 let voiceCache = [];
 
@@ -1607,6 +1631,10 @@ def build_page() -> str:
             f'  <span>💾 {info["size"]}</span>'
             f'  <span>🧠 ~{info["ram_est_mb"]} MB</span>'
             f'  <span>🎭 Arthur fit: {stars}</span>'
+            f'</div>'
+            f'<div class="engine-notes">'
+            f'  <textarea id="desc-{n}" class="desc-input" placeholder="Add notes about this engine…" '
+            f'    onchange="saveDescription(\"{n}\")" rows="2"></textarea>'
             f'</div>'
             f'<div class="params-area">{_build_params(n)}</div>'
             + (f'<p class="text-warning small mt-1">⚠ {reason}</p>' if not ok else "")
