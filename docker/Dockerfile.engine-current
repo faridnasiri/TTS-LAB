@@ -71,12 +71,14 @@ RUN pip install --no-cache-dir orpheus-speech || true
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
 # ═══════════════════════════════════════════════════════════════════
-# CRITICAL: Reinstall torch nightly as the FINAL step.
-# Many engine packages above install torch as a dependency,
-# downgrading our nightly build. This restores it.
+# CRITICAL: Restore torch nightly as the FINAL step.
+# Engine packages above install stable torch as a dependency,
+# overwriting the nightly build. Reinstall WITH dependencies so
+# CUDA runtime libs (libcupti, libcudart) are correctly linked.
+# Pin exact versions to match stack.current and avoid newer builds
+# that may require different CUDA toolkits.
 # ═══════════════════════════════════════════════════════════════════
-RUN pip install --no-cache-dir --upgrade torch torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
