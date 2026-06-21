@@ -17,67 +17,85 @@ Push to git → GitHub Actions builds images → pushes to GHCR → Ansible pull
 
 ## 1. The Architecture
 
-### 1.1 Docker Image Hierarchy (Tiered — 3 Layers → 4 Images)
+### 1.1 Docker Image Hierarchy (Tiered — 3 Layers → 6 Images)
 
 Docker images can inherit from each other using `FROM`. Think of it like class inheritance: a base class with shared code, subclasses that add specialized functionality. The base layer is stored once on disk and shared by all child images.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ LAYER 1: tts-lab-base  (~1.5 GB)                                │
-│ FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04                     │
-│                                                                  │
-│ System: espeak-ng, ffmpeg, MeCab, Python 3.11, git, wget, curl  │
-│ Python: fastapi, uvicorn, httpx, soundfile, huggingface_hub      │
-│ NLTK:   punkt, punkt_tab, cmudict, averaged_perceptron_tagger    │
-│ Code:   tts_lab.py, tts_lab_shims.py, tts_lab_config.py, ...     │
-│ Symlink: /opt/arthur/models → /opt/models/tts                    │
-│                                                                  │
-│ Shared by ALL containers. Stored ONCE on disk.                   │
-└─────────────────────────────────────────────────────────────────┘
-         │                              │
-         ▼                              ▼
-┌────────────────────────────┐  ┌──────────────────────────────┐
-│ LAYER 2: stack-current     │  │ LAYER 1 (reuse): orchestrator│
-│ (~+3.5 GB → 5 GB total)    │  │ (~1.5 GB total)              │
-│                             │  │                              │
-│ FROM tts-lab-base:latest    │  │ FROM tts-lab-base:latest     │
-│ torch 2.12 nightly (cu128)  │  │ ENV ORCHESTRATOR_MODE=1      │
-│ transformers 5.12.1         │  │ No ML libraries              │
-│ numpy, protobuf, safetensors│  │ Port 8001                    │
-│ onnxruntime, accelerate     │  │                              │
-│ Patches: transformers stubs │  │                              │
-└──────────┬─────────────────┘  └──────────────────────────────┘
-           │
-           ▼
-┌──────────────────────────────────────────────────────────────┐
-│ LAYER 3: engine-current  (~+12 GB → 17 GB total)             │
-│                                                               │
-│ FROM tts-lab-stack-current:latest                             │
-│ All 22 engine pip installs WITH FIXES BAKED IN                │
-│ MeCab + unidic download                                       │
-│ zonos backbone directory copy                                 │
-│ CSM clone + .pth file                                         │
-│ huggingface-hub >= 1.0                                        │
-│ Nightly torch reinstalled as FINAL step                       │
-│ Port 8101                                                     │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────┐
+│ LAYER 1: tts-lab-base  (~1.5 GB)                                     │
+│ FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04                          │
+│                                                                       │
+│ System: espeak-ng, ffmpeg, MeCab, Python 3.11, git, wget, curl       │
+│ Python: fastapi, uvicorn, httpx, soundfile, huggingface_hub           │
+│ NLTK:   punkt, punkt_tab, cmudict, averaged_perceptron_tagger         │
+│ Code:   tts_lab.py, tts_lab_shims.py, tts_lab_config.py, ...          │
+│ Symlink: /opt/arthur/models → /opt/models/tts                         │
+│                                                                       │
+│ Shared by ALL 6 containers. Stored ONCE on disk.                      │
+└──────────┬───────────────┬────────────────────┬──────────────────────┘
+           │               │                    │
+           ▼               ▼                    ▼
+┌──────────────────────┐ ┌──────────────────┐ ┌──────────────────────┐
+│ LAYER 2:             │ │ LAYER 2:         │ │ LAYER 1 (reuse):     │
+│ stack-current  +3.5G │ │ stack-mid  +3G   │ │ orchestrator  ~1.5G  │
+│                      │ │                  │ │                      │
+│ FROM base:latest     │ │ FROM base:latest │ │ FROM base:latest     │
+│ torch 2.12 nightly   │ │ torch 2.10 stable│ │ ORCHESTRATOR_MODE=1  │
+│ transformers 5.12.1  │ │ transformers 4.51 │ │ No ML libraries      │
+│ numpy, protobuf      │ │ numpy, protobuf   │ │ Port 8001            │
+│ onnxruntime          │ │ onnxruntime       │ │                      │
+│ accelerate           │ │ accelerate        │ │ ~1.5 GB total        │
+│ Patches applied      │ │ No patches needed │ │                      │
+│ ~5 GB total          │ │ ~4.5 GB total     │ │                      │
+└──────────┬───────────┘ └────────┬─────────┘ └──────────────────────┘
+           │                      │
+           ▼                      ▼
+┌──────────────────────────────┐ ┌──────────────────────────────────┐
+│ LAYER 3: engine-current      │ │ LAYER 3: engine-mid              │
+│ ~+12 GB → 17 GB total        │ │ ~+8 GB → 12.5 GB total           │
+│                               │ │                                  │
+│ FROM stack-current:latest     │ │ FROM stack-mid:latest            │
+│ 22 engines WITH FIXES BAKED:  │ │ 3 engines:                       │
+│  piper, kokoro, melo, matcha  │ │  qwen3tts (needs ROPE default)  │
+│  chattts, outetts, bark       │ │  VibeVoice (vibevoice package)  │
+│  styletts2, f5tts, dia        │ │  Higgs (AutoModelForSeq2SeqLM)  │
+│  xtts, chatterbox, fishspeech │ │                                  │
+│  chatterboxturbo, omnivoice   │ │ Port 8103                        │
+│  zonos, csm, orpheus, ...     │ │                                  │
+│                               │ │                                  │
+│ MeCab + unidic download       │ │                                  │
+│ zonos backbone copy           │ │                                  │
+│ CSM clone + .pth file         │ │                                  │
+│ huggingface-hub >= 1.0        │ │                                  │
+│ Nightly torch LAST step       │ │                                  │
+│ Port 8101                     │ │                                  │
+└──────────────────────────────┘ └──────────────────────────────────┘
+
+                  ┌──────────────────────────────────┐
+                  │ SGLang (pre-built, 1 engine only) │
+                  │ lmsysorg/sglang-omni:dev  ~8 GB   │
+                  │                                   │
+                  │ S2-Pro:  --model fishaudio/s2-pro │
+                  │   Port 8005                        │
+                  │   ❌ Blocked upstream               │
+                  └──────────────────────────────────┘
 ```
 
-**Total image disk: ~19 GB** (base 1.5 + stack 3.5 + engine 12 + orchestrator 1.5)
+**Total image disk: ~24 GB** (base 1.5 + stack-current 3.5 + stack-mid 3 + engine-current 12 + engine-mid 8 + orchestrator 1.5, minus base sharing)
 
 Compare to the current ad-hoc monolith: **57 GB** (50 GB engine + 7 GB orchestrator, no layer sharing).
 
-### 1.2 Container Map (7 Containers)
+### 1.2 Container Map (6 Containers — 5 custom + 1 pre-built)
 
-| Container | Image | Port | GPU | Status |
-|-----------|-------|:----:|:---:|--------|
-| `orchestrator` | `tts-lab-orchestrator` | 8001 | No | ✅ Ready to build |
-| `engine-current` | `tts-lab-engine-current` | 8101 | Yes | ✅ Ready to build |
-| `engine-legacy` | `tts-lab-engine-legacy` | 8102 | Yes | 🔧 Deferred (user skipped legacy engines) |
-| `orpheus` | `tts-lab-orpheus` | 8002 | Yes | 🔧 Blocked (vllm vs torch nightly) |
-| `vibevoice` | `lmsysorg/sglang-omni:dev` | 8003 | Yes | ❌ Blocked upstream |
-| `higgs` | `lmsysorg/sglang-omni:dev` | 8004 | Yes | ❌ Blocked upstream |
-| `s2pro` | `lmsysorg/sglang-omni:dev` | 8005 | Yes | ❌ Blocked upstream |
+| # | Container | Image | Port | GPU | Engines | Status |
+|---|-----------|-------|:----:|:---:|:-------:|--------|
+| 1 | `orchestrator` | `tts-lab-orchestrator` | 8001 | No | Web UI | ✅ Ready |
+| 2 | `engine-current` | `tts-lab-engine-current` | 8101 | Yes | **15** (piper→zonos) | ✅ Ready |
+| 3 | `engine-mid` | `tts-lab-engine-mid` | 8103 | Yes | **3** (qwen3tts, VibeVoice, Higgs) | 🆕 Ready |
+| 4 | `engine-legacy` | `tts-lab-engine-legacy` | 8102 | Yes | 2 (indextts, parler) | 🔧 Deferred |
+| 5 | `orpheus` | `tts-lab-orpheus` | 8002 | Yes | 1 | 🔧 Blocked |
+| 6 | `s2pro` | SGLang pre-built | 8005 | Yes | 1 (S2-Pro) | ❌ Blocked upstream |
 
 ### 1.3 GPU Strategy
 
