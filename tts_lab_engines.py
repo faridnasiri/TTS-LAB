@@ -164,7 +164,9 @@ def _synth_chattts(inst, text, params):
     if DEVICE == "cuda":
         torch.cuda.empty_cache()
     _last_err = None
-    for _bump in [0, 7, 42, 100]:
+    _max_attempts = 4
+    for _attempt in range(_max_attempts):
+        _bump = [0, 7, 42, 100][_attempt % 4]
         _kw = dict(infer_kw, manual_seed=seed + _bump)
         try:
             out = inst.infer(text, skip_refine_text=skip,
@@ -178,9 +180,31 @@ def _synth_chattts(inst, text, params):
                     torch.cuda.empty_cache()
                 continue
             raise
+        except Exception as _e:
+            # LZMAError / Corrupt input data — speaker embedding cache corrupted
+            _es = str(_e).lower()
+            if "lzma" in _es or "corrupt" in _es:
+                if _attempt == 0:
+                    import shutil, os as _os
+                    _cache_dirs = [
+                        "/opt/models/huggingface/hub/models--2noise--ChatTTS",
+                        "/opt/models/huggingface/hub/models--2Noise--ChatTTS",
+                    ]
+                    for _cd in _cache_dirs:
+                        if _os.path.exists(_cd):
+                            shutil.rmtree(_cd, ignore_errors=True)
+                    # Re-sample speaker after clearing corrupted cache
+                    try:
+                        inst._arthur_spk = inst.sample_random_speaker()
+                        spk_emb = inst._arthur_spk
+                        _kw["spk_emb"] = spk_emb
+                    except Exception:
+                        pass
+                    continue
+            raise
     if _last_err is not None:
         raise RuntimeError(
-            f"ChatTTS narrow() after 4 attempts — GPU state issue: {_last_err}\n"
+            f"ChatTTS narrow() after {_max_attempts} attempts — GPU state issue: {_last_err}\n"
             "Try reloading the engine (DELETE /models/chattts) then retrying."
         ) from _last_err
     arr = np.array(out[0] if isinstance(out, list) else out, dtype=np.float32)
