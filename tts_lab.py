@@ -133,7 +133,21 @@ async def status():
         except Exception:
             gpu_info = {"name": DEVICE_NAME, "vram_total": VRAM_TOTAL_MB}
     elif DEVICE == "remote":
-        gpu_info = {"mode": "orchestrator — engines served by remote containers"}
+        # Query engine server for GPU info (it has torch + CUDA)
+        try:
+            import httpx
+            # Any engine URL points to the same engine server — use PIPER_URL as canonical
+            engine_url = _os.environ.get("PIPER_URL", "http://engine-current:8101")
+            engine_health_url = engine_url + "/health"
+            r = httpx.get(engine_health_url, timeout=5.0)
+            if r.status_code == 200:
+                eng_data = r.json()
+                if eng_data.get("gpu"):
+                    gpu_info = eng_data["gpu"]
+        except Exception:
+            pass
+        if not gpu_info:
+            gpu_info = {"mode": "orchestrator — engines served by remote containers"}
     return JSONResponse({
         "models": models,
         "system": {"total": tot, "used": used, "free": free},

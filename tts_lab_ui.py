@@ -735,6 +735,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .gpu-badge{padding:3px 10px;border-radius:20px;font-size:.72rem;font-weight:700;white-space:nowrap;}
 .gpu-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;}
 .gpu-badge.cpu{background:#3a1e1e;color:#f44336;border:1px solid #f44336;}
+.gpu-badge.remote{background:#1e2e3a;color:#4c9faf;border:1px solid #4c9faf;}
 .main-wrap{display:flex;flex:1;min-height:0;}
 .sidebar{width:240px;min-width:200px;background:var(--panel);border-right:1px solid var(--border);
          overflow-y:auto;display:flex;flex-direction:column;flex-shrink:0;}
@@ -1285,6 +1286,12 @@ async function refreshStatus() {
       const gPct  = (gUsed/gTot*100).toFixed(1);
       document.getElementById('vram-bar').style.width = gPct + '%';
       document.getElementById('vram-text').textContent = `VRAM ${gUsed}/${gTot} MB  (${gPct}%)`;
+      // Update GPU badge if it exists
+      const badge = document.getElementById('gpu-badge');
+      if (badge && d.gpu.name) {
+        badge.className = 'gpu-badge ok';
+        badge.textContent = `🟢 ${d.gpu.name} · ${gTot} MB VRAM`;
+      }
     }
     if (_firstPoll) {
       _firstPoll = false;
@@ -1626,11 +1633,12 @@ def build_page() -> str:
         '</button>'
     )
 
-    gpu_badge = (
-        f'<span class="gpu-badge ok">🟢 {DEVICE_NAME} · {VRAM_TOTAL_MB} MB VRAM</span>'
-        if DEVICE == "cuda" else
-        '<span class="gpu-badge cpu">🔴 CPU only</span>'
-    )
+    if DEVICE == "cuda":
+        gpu_badge = f'<span class="gpu-badge ok" id="gpu-badge">🟢 {DEVICE_NAME} · {VRAM_TOTAL_MB} MB VRAM</span>'
+    elif DEVICE == "remote":
+        gpu_badge = '<span class="gpu-badge remote" id="gpu-badge">🔵 Remote GPU — loading…</span>'
+    else:
+        gpu_badge = '<span class="gpu-badge cpu" id="gpu-badge">🔴 CPU only</span>'
     presets_html = " ".join(
         f'<button class="preset-btn" onclick="setPreset(this.dataset.txt)" data-txt="{t}">{l}</button>'
         for l, t in ARTHUR_PRESETS

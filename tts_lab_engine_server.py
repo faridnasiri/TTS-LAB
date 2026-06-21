@@ -69,6 +69,7 @@ class HealthResponse(BaseModel):
     engines_loaded: int
     current_engine: str | None
     engines: dict[str, dict]
+    gpu: dict | None = None   # GPU info for orchestrator display
 
 
 # ── VRAM management ──────────────────────────────────────────────
@@ -192,6 +193,21 @@ async def health():
             "reason": reason,
         }
 
+    # ── GPU info for orchestrator display ──
+    gpu_info = None
+    try:
+        import torch
+        if torch.cuda.is_available():
+            _free, _total = torch.cuda.mem_get_info()
+            gpu_info = {
+                "name":       torch.cuda.get_device_name(0),
+                "vram_total": _total // 1048576,
+                "vram_used":  (_total - _free) // 1048576,
+                "vram_free":  _free // 1048576,
+            }
+    except Exception:
+        pass
+
     return HealthResponse(
         status="ok",
         stack=_STACK,
@@ -199,6 +215,7 @@ async def health():
         engines_loaded=1 if _current_instance is not None else 0,
         current_engine=_current_engine,
         engines=engines_status,
+        gpu=gpu_info,
     )
 
 
