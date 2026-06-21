@@ -415,7 +415,7 @@ def _synth_dia(inst, text, params):
         text = f"[S1] {text}"
     ref_id   = params.get("audio_prompt_id", "")
     ref_path = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id else None
-    auto_tokens = max(len(text) * 10, 2048)
+    auto_tokens = max(len(text) * 10, 3072)
     ui_val = int(float(params.get("max_tokens", 0)))
     kw = dict(
         max_tokens=ui_val if ui_val > 0 else auto_tokens,
