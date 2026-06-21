@@ -1,0 +1,35 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# Role: monitoring — Health checks and log rotation
+# ═══════════════════════════════════════════════════════════════════════
+
+- name: Create health check script
+  copy:
+    content: |
+      #!/bin/bash
+      # TTS Lab health check — run via cron every 5 minutes
+      STATUS=$(curl -sf -o /dev/null -w '%{http_code}' {{ health_check_url }} 2>/dev/null)
+      if [ "$STATUS" != "200" ]; then
+        echo "[$(date -Iseconds)] TTS Lab health check FAILED — HTTP $STATUS" | logger -t tts-lab
+      fi
+    dest: /usr/local/bin/tts-lab-health-check
+    mode: "0755"
+
+- name: Add health check cron job
+  cron:
+    name: "TTS Lab health check"
+    minute: "*/5"
+    job: "/usr/local/bin/tts-lab-health-check"
+    user: root
+
+- name: Configure Docker log rotation (already done in docker role via daemon.json)
+  debug:
+    msg: "Docker log rotation: max-size={{ docker_log_max_size }}, max-file={{ docker_log_max_file }}"
+
+- name: Report monitoring setup
+  debug:
+    msg: |
+      ✅ Monitoring configured:
+         - Health check: {{ health_check_url }} (every 5 min via cron)
+         - Docker log rotation: {{ docker_log_max_size }} max, {{ docker_log_max_file }} files
+         - Logs: journalctl -u cron | grep tts-lab

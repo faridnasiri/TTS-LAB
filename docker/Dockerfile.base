@@ -62,6 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11-dev \
     python3.11-venv \
     python3-pip python-is-python3 \
+    mecab libmecab-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Verify espeak-ng data is at the path phonemizer expects
@@ -86,14 +87,16 @@ RUN pip install --no-cache-dir \
     "psutil>=5.9.0" \
     "requests>=2.28.0" \
     "soundfile>=0.12.1" \
-    "huggingface_hub>=0.20.0" nltk
+    "huggingface_hub>=1.0" nltk
 
 # ── NLTK data (needed by MeloTTS, OpenVoice v2) ──────────────────
 # Downloaded once here so engine containers don't re-download.
-RUN python3 -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('cmudict', quiet=True)"
+RUN python3 -c "import nltk; nltk.download('averaged_perceptron_tagger_eng', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('cmudict', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('punkt', quiet=True)"
 
 # ── Application code ─────────────────────────────────────────────
 WORKDIR /opt/arthur
+# Symlink model directory — code expects /opt/arthur/models, ONNX files live at /opt/models/tts
+RUN mkdir -p /opt/models/tts && rm -rf /opt/arthur/models && ln -sf /opt/models/tts /opt/arthur/models
 COPY tts_lab.py .
 COPY tts_lab_shims.py .
 COPY tts_lab_config.py .

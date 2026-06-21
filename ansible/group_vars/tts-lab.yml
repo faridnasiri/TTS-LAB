@@ -1,0 +1,41 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# TTS Lab — Ansible Group Variables
+# ═══════════════════════════════════════════════════════════════════════
+#
+# These variables apply to all hosts in the tts-lab group.
+# Override per-host in host_vars/ if needed.
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── Data disk ──────────────────────────────────────────────────────
+# The secondary disk for model storage. Set to empty string if no
+# secondary disk exists (models will go on the OS disk instead).
+models_disk_device: /dev/sdb1          # Change to /dev/vdb1 for cloud VMs
+models_mount_point: /opt/models
+models_disk_fstype: ext4
+
+# ── GPU ───────────────────────────────────────────────────────────
+# Set to true to enable GPU containers (orpheus, SGLang).
+# Requires NVIDIA GPU + NVIDIA Container Toolkit installed.
+enable_gpu_profiles: true
+
+# ── Docker ────────────────────────────────────────────────────────
+docker_compose_file: /opt/arthur/docker-compose.yml
+docker_compose_project: tts-lab
+ghcr_registry: ghcr.io
+ghcr_image_prefix: "{{ lookup('env', 'GITHUB_REPOSITORY') | default('faridnasiri/tts-lab', true) }}"
+
+# ── Hugging Face ──────────────────────────────────────────────────
+# Token for gated model access (CSM, Orpheus). Set via environment
+# variable before running: export HF_TOKEN=hf_...
+hf_token: "{{ lookup('env', 'HF_TOKEN') | default('', true) }}"
+
+# ── Paths ─────────────────────────────────────────────────────────
+arthur_dir: /opt/arthur
+reference_voices_dir: /opt/arthur/reference_voices
+upload_dir: /tmp/tts_uploads
+
+# ── Logging ───────────────────────────────────────────────────────
+docker_log_max_size: "10m"
+docker_log_max_file: "3"
+health_check_url: "http://localhost:8001/status"

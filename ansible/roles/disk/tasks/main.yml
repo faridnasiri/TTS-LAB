@@ -1,0 +1,67 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# Role: disk — Mount data disk at /opt/models
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Checks for a secondary disk, formats it if new, mounts at /opt/models,
+# and creates required subdirectories. Idempotent — skips if already mounted.
+# ═══════════════════════════════════════════════════════════════════════
+
+- name: Check if data disk device exists
+  stat:
+    path: "{{ models_disk_device }}"
+  register: disk_device
+
+- name: Create filesystem on data disk (only if new/unformatted)
+  filesystem:
+    fstype: "{{ models_disk_fstype }}"
+    dev: "{{ models_disk_device }}"
+  when: disk_device.stat.exists
+  register: mkfs_result
+
+- name: Create mount point
+  file:
+    path: "{{ models_mount_point }}"
+    state: directory
+    mode: "0755"
+
+- name: Mount data disk
+  mount:
+    path: "{{ models_mount_point }}"
+    src: "{{ models_disk_device }}"
+    fstype: "{{ models_disk_fstype }}"
+    state: mounted
+    opts: defaults,nofail
+  when: disk_device.stat.exists
+
+- name: Create model subdirectories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+  loop:
+    - "{{ models_mount_point }}/tts"
+    - "{{ models_mount_point }}/huggingface"
+    - "{{ models_mount_point }}/cache"
+
+- name: Create upload and reference voice directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0777"
+  loop:
+    - "{{ upload_dir }}"
+    - "{{ reference_voices_dir }}"
+
+- name: Report disk status
+  debug:
+    msg: |
+      Data disk: {{ models_disk_device }}
+      Mount point: {{ models_mount_point }}
+      {% if disk_device.stat.exists %}
+      Disk found and mounted.
+      {% else %}
+      Data disk {{ models_disk_device }} not found — using OS disk for /opt/models.
+      {% endif %}

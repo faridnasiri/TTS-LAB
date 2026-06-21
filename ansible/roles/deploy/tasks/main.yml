@@ -1,0 +1,72 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# Role: deploy — Pull images and start containers
+# ═══════════════════════════════════════════════════════════════════════
+
+- name: Create application directory
+  file:
+    path: "{{ arthur_dir }}"
+    state: directory
+    mode: "0755"
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+
+- name: Copy docker-compose.yml to VM
+  copy:
+    src: "{{ playbook_dir }}/../docker-compose.yml"
+    dest: "{{ docker_compose_file }}"
+    mode: "0644"
+
+- name: Create .env file with HF token
+  copy:
+    content: |
+      HF_TOKEN={{ hf_token }}
+    dest: "{{ arthur_dir }}/.env"
+    mode: "0600"
+  when: hf_token | length > 0
+
+- name: Login to GitHub Container Registry
+  command: "docker login {{ ghcr_registry }} -u {{ lookup('env', 'GITHUB_ACTOR') | default('faridnasiri', true) }} --password-stdin"
+  args:
+    stdin: "{{ lookup('env', 'GITHUB_TOKEN') | default(lookup('env', 'GHCR_TOKEN'), true) }}"
+  changed_when: false
+  failed_when: false
+  when: lookup('env', 'GITHUB_TOKEN') | default('', true) | length > 0 or lookup('env', 'GHCR_TOKEN') | default('', true) | length > 0
+
+- name: Pull latest Docker images
+  command: docker compose -f {{ docker_compose_file }} pull
+  register: pull_result
+  changed_when: "'Pulling' in pull_result.stderr or 'Downloaded' in pull_result.stderr"
+
+- name: Stop old systemd service (port 8001 conflict)
+  systemd:
+    name: arthur-lab
+    state: stopped
+    enabled: no
+  failed_when: false
+
+- name: Start TTS Lab containers
+  command: docker compose -f {{ docker_compose_file }} --profile mid up -d
+  register: compose_up
+  changed_when: "'Creating' in compose_up.stderr or 'Starting' in compose_up.stderr"
+
+- name: Wait for orchestrator to be healthy
+  uri:
+    url: "{{ health_check_url }}"
+    status_code: 200
+  register: health_result
+  retries: 20
+  delay: 5
+  until: health_result is success
+  failed_when: false
+
+- name: Report deployment status
+  debug:
+    msg: |
+      {% if health_result is success %}
+      ✅ TTS Lab is running — {{ health_check_url }}
+      {% else %}
+      ⚠️  Containers started but health check not passing yet. Check: docker compose ps
+      {% endif %}
+      docker compose ps output:
+      {{ compose_up.stdout }}

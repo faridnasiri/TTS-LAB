@@ -37,13 +37,11 @@ def _build_remote_urls() -> Dict[str, str]:
     urls: Dict[str, str] = {}
 
     for name in MODEL_ORDER:
-        # SGLang engines have special env var names
-        if name == "vibevoice":
-            url = os.environ.get("VIBEVOICE_SGLANG_URL", "")
-        elif name == "higgs":
-            url = os.environ.get("HIGGS_SGLANG_URL", "")
-        elif name == "s2pro":
+        # Only S2-Pro genuinely needs SGLang — special env var name
+        if name == "s2pro":
             url = os.environ.get("S2PRO_SGLANG_URL", "")
+        # VibeVoice and Higgs are now local models in engine-mid container
+        # — use standard {NAME}_URL env vars
         else:
             url = os.environ.get(f"{name.upper()}_URL", "")
 

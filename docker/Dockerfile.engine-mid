@@ -1,0 +1,54 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 3 — engine-mid  (3 engines on torch 2.10 stable + tf 4.x)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Middle-ground container for engines that need transformers 4.x
+# but can't use the legacy stack (torch 1.13 too old).
+#
+# Engines:
+#   qwen3tts  — needs ROPE_INIT_FUNCTIONS["default"] (removed in tf 5.x)
+#   VibeVoice — via vibevoice pip package (conflicts with tf 5.12)
+#   Higgs     — via AutoModelForSeq2SeqLM (architecture in tf 4.x)
+#
+# These run as LOCAL models — no SGLang needed.
+#
+# SIZE: ~12.5 GB (base 1.5 + stack 3.0 + engines 8.0)
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-stack-mid:latest
+LABEL org.opencontainers.image.title="TTS Lab — Engine Server (mid stack)"
+LABEL org.opencontainers.image.description="3 engines on torch 2.10 stable + transformers 4.x"
+LABEL tts-lab.tier="3-engine"
+LABEL tts-lab.stack="mid"
+
+RUN pip install --no-cache-dir --upgrade pip
+
+# ── qwen3tts ─────────────────────────────────────────────────────
+# Needs ROPE_INIT_FUNCTIONS["default"] which exists in transformers 4.x
+# but was removed in 5.x. Works natively with this stack.
+RUN pip install --no-cache-dir qwen-tts
+
+# ── VibeVoice 1.5B ───────────────────────────────────────────────
+# The vibevoice pip package provides modeling code (modeling_vibevoice.py,
+# configuration_vibevoice.py, etc.) that registers with transformers 4.x.
+# Loaded via: VibeVoiceModel.from_pretrained("microsoft/VibeVoice-1.5B")
+RUN pip install --no-cache-dir vibevoice
+
+# ── Higgs Audio v3 4B ────────────────────────────────────────────
+# Loaded via standard transformers API:
+#   AutoModelForSeq2SeqLM.from_pretrained("bosonai/higgs-audio-v3-tts-4b")
+# No extra pip package needed — the architecture is compatible with tf 4.x.
+# Model downloads on first use from Hugging Face.
+
+# ── Shared audio processing ─────────────────────────────────────
+RUN pip install --no-cache-dir phonemizer scipy librosa soundfile
+
+# Engine server (same code, different stack)
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_engine_server.py /opt/arthur/
+
+EXPOSE 8103
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
+    CMD curl -f http://localhost:8103/health || exit 1
+CMD ["python3", "/opt/arthur/tts_lab_engine_server.py", "--port", "8103", "--stack", "mid"]

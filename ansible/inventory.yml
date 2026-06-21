@@ -1,0 +1,22 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# TTS Lab — Ansible Inventory
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Defines which VMs to manage. For a single VM deployment, this is
+# just one host. For multi-GPU or multi-VM, add more hosts here.
+#
+# Usage:
+#   ansible-playbook -i inventory.yml site.yml
+#
+# To test connection:
+#   ansible -i inventory.yml tts-lab -m ping
+# ═══════════════════════════════════════════════════════════════════════
+
+tts-lab:
+  hosts:
+    vm:
+      ansible_host: 192.168.0.87
+      ansible_user: arthur
+      ansible_ssh_private_key_file: ~/.ssh/id_arthur_vm
+      ansible_python_interpreter: /usr/bin/python3

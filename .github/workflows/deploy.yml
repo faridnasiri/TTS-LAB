@@ -1,0 +1,99 @@
+name: Deploy to VM
+
+# ═══════════════════════════════════════════════════════════════════
+# Deploys the latest images from GHCR to the production VM.
+#
+# Triggered:
+#   - Manually (workflow_dispatch) — pick which containers to update
+#   - Automatically when a release is published
+#
+# What it does:
+#   1. SSH into the VM
+#   2. Pull latest images from GHCR
+#   3. Restart containers with docker compose up -d
+#   4. Run health check
+# ═══════════════════════════════════════════════════════════════════
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Docker Compose profiles to enable'
+        required: false
+        default: 'mid'
+        type: choice
+        options:
+          - ''
+          - 'mid'
+          - 'mid,gpu'
+      containers:
+        description: 'Specific containers to update (comma-separated, empty = all)'
+        required: false
+        default: ''
+        type: string
+  release:
+    types: [published]
+
+env:
+  VM_HOST: ${{ secrets.VM_HOST }}
+  VM_USER: ${{ secrets.VM_USER }}
+  VM_SSH_KEY: ${{ secrets.VM_SSH_KEY }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    if: secrets.VM_HOST != ''  # Only run if VM secrets are configured
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ env.VM_SSH_KEY }}" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          echo "Host tts-lab-vm
+            HostName ${{ env.VM_HOST }}
+            User ${{ env.VM_USER }}
+            IdentityFile ~/.ssh/vm_key
+            StrictHostKeyChecking no
+            ConnectTimeout 30" > ~/.ssh/config
+
+      - name: Copy updated docker-compose.yml to VM
+        run: |
+          scp docker-compose.yml ${{ env.VM_USER }}@${{ env.VM_HOST }}:/opt/arthur/docker-compose.yml
+
+      - name: Pull latest images
+        run: |
+          ssh ${{ env.VM_USER }}@${{ env.VM_HOST }} "
+            cd /opt/arthur
+            docker login ghcr.io -u ${{ github.actor }} --password-stdin <<< '${{ secrets.GITHUB_TOKEN }}'
+            docker compose -f docker-compose.yml pull ${{ github.event.inputs.containers || '' }}
+          "
+
+      - name: Restart containers
+        run: |
+          PROFILE_FLAG=""
+          if [ -n "${{ github.event.inputs.profile }}" ]; then
+            PROFILE_FLAG="--profile ${{ github.event.inputs.profile }}"
+          fi
+          ssh ${{ env.VM_USER }}@${{ env.VM_HOST }} "
+            cd /opt/arthur
+            sudo systemctl stop arthur-lab 2>/dev/null || true
+            docker compose -f docker-compose.yml \$PROFILE_FLAG up -d --remove-orphans
+          "
+
+      - name: Health check
+        run: |
+          sleep 30
+          for i in 1 2 3 4 5; do
+            STATUS=$(ssh ${{ env.VM_USER }}@${{ env.VM_HOST }} "curl -sf -o /dev/null -w '%{http_code}' http://localhost:8001/status 2>/dev/null" || echo "000")
+            if [ "$STATUS" = "200" ]; then
+              echo "✅ Health check passed (HTTP $STATUS)"
+              exit 0
+            fi
+            echo "Waiting for health check... attempt $i (HTTP $STATUS)"
+            sleep 10
+          done
+          echo "❌ Health check failed after 5 attempts"
+          exit 1

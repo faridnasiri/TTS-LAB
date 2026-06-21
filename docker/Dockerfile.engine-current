@@ -1,25 +1,94 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 3 — engine-current  (22 engines on torch nightly + tf 5.12)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Every fix discovered during ad-hoc testing is baked in as a RUN step.
+# No docker cp, no hotfixes, no __pycache__ issues.
+#
+# SIZE: ~17 GB (base 1.5 + stack 3.5 + engines 12)
+# ═══════════════════════════════════════════════════════════════════
+
 FROM tts-lab-stack-current:latest
+LABEL org.opencontainers.image.title="TTS Lab — Engine Server (current stack)"
+LABEL org.opencontainers.image.description="22 engines on torch 2.12 nightly + transformers 5.12"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="current"
+
 RUN pip install --no-cache-dir --upgrade pip
+
+# ── Lightweight ONNX engines ─────────────────────────────────────
 RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
-RUN pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git
-RUN pip install --no-cache-dir --no-deps styletts2 && pip install --no-cache-dir f5-tts>=0.3.4
-RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0
-RUN pip install --no-cache-dir outetts>=0.3.0
+
+# ── MeloTTS + MeCab ──────────────────────────────────────────────
+# melo and xtts need MeCab C library + Python bindings + unidic dictionary
+RUN pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git \
+    mecab-python3 unidic
+RUN python3 -m unidic download
+
+# ── StyleTTS2 — needs OLD langchain (<0.3.0) ─────────────────────
+# langchain 1.x removed text_splitter module.
+# --no-deps prevents styletts2 from forcing old accelerate/transformers
+RUN pip install --no-cache-dir --no-deps styletts2
+RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
+
+# ── Standard pip engines ─────────────────────────────────────────
+RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
 RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
-RUN pip install --no-cache-dir coqui-tts
+
+# XTTS — coqui-tts installs but won't synthesize with torch nightly (torchcodec issue)
+RUN pip install --no-cache-dir coqui-tts || true
+
+# ── Fish Speech — needs lightning (NOT pytorch_lightning) ────────
+# fish-speech imports from "lightning", not "pytorch_lightning"
+# --no-deps because it pins old versions of everything
 RUN pip install --no-cache-dir --no-deps fish-speech
-RUN pip install --no-cache-dir qwen-tts
+RUN pip install --no-cache-dir lightning loralib cachetools kui \
+    silero-vad opencc-python-reimplemented pyrootutils
+
 RUN pip install --no-cache-dir omnivoice
+
+# ── Dia 1.6B ────────────────────────────────────────────────────
 RUN pip install --no-cache-dir git+https://github.com/nari-labs/dia.git
+
+# ── Zonos — pip wheel is missing backbone/ subpackage ────────────
+# The git repo has it, the pip wheel doesn't. Copy it in.
 RUN pip install --no-cache-dir git+https://github.com/Zyphra/Zonos.git
+RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    git clone --depth 1 https://github.com/Zyphra/Zonos.git /tmp/zonos-src && \
+    cp -r /tmp/zonos-src/zonos/backbone "$SITE_PKGS/zonos/backbone" && \
+    rm -rf /tmp/zonos-src
+
+# ── CSM — needs git clone + heavy deps ───────────────────────────
+RUN git clone https://github.com/SesameAILabs/csm.git /opt/models/csm
+RUN pip install --no-cache-dir torchtune torchao moshi silentcipher
+RUN echo /opt/models/csm > $(python3 -c "import site; print(site.getsitepackages()[0])")/csm-path.pth
+
+# Orpheus — install for availability probe, runs in separate container
+RUN pip install --no-cache-dir orpheus-speech || true
+
+# ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
-RUN pip install --no-cache-dir --only-binary av av && pip install --no-cache-dir git+https://github.com/myshell-ai/OpenVoice.git || echo 'OpenVoice skipped'
-# CosyVoice and ManaTTS — complex builds, skipped for now
-# Will add in a follow-up with proper build deps
-RUN pip install --no-cache-dir --upgrade torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128 && pip install --no-cache-dir "protobuf>=5.0,<6.0"
+
+# ═══════════════════════════════════════════════════════════════════
+# CRITICAL: Reinstall torch nightly as the FINAL step.
+# Many engine packages above install torch as a dependency,
+# downgrading our nightly build. This restores it.
+# ═══════════════════════════════════════════════════════════════════
+RUN pip install --no-cache-dir --upgrade torch torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
+
+# Pin versions that engine packages may have changed
+RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
+
+# Delete broken Dia-1.6B model cache — only keep Dia-1.6B-0626
+RUN rm -rf /opt/models/huggingface/hub/models--nari-labs--Dia-1.6B
+
+# Engine server code (with VRAM leak fix, auto-retry, GPU health endpoint)
 COPY tts_lab_shims.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
+
 EXPOSE 8101
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=180s \
+    CMD curl -f http://localhost:8101/health || exit 1
 CMD ["python3", "/opt/arthur/tts_lab_engine_server.py", "--port", "8101", "--stack", "current"]

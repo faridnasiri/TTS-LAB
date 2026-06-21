@@ -1,0 +1,33 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# TTS Lab — Ansible Site Playbook
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Provisions a fresh Ubuntu 22.04 VM into a fully running TTS Lab.
+# All roles are idempotent — safe to re-run any number of times.
+#
+# Usage:
+#   ansible-playbook -i inventory.yml site.yml
+#
+#   # Skip disk setup (already done):
+#   ansible-playbook -i inventory.yml site.yml --skip-tags disk
+#
+#   # Deploy only (code/images changed):
+#   ansible-playbook -i inventory.yml site.yml --tags deploy
+# ═══════════════════════════════════════════════════════════════════════
+
+- name: Provision TTS Lab VM
+  hosts: tts-lab
+  become: yes
+  vars_files:
+    - group_vars/tts-lab.yml
+
+  roles:
+    - role: docker
+      tags: [docker, provision]
+    - role: disk
+      tags: [disk, provision]
+    - role: deploy
+      tags: [deploy]
+    - role: monitoring
+      tags: [monitoring]

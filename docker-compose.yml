@@ -89,15 +89,16 @@ services:
       MATCHA_URL: http://engine-current:8101
       MANATTS_URL: http://engine-current:8101
       CSM_URL: http://engine-current:8101
-      QWEN3TTS_URL: http://engine-current:8101
+      # Middle-ground engines (transformers 4.x + torch 2.x)
+      QWEN3TTS_URL: http://engine-mid:8103
+      VIBEVOICE_URL: http://engine-mid:8103
+      HIGGS_URL: http://engine-mid:8103
       # Legacy engines
       INDEXTTS_URL: http://engine-legacy:8102
       PARLER_URL: http://engine-legacy:8102
       # Orpheus
       ORPHEUS_URL: http://orpheus:8002
-      # SGLang engines (special URL format — already configured in dispatch)
-      VIBEVOICE_SGLANG_URL: http://vibevoice:8000/v1/audio/speech
-      HIGGS_SGLANG_URL: http://higgs:8000/v1/audio/speech
+      # SGLang engines — only S2-Pro genuinely needs SGLang
       S2PRO_SGLANG_URL: http://s2pro:8000/v1/audio/speech
     restart: unless-stopped
     healthcheck:
@@ -110,6 +111,7 @@ services:
       - tts-lab-net
     depends_on:
       - engine-current
+      - engine-mid
       - engine-legacy
 
   # ═══════════════════════════════════════════════════════════════
@@ -136,7 +138,32 @@ services:
       - tts-lab-net
 
   # ═══════════════════════════════════════════════════════════════
-  # Engine-Legacy — 3 engines on torch 1.13 + tf 4.46
+  # Engine-Mid — 3 engines on torch 2.10 stable + tf 4.x
+  # ═══════════════════════════════════════════════════════════════
+  engine-mid:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.engine-mid
+    image: tts-lab-engine-mid:latest
+    container_name: tts-lab-engine-mid
+    <<: *model-volume
+    <<: *gpu-config
+    environment:
+      <<: *common-env
+    restart: unless-stopped
+    profiles:
+      - mid
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8103/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Engine-Legacy — 2 engines on torch 1.13 + tf 4.46
   # ═══════════════════════════════════════════════════════════════
   engine-legacy:
     build:

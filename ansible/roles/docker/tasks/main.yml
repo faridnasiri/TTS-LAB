@@ -1,0 +1,104 @@
+---
+# ═══════════════════════════════════════════════════════════════════════
+# Role: docker — Install Docker Engine + NVIDIA Container Toolkit
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Installs Docker CE and NVIDIA Container Toolkit on Ubuntu 22.04.
+# Configures log rotation and adds the ansible user to the docker group.
+# All tasks are idempotent — safe to re-run.
+# ═══════════════════════════════════════════════════════════════════════
+
+- name: Install prerequisite packages
+  apt:
+    name:
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+    state: present
+    update_cache: yes
+
+- name: Add Docker GPG key
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+
+- name: Add Docker apt repository
+  apt_repository:
+    repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+
+- name: Install Docker Engine
+  apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
+    update_cache: yes
+
+- name: Ensure docker service is running
+  systemd:
+    name: docker
+    state: started
+    enabled: yes
+
+- name: Add ansible user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: yes
+
+- name: Add NVIDIA Container Toolkit GPG key
+  apt_key:
+    url: https://nvidia.github.io/libnvidia-container/gpgkey
+    state: present
+
+- name: Add NVIDIA Container Toolkit apt repository
+  apt_repository:
+    repo: "deb https://nvidia.github.io/libnvidia-container/stable/deb/$(ARCH) /"
+    state: present
+
+- name: Install NVIDIA Container Toolkit
+  apt:
+    name: nvidia-container-toolkit
+    state: present
+    update_cache: yes
+
+- name: Configure Docker daemon (NVIDIA runtime + log rotation)
+  copy:
+    content: |
+      {
+        "default-runtime": "nvidia",
+        "runtimes": {
+          "nvidia": {
+            "path": "nvidia-container-runtime",
+            "runtimeArgs": []
+          }
+        },
+        "log-driver": "json-file",
+        "log-opts": {
+          "max-size": "{{ docker_log_max_size }}",
+          "max-file": "{{ docker_log_max_file }}"
+        }
+      }
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+  notify: restart docker
+
+- name: Flush handlers (restart docker if config changed)
+  meta: flush_handlers
+
+- name: Verify GPU is available in Docker
+  command: docker run --rm --gpus all nvidia/cuda:12.8.2-base-ubuntu22.04 nvidia-smi
+  register: gpu_check
+  changed_when: false
+  failed_when: false
+  when: enable_gpu_profiles | bool
+
+- name: Report GPU status
+  debug:
+    msg: "{{ 'GPU available in Docker' if gpu_check.rc == 0 else 'GPU NOT detected in Docker — check nvidia-container-toolkit installation' }}"
+  when: enable_gpu_profiles | bool

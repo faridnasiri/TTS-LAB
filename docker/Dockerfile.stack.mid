@@ -1,0 +1,40 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 2 — tts-lab-stack-mid  (Middle-Ground ML Stack)
+# ═══════════════════════════════════════════════════════════════════
+#
+# For engines that need transformers 4.x + torch 2.x stable.
+# These engines cannot use stack-current (transformers 5.x broke ROPE
+# init, model config parsing changed) or stack-legacy (torch 1.13 too old).
+#
+# Engines: qwen3tts, VibeVoice-1.5B, Higgs Audio v3 4B
+#
+# KEY DIFFERENCES from stack-current:
+#   - torch 2.10 STABLE (cu121) — not nightly, these engines predate sm_120
+#   - transformers 4.x — before ROPE API changed (has ROPE_INIT_FUNCTIONS["default"])
+#   - No patches needed — transformers 4.x APIs are stable
+#
+# SIZE: ~4.5 GB (base 1.5 + stack 3.0)
+# REBUILT: When torch or transformers needs updating for mid engines
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-base:latest
+LABEL org.opencontainers.image.title="TTS Lab — ML Stack mid"
+LABEL org.opencontainers.image.description="torch 2.10 stable, transformers 4.x, CUDA 12.1"
+LABEL tts-lab.tier="2-stack"
+LABEL tts-lab.stack-version="mid"
+
+# torch 2.10 stable (NOT nightly — these engines don't need Blackwell sm_120 support)
+RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# transformers 4.x — before ROPE init API changed in 5.x.
+# qwen3tts needs ROPE_INIT_FUNCTIONS["default"] which was removed in 5.x.
+# VibeVoice and Higgs architectures are also compatible with 4.x when
+# the vibevoice pip package provides the modeling code.
+RUN pip install --no-cache-dir \
+    "transformers>=4.50,<5.0" \
+    "accelerate>=0.30.0" \
+    "onnxruntime>=1.18.0" \
+    "safetensors>=0.4.0" \
+    numpy \
+    protobuf
