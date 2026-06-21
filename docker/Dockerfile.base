@@ -87,7 +87,8 @@ RUN pip install --no-cache-dir \
     "psutil>=5.9.0" \
     "requests>=2.28.0" \
     "soundfile>=0.12.1" \
-    "huggingface_hub>=1.0" nltk
+    "huggingface_hub>=1.0" \
+    "python-multipart>=0.0.9" nltk
 
 # ── NLTK data (needed by MeloTTS, OpenVoice v2) ──────────────────
 # Downloaded once here so engine containers don't re-download.

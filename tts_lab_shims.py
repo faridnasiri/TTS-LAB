@@ -448,9 +448,11 @@ except Exception:
         pass
 
 # ── transformers.modeling_layers (added in 4.54, needed by qwen_tts) ─────────
+# Wrapped broadly — the import chain pulls in torchvision which may be
+# incompatible with torch nightly (torchvision::nms operator missing).
 try:
     import transformers.modeling_layers  # noqa
-except ImportError:
+except (ImportError, RuntimeError, OSError, ModuleNotFoundError):
     import torch.nn as _nn2
     _ml = types.ModuleType("transformers.modeling_layers")
     class _GradCkptLayer(_nn2.Module):
