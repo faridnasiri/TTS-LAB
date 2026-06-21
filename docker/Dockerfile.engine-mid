@@ -45,8 +45,11 @@ RUN pip install --no-cache-dir vibevoice
 RUN pip install --no-cache-dir phonemizer scipy librosa soundfile
 
 # Engine server (same code, different stack)
+# Also copy engines + dispatch — these change more often than base image code
 COPY tts_lab_shims.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
 
 EXPOSE 8103
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \

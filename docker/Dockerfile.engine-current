@@ -87,8 +87,11 @@ RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
 RUN rm -rf /opt/models/huggingface/hub/models--nari-labs--Dia-1.6B
 
 # Engine server code (with VRAM leak fix, auto-retry, GPU health endpoint)
+# Also copy engines + dispatch — these change more often than base image code
 COPY tts_lab_shims.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
 
 EXPOSE 8101
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=180s \
