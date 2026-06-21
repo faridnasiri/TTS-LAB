@@ -123,3 +123,8 @@ ENV HF_HOME=/opt/models/huggingface
 ENV XDG_CACHE_HOME=/opt/models/cache
 ENV TOKENIZERS_PARALLELISM=false
 ENV PYTHONUNBUFFERED=1
+# CUDA 13 NVRTC libraries are installed by torch nightly at:
+# /usr/local/lib/python3.10/dist-packages/nvidia/cu13/lib/
+# Add to ldconfig so torch can find libnvrtc-builtins.so.13.0
+RUN echo /usr/local/lib/python3.10/dist-packages/nvidia/cu13/lib >> /etc/ld.so.conf.d/nvidia-cu13.conf && \
+    ldconfig
