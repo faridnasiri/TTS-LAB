@@ -399,13 +399,27 @@ def _load_dia():
     for mid in ["nari-labs/Dia-1.6B-0626", "nari-labs/Dia-1.6B"]:
         for _try in [{"device": DEVICE}, {}]:
             try:
-                return Dia.from_pretrained(mid, compute_dtype=_dtype, **_try)
+                inst = Dia.from_pretrained(mid, compute_dtype=_dtype, **_try)
+                # Monkey-patch DecoderInferenceState.new to enforce min cache size.
+                # Without this, the dia library sometimes creates KV caches with
+                # max_audio_len = head_dim (128) instead of max_tokens, causing
+                # RuntimeError in cache.prefill (540/680 tokens vs 128 slots).
+                import dia.state as _dia_state
+                _orig_new = _dia_state.DecoderInferenceState.new
+                @classmethod
+                def _patched_new(cls, *a, **kw):
+                    mt = kw.get("max_generation_length")
+                    if mt is not None and mt < 2048:
+                        kw = dict(kw, max_generation_length=2048)
+                    return _orig_new.__func__(cls, *a, **kw)
+                _dia_state.DecoderInferenceState.new = _patched_new
+                return inst
             except Exception as e:
                 _es = str(e).lower()
                 if "decoder_config" in _es or "encoder_config" in _es:
-                    continue  # wrong model version, try next
+                    continue
                 if mid != "nari-labs/Dia-1.6B":
-                    continue  # may be transient, try next variant
+                    continue
                 if "validation error" in _es:
                     continue
                 raise
