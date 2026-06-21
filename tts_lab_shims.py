@@ -402,7 +402,19 @@ try:
     def _load_with_torchcodec_fallback(path, *args, **kwargs):
         import soundfile as _sf
         import torch as _torch
-        data, sr = _sf.read(str(path), dtype="float32", always_2d=True)
+        import io as _io
+        # soundfile.read() can't handle BytesIO via str() — use the file object directly
+        if isinstance(path, _io.BytesIO):
+            path.seek(0)
+            data, sr = _sf.read(path, dtype="float32", always_2d=True)
+        elif isinstance(path, (str, bytes)):
+            data, sr = _sf.read(path, dtype="float32", always_2d=True)
+        else:
+            # Try as file-like object, fall back to str()
+            try:
+                data, sr = _sf.read(path, dtype="float32", always_2d=True)
+            except Exception:
+                data, sr = _sf.read(str(path), dtype="float32", always_2d=True)
         # soundfile returns (samples, channels) — transpose to (channels, samples)
         return _torch.from_numpy(data.T), sr
     _ta.load_with_torchcodec = _load_with_torchcodec_fallback
