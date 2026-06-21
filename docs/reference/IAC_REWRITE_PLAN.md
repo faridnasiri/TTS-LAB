@@ -81,7 +81,53 @@ Compare to the current ad-hoc monolith: **57 GB** (50 GB engine + 7 GB orchestra
 
 ### 1.3 GPU Strategy
 
-The RTX 5060 Ti has 16 GB VRAM. The engine-current container uses lazy-load: only ONE engine in VRAM at a time (~300 MB to 12 GB depending on model). SGLang containers (~7-11 GB each) would need to stop engine-current first. Enable with `docker compose --profile sglang up -d vibevoice` when needed.
+The RTX 5060 Ti has 16 GB VRAM. The engine-current container uses lazy-load: only ONE engine in VRAM at a time (~300 MB to 12 GB depending on model). The engine-mid container also uses lazy-load. Only ONE engine-mid engine can be loaded at a time alongside engine-current.
+
+**VRAM budgeting with engine-mid:**
+- engine-current (lazy, 1 engine): ~300 MB – 12 GB
+- engine-mid (lazy, 1 engine): ~3 GB (qwen3tts), ~6 GB (VibeVoice), ~9 GB (Higgs)
+- Total with both: can fit a light engine-current engine + one engine-mid engine (13-15 GB of 16 GB)
+
+### 1.4 engine-mid — The Middle-Ground Stack (NEW)
+
+Three engines need transformers 4.x but can't use the legacy stack (torch 1.13 is too old for them). They also run as **local models** — no SGLang needed.
+
+| Engine | Why Not engine-current | Why Not engine-legacy | Solution |
+|--------|----------------------|----------------------|----------|
+| **qwen3tts** | transformers 5.x removed `ROPE_INIT_FUNCTIONS["default"]` | torch 1.13 too old | transformers 4.x + torch 2.x |
+| **VibeVoice** | `vibevoice` pip package conflicts with tf 5.12.1 | torch 1.13 too old | tf 4.x + `vibevoice` package |
+| **Higgs** | `higgs` architecture not in tf 5.12 | torch 1.13 too old | tf 4.x with `higgs` support |
+
+**What about S2-Pro?** S2-Pro is the only engine that truly needs SGLang — it's deeply integrated with paged KV cache, RadixAttention, and CUDA graph replay. It remains blocked until SGLang updates.
+
+**The engine-mid stack:**
+```
+Layer 1: tts-lab-base (~1.5 GB) ← SAME base, shared
+Layer 2: tts-lab-stack-mid (~+3 GB → ~4.5 GB total)
+  FROM tts-lab-base:latest
+  torch 2.10.0 stable (cu121)
+  transformers 4.51.3
+
+Layer 3: tts-lab-engine-mid (~+8 GB → ~12.5 GB total)
+  FROM tts-lab-stack-mid:latest
+  qwen-tts, vibevoice, higgs
+  Port 8103
+```
+
+**New Dockerfiles needed:**
+- `docker/Dockerfile.stack.mid` — torch 2.10 stable + transformers 4.x
+- `docker/Dockerfile.engine-mid` — FROM stack.mid, 3 engines
+
+**Updated Container Map:**
+
+| Container | Image | Port | GPU | Status |
+|-----------|-------|:----:|:---:|--------|
+| orchestrator | `tts-lab-orchestrator` | 8001 | No | ✅ |
+| engine-current | `tts-lab-engine-current` | 8101 | Yes | ✅ (15 engines) |
+| **engine-mid** | **`tts-lab-engine-mid`** | **8103** | **Yes** | **🆕 (3 engines)** |
+| engine-legacy | `tts-lab-engine-legacy` | 8102 | Yes | 🔧 Deferred |
+| orpheus | `tts-lab-orpheus` | 8002 | Yes | 🔧 Blocked |
+| S2-Pro | SGLang | 8005 | Yes | ❌ Blocked upstream |
 
 ---
 
@@ -352,17 +398,19 @@ Covers:
 | 2 | `docker/Dockerfile.stack.current` | No change | Already correct |
 | 3 | `docker/Dockerfile.engine-current` | **Rewrite** | All 12 ad-hoc fixes as RUN steps |
 | 4 | `docker/Dockerfile.orchestrator` | No change | Already correct |
-| 5 | `docker-compose.yml` | **Edit** | Update orchestrator port to 8001 (after systemd stopped) |
-| 6 | `.github/workflows/build-images.yml` | **Edit** | Update path triggers |
-| 7 | `.github/workflows/deploy.yml` | **New** | SSH deploy via workflow_dispatch |
-| 8 | `ansible/site.yml` | **New** | Main playbook |
-| 9 | `ansible/inventory.yml` | **New** | VM connection details |
-| 10 | `ansible/group_vars/tts-lab.yml` | **New** | Variables |
-| 11 | `ansible/roles/docker/tasks/main.yml` | **New** | Install Docker + NVIDIA toolkit |
-| 12 | `ansible/roles/disk/tasks/main.yml` | **New** | Mount data disk |
-| 13 | `ansible/roles/deploy/tasks/main.yml` | **New** | Pull images + start |
-| 14 | `ansible/roles/monitoring/tasks/main.yml` | **New** | Health checks + log rotation |
-| 15 | `docs/operations/RUNBOOK.md` | **New** | Beginner-friendly operations guide |
+| 5 | `docker/Dockerfile.stack.mid` | **New** | torch 2.10 stable + transformers 4.x |
+| 6 | `docker/Dockerfile.engine-mid` | **New** | qwen3tts, VibeVoice, Higgs |
+| 7 | `docker-compose.yml` | **Edit** | Add engine-mid service, update orchestrator port to 8001 |
+| 8 | `.github/workflows/build-images.yml` | **Edit** | Add engine-mid build job, update path triggers |
+| 9 | `.github/workflows/deploy.yml` | **New** | SSH deploy via workflow_dispatch |
+| 10 | `ansible/site.yml` | **New** | Main playbook |
+| 11 | `ansible/inventory.yml` | **New** | VM connection details |
+| 12 | `ansible/group_vars/tts-lab.yml` | **New** | Variables |
+| 13 | `ansible/roles/docker/tasks/main.yml` | **New** | Install Docker + NVIDIA toolkit |
+| 14 | `ansible/roles/disk/tasks/main.yml` | **New** | Mount data disk |
+| 15 | `ansible/roles/deploy/tasks/main.yml` | **New** | Pull images + start |
+| 16 | `ansible/roles/monitoring/tasks/main.yml` | **New** | Health checks + log rotation |
+| 17 | `docs/operations/RUNBOOK.md` | **New** | Beginner-friendly operations guide |
 
 ---
 
