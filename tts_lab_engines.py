@@ -949,11 +949,12 @@ def _synth_csm(inst, text, params):
 # ── 16. Qwen3-TTS ─────────────────────────────────────────────────────────────
 def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
     import torch
+    # qwen_tts model config uses rope_type="default", but transformers 5.x
+    # removed ROPE_INIT_FUNCTIONS["default"]. Register it as standard rotary.
+    from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS
+    if "default" not in ROPE_INIT_FUNCTIONS:
+        ROPE_INIT_FUNCTIONS["default"] = ROPE_INIT_FUNCTIONS["llama3"]
     from qwen_tts import Qwen3TTSModel
-    # qwen_tts forwards **kwargs into AutoModel.from_pretrained — use torch_dtype
-    # (the standard transformers key), not dtype, which leaks into __init__.
-    # attn_implementation is also not supported by Qwen3TTSForConditionalGeneration.__init__,
-    # so omit it and let transformers pick the default (eager/sdpa auto-selected).
     _dtype = torch.bfloat16 if DEVICE == "cuda" else torch.float32
     return Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, torch_dtype=_dtype)
 
