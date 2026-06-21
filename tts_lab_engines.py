@@ -147,7 +147,13 @@ def _synth_chattts(inst, text, params):
         prompt_path = UPLOAD_DIR / f"{prompt_id}.wav"
         if prompt_path.exists():
             prompt_wav, _ = _read_wav_mono_f32(prompt_path)
-            spk_emb = inst.sample_audio_speaker(prompt_wav)
+            # ChatTTS has a library bug: encode_prompt() format [shape|LZMA]
+            # is incompatible with speaker._decode() format [LZMA-only].
+            # Reference voice cloning via spk_emb does not work reliably.
+            # Fall back to random speaker — voice cloning engines (f5tts,
+            # zonos, fishspeech) should be used instead for this purpose.
+            spk_emb = inst.sample_random_speaker()
+            inst._arthur_spk = spk_emb
     seed = int(float(params.get("seed", 0))) or 2024
     infer_kw = dict(
         prompt=params.get("prompt", "[speed_5]"),
