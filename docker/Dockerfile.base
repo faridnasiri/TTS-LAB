@@ -47,11 +47,6 @@ LABEL tts-lab.tier="1-base"
 # wget, curl         → Download models and files
 # python3.11 + dev   → Python runtime (installed on CUDA base)
 # python3-pip python-is-python3        → Package installer
-# Add NVIDIA CUDA developer repo for CUDA 13 NVRTC (needed by torch nightly >= 2026-06)
-# The nightly index (cu128) now serves CUDA 13-linked builds.
-RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb && \
-    dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libsndfile1 \
@@ -68,6 +63,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3.11-venv \
     python3-pip python-is-python3 \
     mecab libmecab-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Add NVIDIA CUDA developer repo for CUDA 13 NVRTC.
+# The PyTorch nightly index (cu128) now serves CUDA 13-linked builds
+# which need libnvrtc-builtins.so.13.0 (dia, outetts).
+# Must run AFTER wget is installed above.
+RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb && \
+    dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb && \
+    apt-get update && apt-get install -y --no-install-recommends \
     cuda-nvrtc-13-0 \
     && rm -rf /var/lib/apt/lists/*
 
