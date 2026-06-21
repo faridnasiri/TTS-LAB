@@ -257,21 +257,22 @@ def _synth_outetts(inst, text, params):
                                           transcript=params.get("transcript", "") or None)
     if speaker is None:
         speaker = inst.load_default_speaker(params.get("speaker", "en-female-1-neutral"))
+    # Auto-cap tokens: OuteTTS defaults to 8192 regardless of text length.
+    # 50 tokens per character is plenty for English (actual is ~8-15 per char).
+    # Floor of 1024 — below that CHUNKED generation produces empty output.
+    _max_tokens = int(float(params.get("max_length", 0)))
+    if _max_tokens <= 0:
+        _max_tokens = min(max(len(text) * 50, 2048), 4096)
+    gen_cfg_kw = dict(
+        text=text,
+        voice_characteristics=params.get("voice_characteristics") or None,
+        speaker=speaker,
+        max_length=_max_tokens,
+    )
     try:
-        gen_type = outetts.GenerationType.CHUNKED
-        gen_cfg_kw = dict(
-            text=text,
-            voice_characteristics=params.get("voice_characteristics") or None,
-            speaker=speaker,
-            generation_type=gen_type,
-        )
+        gen_cfg_kw["generation_type"] = outetts.GenerationType.CHUNKED
     except AttributeError:
-        gen_cfg_kw = dict(
-            text=text,
-            voice_characteristics=params.get("voice_characteristics") or None,
-            speaker=speaker,
-            max_length=8192,
-        )
+        pass
     gen_cfg_kw["sampler_config"] = outetts.SamplerConfig(
         temperature=float(params.get("temperature", 0.4)),
         repetition_penalty=float(params.get("repetition_penalty", 1.1)),
