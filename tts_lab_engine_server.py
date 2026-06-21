@@ -256,6 +256,10 @@ async def synthesize(req: SynthRequest):
         }
     except Exception as e:
         traceback.print_exc()
+        # Auto-evict on error — the loaded model may be stale/corrupted.
+        # Next request will trigger a fresh load from disk.
+        print(f"[engine-server:{_STACK}] Synthesis failed — auto-evicting {req.engine}")
+        _evict_current()
         raise HTTPException(status_code=500, detail=str(e))
 
 
