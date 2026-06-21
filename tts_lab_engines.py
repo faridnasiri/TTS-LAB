@@ -350,6 +350,12 @@ def _synth_f5tts(inst, text, params):
     ref_id   = params.get("audio_prompt_id", "")
     ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
     if not ref_path or not ref_path.exists():
+        # Default to first available reference WAV — we have 17 pre-loaded
+        _defaults = sorted(UPLOAD_DIR.glob("*.wav"))
+        if _defaults:
+            ref_path = _defaults[0]
+            ref_id   = ref_path.stem
+    if not ref_path or not ref_path.exists():
         raise RuntimeError("F5-TTS requires a reference audio clip. Upload a 5-15s WAV first.")
     ref_text = params.get("ref_text", "")
     speed    = float(params.get("speed", 1.0))
