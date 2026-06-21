@@ -256,11 +256,31 @@ async def synthesize(req: SynthRequest):
         }
     except Exception as e:
         traceback.print_exc()
-        # Auto-evict on error — the loaded model may be stale/corrupted.
-        # Next request will trigger a fresh load from disk.
-        print(f"[engine-server:{_STACK}] Synthesis failed — auto-evicting {req.engine}")
+        # Auto-evict on error — the loaded model may be stale/corrupted,
+        # then retry once with a fresh load.
+        print(f"[engine-server:{_STACK}] Synthesis failed — auto-evicting {req.engine} and retrying")
         _evict_current()
-        raise HTTPException(status_code=500, detail=str(e))
+        try:
+            instance = _load_engine(req.engine)
+            t0 = time.perf_counter()
+            wav, sr = SYNTHERS[req.engine](instance, req.text, req.params)
+            synth_ms = int((time.perf_counter() - t0) * 1000)
+            dur_ms = int(_wav_dur(wav) * 1000)
+            slog("SYNTH", req.engine,
+                 f"synth {synth_ms}ms  dur {dur_ms}ms  "
+                 f"RTF {round(synth_ms/dur_ms,4) if dur_ms>0 else 0}×  {sr} Hz  (retry OK)")
+            return {
+                "audio_b64": base64.b64encode(wav).decode(),
+                "sample_rate": sr,
+                "synth_time_ms": synth_ms,
+                "audio_dur_ms": dur_ms,
+                "rtf": round(synth_ms / dur_ms, 4) if dur_ms > 0 else 0,
+                "load_time_s": _load_times.get(req.engine, 0),
+            }
+        except Exception as e2:
+            traceback.print_exc()
+            print(f"[engine-server:{_STACK}] Retry also failed — giving up")
+            raise HTTPException(status_code=500, detail=str(e2))
 
 
 @app.post("/unload")
