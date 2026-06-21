@@ -394,20 +394,21 @@ def _synth_f5tts(inst, text, params):
 def _load_dia():
     from dia.model import Dia
     _dtype = "bfloat16" if DEVICE == "cuda" else "float32"
+    # Dia-1.6B-0626 has the correct config format (decoder_config + encoder_config).
+    # Dia-1.6B (no suffix) uses a newer config that the Dia library can't parse.
     for mid in ["nari-labs/Dia-1.6B-0626", "nari-labs/Dia-1.6B"]:
-        try:
-            return Dia.from_pretrained(mid, compute_dtype=_dtype, device=DEVICE)
-        except TypeError:
+        for _try in [{"device": DEVICE}, {}]:
             try:
-                return Dia.from_pretrained(mid, compute_dtype=_dtype)
+                return Dia.from_pretrained(mid, compute_dtype=_dtype, **_try)
             except Exception as e:
-                if mid == "nari-labs/Dia-1.6B":
-                    raise
-                continue
-        except Exception as e:
-            if mid == "nari-labs/Dia-1.6B":
+                _es = str(e).lower()
+                if "decoder_config" in _es or "encoder_config" in _es:
+                    continue  # wrong model version, try next
+                if mid != "nari-labs/Dia-1.6B":
+                    continue  # may be transient, try next variant
+                if "validation error" in _es:
+                    continue
                 raise
-            continue
 
 def _synth_dia(inst, text, params):
     if "[S1]" not in text and "[S2]" not in text:
