@@ -756,6 +756,38 @@ The following changes must be baked into the IaC Dockerfiles:
 | 11 | `docker-compose.yml` | Add model download init container or document pre-req for ONNX files |
 | 12 | `Dockerfile.orpheus` | Orpheus needs separate container (CUDA 12.1 + stable torch + dedicated vllm) — already designed |
 | 13 | `docker-compose.yml` | SGLang containers: pull `lmsysorg/sglang-omni:dev`, run with `--profile sglang` |
+| 14 | `Dockerfile.engine-current` | Pin `dia` to use `Dia-1.6B-0626` (old config format with decoder/encoder_config). `Dia-1.6B` (no suffix) has new config incompatible with dia library. |
+
+### 7b.12 Recent Ad-Hoc Fixes (2026-06-21)
+
+**OuteTTS BytesIO crash `[Dockerfile.base]`:**
+- Symptom: `soundfile.LibsndfileError: Error opening '<_io.BytesIO object at ...>'`
+- Root cause: `tts_lab_shims.py` `_load_with_torchcodec_fallback` called `soundfile.read(str(path))` on BytesIO objects
+- Fix: detect BytesIO with `isinstance(path, io.BytesIO)`, seek(0), pass directly to soundfile
+- Committed: `1467465`
+
+**OuteTTS max_tokens cap `[Dockerfile.engine-current]`:**
+- Symptom: 55s synthesis for "Hello world" — default max_length=8192 regardless of text
+- Fix: auto-cap at `min(max(len(text)*50, 2048), 4096)` — ~40% faster for short phrases
+- Committed: `46a7417`
+
+**ChatTTS encode_prompt / _decode format mismatch `[code]`:**
+- Symptom: `_lzma.LZMAError: Corrupt input data` when using `audio_prompt_id`
+- Root cause: ChatTTS library bug — `encode_prompt()` prepends 4-byte shape to LZMA stream, but `apply()` → `_decode()` expects raw LZMA. Bug reported upstream.
+- Fix: when `audio_prompt_id` is provided, fall back to `sample_random_speaker()`. For voice cloning, use f5tts/zonos/fishspeech instead.
+- Committed: `009cd4d`
+
+**Dia model version `[Dockerfile.engine-current]`:**
+- Symptom: KV cache dimension mismatch `[540]` vs `[128]`, or `pydantic_core.ValidationError: decoder_config/encoder_config missing`
+- Root cause: `Dia-1.6B` (no suffix) has new config format. `Dia-1.6B-0626` has correct format.
+- Fix: prefer 0626 variant, skip models with pydantic validation errors gracefully
+- Committed: `8528572`
+
+**UI RTF + description fields `[code]`:**
+- Updated all `rtf_est` values in MODEL_INFO with actual measured RTF from systematic testing
+- Added per-engine description textarea (persisted in localStorage)
+- ⚡ = real-time (RTF < 1.0), 🐌 = very slow (RTF > 10)
+- Committed: `437631f`
 
 ---
 
