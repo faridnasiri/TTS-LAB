@@ -77,10 +77,11 @@ RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml sound
 # ═══════════════════════════════════════════════════════════════════
 ARG TORCH_VERSION=2.12.0.dev20260408+cu128
 ARG TORCHAUDIO_VERSION=2.11.0.dev20260407+cu128
-# --no-deps: stack.current already has correct CUDA libs (CUDA 13 via nightly deps).
-# We only need to replace the torch/torchaudio wheels themselves.
-# With deps, the nightly index pulls CUDA 13 packages that conflict with torchvision.
-RUN pip install --no-cache-dir --force-reinstall --no-deps \
+# Same command as stack.current — full dependency tree from nightly index.
+# The nightly index now serves CUDA 13 packages (libcudart, libcupti, etc.)
+# which torch 2.12 nightly requires. This also reinstalls torchvision
+# and other deps to matching versions.
+RUN pip install --no-cache-dir \
     torch==${TORCH_VERSION} \
     torchaudio==${TORCHAUDIO_VERSION} \
     --index-url https://download.pytorch.org/whl/nightly/cu128
