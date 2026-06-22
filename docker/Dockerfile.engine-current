@@ -85,12 +85,13 @@ RUN pip install --no-cache-dir --force-reinstall \
 # Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
 
-# Engine code — install as local package (single COPY, no missing files)
+# Engine code — explicit COPY of all 4 files that change between builds
 # CACHEBUST ensures COPY always sees latest source (invalidation is local to this layer)
 ARG CACHEBUST=0
-COPY pyproject.toml /opt/arthur/
-COPY tts_lab*.py /opt/arthur/
-RUN cd /opt/arthur && pip install --no-deps -e .
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
 
 EXPOSE 8101
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=180s \

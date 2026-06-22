@@ -44,11 +44,12 @@ RUN pip install --no-cache-dir vibevoice
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer scipy librosa soundfile
 
-# Engine code — install as local package (single COPY, no missing files)
+# Engine code — explicit COPY of all 4 files that change between builds
 ARG CACHEBUST=0
-COPY pyproject.toml /opt/arthur/
-COPY tts_lab*.py /opt/arthur/
-RUN cd /opt/arthur && pip install --no-deps -e .
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
 
 EXPOSE 8103
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
