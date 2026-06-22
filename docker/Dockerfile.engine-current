@@ -15,7 +15,7 @@ LABEL org.opencontainers.image.description="22 engines on torch 2.12 nightly + t
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="current"
 
-RUN pip install --no-cache-dir--upgrade pip
+RUN pip install --no-cache-dir --upgrade pip
 
 # ── Lightweight ONNX engines ─────────────────────────────────────
 RUN pip install --no-cache-dirpiper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
