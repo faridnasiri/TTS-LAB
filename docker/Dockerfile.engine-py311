@@ -1,0 +1,121 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# engine-py311 — Unified CUDA 13 + Python 3.11 container
+# ═══════════════════════════════════════════════════════════════════
+#
+# Isolates the torch nightly CUDA 13 stack from engine-current (CUDA 12).
+# Python 3.11 required by torchvision nightly wheels (>= 2026-06).
+#
+# All torch/torchvision/torchaudio are installed from the SAME nightly
+# index (cu130), ensuring matching CUDA 13 nvidia packages.
+# ═══════════════════════════════════════════════════════════════════
+
+FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+
+# ── Python 3.11 + system packages ─────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libsndfile1 libsndfile1-dev \
+    ffmpeg espeak-ng espeak-ng-data sox \
+    git wget curl \
+    python3.11 python3.11-dev python3.11-distutils \
+    mecab libmecab-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Force python3 and pip to use 3.11
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3
+
+# ── NVIDIA CUDA 13 repo + NVRTC library ─────────────────────────
+RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -O /tmp/cuda-keyring.deb && \
+    dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    cuda-nvrtc-13-0 && rm -rf /var/lib/apt/lists/*
+
+# ── Unified LD_LIBRARY_PATH (runtime + build) ─────────────────────
+ENV NVIDIA_LIB_PATH="/usr/local/lib/python3.11/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.11/dist-packages/nvidia/nvrtc/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cuda_cupti/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cufft/lib:/usr/local/lib/python3.11/dist-packages/nvidia/curand/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cusolver/lib:/usr/local/lib/python3.11/dist-packages/nvidia/cusparse/lib"
+ENV LD_LIBRARY_PATH="${NVIDIA_LIB_PATH}:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64"
+
+# ── Unified CUDA 13 Nightly Stack ─────────────────────────────────
+# Explicit LD_LIBRARY_PATH during RUN ensures wheels validate at build time
+RUN LD_LIBRARY_PATH="${NVIDIA_LIB_PATH}" pip install --no-cache-dir --pre \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu130
+
+# ── Core ML libraries ─────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    "transformers==5.12.1" \
+    "accelerate>=0.30.0" \
+    "onnxruntime>=1.18.0" \
+    "safetensors>=0.4.0" \
+    numpy protobuf \
+    "huggingface-hub>=1.0" \
+    setuptools
+
+# ── Python utilities ──────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    "fastapi>=0.111.0" "uvicorn[standard]>=0.29.0" \
+    "pydantic>=2.0.0" "httpx>=0.27.0" \
+    "soundfile>=0.12.1" nltk requests psutil
+
+# ── NLTK data ─────────────────────────────────────────────────────
+RUN python3 -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('cmudict', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)"
+
+# ── Engine packages ───────────────────────────────────────────────
+RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
+
+RUN pip install --no-cache-dir mecab-python3 unidic
+RUN python3 -m unidic download
+
+RUN pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git
+
+RUN pip install --no-cache-dir --no-deps styletts2
+RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
+
+RUN pip install --no-cache-dir openai-whisper || true
+RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
+RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
+
+RUN pip install --no-cache-dir coqui-tts || true
+
+RUN pip install --no-cache-dir --no-deps fish-speech
+RUN pip install --no-cache-dir lightning loralib cachetools kui silero-vad opencc-python-reimplemented pyrootutils
+
+RUN pip install --no-cache-dir omnivoice
+
+RUN pip install --no-cache-dir git+https://github.com/nari-labs/dia.git
+
+RUN pip install --no-cache-dir git+https://github.com/Zyphra/Zonos.git
+RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    git clone --depth 1 https://github.com/Zyphra/Zonos.git /tmp/zonos-src && \
+    cp -r /tmp/zonos-src/zonos/backbone "$SITE_PKGS/zonos/backbone" && \
+    rm -rf /tmp/zonos-src
+
+RUN git clone https://github.com/SesameAILabs/csm.git /opt/models/csm
+RUN pip install --no-cache-dir torchtune torchao moshi silentcipher
+RUN echo /opt/models/csm > $(python3 -c "import site; print(site.getsitepackages()[0])")/csm-path.pth
+
+RUN pip install --no-cache-dir orpheus-speech || true
+RUN pip install --no-cache-dir qwen-tts || true
+
+RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
+
+RUN pip install --no-cache-dir "protobuf>=5.0,<6.0"
+
+# ── Application code ──────────────────────────────────────────────
+WORKDIR /opt/arthur
+RUN mkdir -p /opt/models/tts && rm -rf /opt/arthur/models && ln -sf /opt/models/tts /opt/arthur/models
+COPY pyproject.toml .
+COPY tts_lab*.py ./
+RUN pip install --no-deps -e .
+
+ENV COQUI_TOS_AGREED=1
+ENV HF_HOME=/opt/models/huggingface
+ENV XDG_CACHE_HOME=/opt/models/cache
+ENV TOKENIZERS_PARALLELISM=false
+ENV PYTHONUNBUFFERED=1
+
+EXPOSE 8105
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=180s \
+    CMD curl -f http://localhost:8105/health || exit 1
+CMD ["python3", "tts_lab_engine_server.py", "--port", "8105", "--stack", "current"]
