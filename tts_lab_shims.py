@@ -366,9 +366,18 @@ try:
 
     def _patched_llama_forward(self, **kwargs):
         # transformers 5.12 check_model_inputs rejects extra kwargs.
-        # Get the UNDECORATED forward (bypass the decorator wrapper).
-        _raw_forward = getattr(_orig_llama_forward, "__wrapped__", _orig_llama_forward)
-        out = _raw_forward(self, **kwargs)
+        # Strip any kwargs not accepted by the undecorated inner forward.
+        _inner = getattr(_orig_llama_forward, "__wrapped__", _orig_llama_forward)
+        if _inner is _orig_llama_forward:
+            # No wrapper — just call with all kwargs
+            out = _orig_llama_forward(self, **kwargs)
+        else:
+            # Inner is the raw forward — check what it accepts
+            import inspect as _inspect
+            _valid = set(_inspect.signature(_inner).parameters.keys())
+            _clean = {k: v for k, v in kwargs.items() if k in _valid}
+            # Always include 'self' equivalent
+            out = _inner(self, **_clean)
         if out.hidden_states is None and hasattr(out, "last_hidden_state"):
             out.hidden_states = (out.last_hidden_state,)
         return out
