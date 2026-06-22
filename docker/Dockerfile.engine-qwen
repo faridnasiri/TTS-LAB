@@ -34,6 +34,7 @@ RUN pip install --no-cache-dir qwen-tts
 RUN pip install --no-cache-dir scipy librosa soundfile
 
 # Engine code — install as local package (single COPY, no missing files)
+ARG CACHEBUST=0
 COPY pyproject.toml /opt/arthur/
 COPY tts_lab*.py /opt/arthur/
 RUN cd /opt/arthur && pip install --no-deps -e .

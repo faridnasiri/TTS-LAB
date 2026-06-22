@@ -11,11 +11,18 @@
 #   ENGINE values:  current | mid | qwen | legacy | orpheus
 #   IMAGE values:   tts-lab-engine-$(ENGINE) | tts-lab-orchestrator
 #   PORT values:    8101 | 8102 | 8103 | 8104
+#
+#   Override torch version for testing:
+#     make build-engine ENGINE=current TORCH_VER=2.12.0.dev20260409+cu128
 # ═══════════════════════════════════════════════════════════════════════
 
 ENGINE ?= current
 IMAGE  ?= tts-lab-engine-$(ENGINE)
 PORT   ?= 8101
+
+# ── Dependency versions (single source of truth) ─────────────────────
+TORCH_VER      ?= 2.12.0.dev20260408+cu128
+TORCHAUDIO_VER ?= 2.11.0.dev20260407+cu128
 
 .PHONY: build-engine deploy-engine clean-cache pull rebuild sweep deploy-orchestrator
 
@@ -45,14 +52,14 @@ pull:
 build-engine: pull clean-cache
 	@echo "Building $(IMAGE)..."
 	docker build \
-		--build-arg CACHEBUST=$$(date +%s) \
+		--build-arg TORCH_VERSION=$(TORCH_VER) \
+		--build-arg TORCHAUDIO_VERSION=$(TORCHAUDIO_VER) \
 		-f docker/Dockerfile.engine-$(ENGINE) \
 		-t $(IMAGE):latest .
 
 build-orchestrator: pull clean-cache
 	@echo "Building tts-lab-orchestrator..."
 	docker build \
-		--build-arg CACHEBUST=$$(date +%s) \
 		-f docker/Dockerfile.orchestrator \
 		-t tts-lab-orchestrator:latest .
 
@@ -114,12 +121,21 @@ rebuild: clean-cache
 	@echo "=== Tier 1: Base ==="
 	docker build -f docker/Dockerfile.base -t tts-lab-base:latest .
 	@echo "=== Tier 2: Stacks ==="
-	docker build -f docker/Dockerfile.stack.current -t tts-lab-stack-current:latest .
+	docker build -f docker/Dockerfile.stack.current \
+		--build-arg TORCH_VERSION=$(TORCH_VER) \
+		--build-arg TORCHAUDIO_VERSION=$(TORCHAUDIO_VER) \
+		-t tts-lab-stack-current:latest .
 	docker build -f docker/Dockerfile.stack.mid -t tts-lab-stack-mid:latest .
 	@echo "=== Tier 3: Engines ==="
-	docker build -f docker/Dockerfile.engine-current -t tts-lab-engine-current:latest .
+	docker build -f docker/Dockerfile.engine-current \
+		--build-arg TORCH_VERSION=$(TORCH_VER) \
+		--build-arg TORCHAUDIO_VERSION=$(TORCHAUDIO_VER) \
+		-t tts-lab-engine-current:latest .
 	docker build -f docker/Dockerfile.engine-mid -t tts-lab-engine-mid:latest .
-	docker build -f docker/Dockerfile.engine-qwen -t tts-lab-engine-qwen:latest .
+	docker build \
+		--build-arg TORCH_VERSION=$(TORCH_VER) \
+		--build-arg TORCHAUDIO_VERSION=$(TORCHAUDIO_VER) \
+		-f docker/Dockerfile.engine-qwen -t tts-lab-engine-qwen:latest .
 	@echo "=== Orchestrator ==="
 	docker build -f docker/Dockerfile.orchestrator -t tts-lab-orchestrator:latest .
 	@echo "=== Done ==="

@@ -268,8 +268,10 @@ make sweep
 **Key design decisions:**
 - `clean-cache` uses `--filter until=24h` instead of `-af` — preserves base layers, only clears stale cache
 - `pull` runs before every build — ensures latest committed code
-- `--build-arg CACHEBUST=$(date +%s)` — breaks Docker cache for COPY layers deterministically
+- `TORCH_VER` and `TORCHAUDIO_VER` variables at the top of the Makefile are the **single source of truth** for torch versions. Both `build-engine` and `rebuild` targets pass them as `--build-arg` to Docker. No hardcoded strings duplicated across files.
 - Deploy targets include full `docker run` with all required mounts and env vars
+- `ARG CACHEBUST=0` is placed **inside the Dockerfile immediately before COPY** — this invalidates ONLY the COPY layer, not heavy upstream layers (apt, pip installs). The Makefile's `--build-arg CACHEBUST=$(date +%s)` is no longer needed at the CLI level.
+- Editable install (`pip install -e .`) is safe for this lab environment. The `docker run` mounts (`-v /opt/models:/opt/models`, etc.) do not overlap with `/opt/arthur/` where the source code lives, so mounts cannot accidentally shadow the installed package.
 
 ### 7.2 Python Package Structure — Single COPY
 
@@ -315,7 +317,15 @@ RUN pip install --no-cache-dir --force-reinstall \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 ```
 
-**How to update:** Test a new nightly snapshot on the VM first. If all 15 engines pass, update the `ARG` values in both files and rebuild. The pinned versions prevent surprise breakage.
+**How to update:** Test a new nightly snapshot on the VM first. If all 15 engines pass, update the `TORCH_VER` and `TORCHAUDIO_VER` variables at the top of the Makefile (the single source of truth). The Makefile passes them to both `Dockerfile.stack.current` and `Dockerfile.engine-current` via `--build-arg`. No need to edit Dockerfiles directly.
+
+```bash
+# Test a new snapshot:
+make build-engine ENGINE=current TORCH_VER=2.12.0.dev20260409+cu128
+
+# If all engines pass, update the defaults in Makefile:
+#   TORCH_VER      ?= 2.12.0.dev20260409+cu128
+```
 
 ### 7.4 Pinned qwen3tts Transformers Version
 
