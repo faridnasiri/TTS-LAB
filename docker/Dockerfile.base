@@ -124,6 +124,9 @@ ENV HF_HOME=/opt/models/huggingface
 ENV XDG_CACHE_HOME=/opt/models/cache
 ENV TOKENIZERS_PARALLELISM=false
 ENV PYTHONUNBUFFERED=1
+# NVIDIA CUDA Python packages install libraries to site-packages/nvidia/*/lib/
+# The dynamic linker can't find them without these paths.
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cuda_cupti/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cudnn/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cublas/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cufft/lib:/usr/local/lib/python3.10/dist-packages/nvidia/curand/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cusolver/lib:/usr/local/lib/python3.10/dist-packages/nvidia/cusparse/lib:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64:\$LD_LIBRARY_PATH
 # CUDA 13 NVRTC libraries are installed by torch nightly at:
 # /usr/local/lib/python3.10/dist-packages/nvidia/cu13/lib/
 # Add to ldconfig so torch can find libnvrtc-builtins.so.13.0
