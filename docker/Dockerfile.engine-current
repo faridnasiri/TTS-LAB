@@ -18,44 +18,44 @@ LABEL tts-lab.stack="current"
 RUN pip install --no-cache-dir --upgrade pip
 
 # ── Lightweight ONNX engines ─────────────────────────────────────
-RUN pip install --no-cache-dirpiper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
+RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
 
 # ── MeloTTS + MeCab ──────────────────────────────────────────────
 # melo and xtts need MeCab C library + Python bindings + unidic dictionary
-RUN pip install --no-cache-dirgit+https://github.com/myshell-ai/MeloTTS.git \
+RUN pip install --no-cache-dir git+https://github.com/myshell-ai/MeloTTS.git \
     mecab-python3 unidic
 RUN python3 -m unidic download
 
 # ── StyleTTS2 — needs OLD langchain (<0.3.0) ─────────────────────
 # langchain 1.x removed text_splitter module.
 # --no-deps prevents styletts2 from forcing old accelerate/transformers
-RUN pip install --no-cache-dir--no-deps styletts2
-RUN pip install --no-cache-dir"langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
+RUN pip install --no-cache-dir --no-deps styletts2
+RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
 
 # ── Standard pip engines ─────────────────────────────────────────
 # openai-whisper (ChatTTS dep) fails to build from source — install pre-built first
-RUN pip install --no-cache-dir--only-binary :all: openai-whisper || true
-RUN pip install --no-cache-dirChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
-RUN pip install --no-cache-dirchatterbox-tts>=0.1.0 perth>=1.0.0
+RUN pip install --no-cache-dir --only-binary :all: openai-whisper || true
+RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
+RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
 
 # XTTS — coqui-tts installs but won't synthesize with torch nightly (torchcodec issue)
-RUN pip install --no-cache-dircoqui-tts || true
+RUN pip install --no-cache-dir coqui-tts || true
 
 # ── Fish Speech — needs lightning (NOT pytorch_lightning) ────────
 # fish-speech imports from "lightning", not "pytorch_lightning"
 # --no-deps because it pins old versions of everything
-RUN pip install --no-cache-dir--no-deps fish-speech
-RUN pip install --no-cache-dirlightning loralib cachetools kui \
+RUN pip install --no-cache-dir --no-deps fish-speech
+RUN pip install --no-cache-dir lightning loralib cachetools kui \
     silero-vad opencc-python-reimplemented pyrootutils
 
-RUN pip install --no-cache-diromnivoice
+RUN pip install --no-cache-dir omnivoice
 
 # ── Dia 1.6B ────────────────────────────────────────────────────
-RUN pip install --no-cache-dirgit+https://github.com/nari-labs/dia.git
+RUN pip install --no-cache-dir git+https://github.com/nari-labs/dia.git
 
 # ── Zonos — pip wheel is missing backbone/ subpackage ────────────
 # The git repo has it, the pip wheel doesn't. Copy it in.
-RUN pip install --no-cache-dirgit+https://github.com/Zyphra/Zonos.git
+RUN pip install --no-cache-dir git+https://github.com/Zyphra/Zonos.git
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     git clone --depth 1 https://github.com/Zyphra/Zonos.git /tmp/zonos-src && \
     cp -r /tmp/zonos-src/zonos/backbone "$SITE_PKGS/zonos/backbone" && \
@@ -63,26 +63,21 @@ RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
 
 # ── CSM — needs git clone + heavy deps ───────────────────────────
 RUN git clone https://github.com/SesameAILabs/csm.git /opt/models/csm
-RUN pip install --no-cache-dirtorchtune torchao moshi silentcipher
+RUN pip install --no-cache-dir torchtune torchao moshi silentcipher
 RUN echo /opt/models/csm > $(python3 -c "import site; print(site.getsitepackages()[0])")/csm-path.pth
 
 # Orpheus — install for availability probe, runs in separate container
-RUN pip install --no-cache-dirorpheus-speech || true
+RUN pip install --no-cache-dir orpheus-speech || true
 
 # ── Shared audio processing ─────────────────────────────────────
-RUN pip install --no-cache-dirphonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
+RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
-# Restore torch nightly — engine packages above may have downgraded it.
-# --upgrade --no-deps: upgrades torch/torchaudio but KEEPS the nvidia-*
-# packages that stack.current installed (CUDA 12 versions). Full --upgrade
-# would pull CUDA 13 nvidia packages from the nightly index, which break
-# transformers' dynamic module loading (BertForMaskedLM, LlamaModel, etc.).
-RUN pip install --no-cache-dir--upgrade --no-deps torch torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
-
-# Restore torch nightly — engine packages above may have downgraded it.
+# ═══════════════════════════════════════════════════════════════════
+# Restore torch nightly — engine packages may have downgraded it.
 # --upgrade --no-deps: upgrades ONLY torch/torchaudio without pulling
-# CUDA 13 nvidia packages. stack.current has the correct CUDA 12 libs.
+# CUDA 13 nvidia packages. stack.current has correct CUDA 12 libs
+# AND LD_LIBRARY_PATH from Dockerfile.base.
+# ═══════════════════════════════════════════════════════════════════
 RUN pip install --no-cache-dir --upgrade --no-deps torch torchaudio \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 
