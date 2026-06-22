@@ -129,6 +129,13 @@ def _load_chattts():
             _BT.encode_plus = _encode_plus
     except Exception:
         pass
+    # transformers 5.12 check_model_inputs rejects kwargs from older code.
+    # Replace with pass-through before importing ChatTTS.
+    try:
+        import transformers.utils.generic as _tug
+        _tug.check_model_inputs = lambda func=None: func or _tug.check_model_inputs
+    except Exception:
+        pass
     import ChatTTS
     inst = ChatTTS.Chat()
     if not inst.load(source="huggingface", device=DEVICE):

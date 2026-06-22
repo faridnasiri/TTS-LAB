@@ -88,16 +88,16 @@ try:
 except Exception:
     pass
 
-# --- check_model_inputs compat (qwen_tts) ---
+# --- check_model_inputs compat — transformers 5.12 is too strict ---
+# The check_model_inputs decorator in tf 5.12 rejects kwargs that older
+# engine code passes (inputs_embeds, attention_mask, position_ids).
+# Replace with a pass-through: engines pass correct kwargs for their models.
 try:
     import transformers.utils.generic as _tug
     _orig_cmi = _tug.check_model_inputs
-    if _orig_cmi.__code__.co_argcount == 1:
-        def _compat_cmi(func=None):
-            if func is not None:
-                return _orig_cmi(func)
-            return _orig_cmi
-        _tug.check_model_inputs = _compat_cmi
+    def _pass_thru_cmi(func=None):
+        return func if func is not None else _orig_cmi
+    _tug.check_model_inputs = _pass_thru_cmi
 except Exception:
     pass
 
@@ -365,7 +365,10 @@ try:
     _orig_llama_forward = LlamaModel.forward
 
     def _patched_llama_forward(self, **kwargs):
-        out = _orig_llama_forward(self, **kwargs)
+        # transformers 5.12 check_model_inputs rejects extra kwargs.
+        # Get the UNDECORATED forward (bypass the decorator wrapper).
+        _raw_forward = getattr(_orig_llama_forward, "__wrapped__", _orig_llama_forward)
+        out = _raw_forward(self, **kwargs)
         if out.hidden_states is None and hasattr(out, "last_hidden_state"):
             out.hidden_states = (out.last_hidden_state,)
         return out
