@@ -17,6 +17,13 @@ LABEL tts-lab.stack="current"
 
 RUN pip install --no-cache-dir --upgrade pip
 
+# ═══════════════════════════════════════════════════════════════════
+# Lock torch + nvidia packages at CUDA 12 versions (from stack.current).
+# Engine pip installs below must not upgrade these to CUDA 13.
+# ═══════════════════════════════════════════════════════════════════
+RUN pip freeze | grep -E '^(torch|torchaudio|nvidia-)' > /tmp/torch-constraints.txt
+ENV PIP_CONSTRAINT=/tmp/torch-constraints.txt
+
 # ── Lightweight ONNX engines ─────────────────────────────────────
 RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
 
@@ -72,16 +79,8 @@ RUN pip install --no-cache-dir orpheus-speech || true
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
-# ═══════════════════════════════════════════════════════════════════
-# Restore torch nightly — engine packages may have downgraded it.
-# --upgrade --no-deps: upgrades ONLY torch/torchaudio without pulling
-# CUDA 13 nvidia packages. stack.current has correct CUDA 12 libs
-# AND LD_LIBRARY_PATH from Dockerfile.base.
-# ═══════════════════════════════════════════════════════════════════
-RUN pip install --no-cache-dir --upgrade --no-deps torch torchaudio \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
-
-# Pin versions that engine packages may have changed
+# Pin versions that engine packages may have changed.
+# Torch/nvidia are locked via PIP_CONSTRAINT above — no restore needed.
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
 
 # Engine code — explicit COPY of all 4 files that change between builds
