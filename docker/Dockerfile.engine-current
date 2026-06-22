@@ -17,6 +17,15 @@ LABEL tts-lab.stack="current"
 
 RUN pip install --no-cache-dir --upgrade pip
 
+# ═══════════════════════════════════════════════════════════════════
+# Prevent ANY pip install from downgrading torch from nightly to stable.
+# Stack.current installs torch 2.12 nightly + CUDA 13 deps. Engine
+# packages must not touch this combination — it causes cascading failures.
+# ═══════════════════════════════════════════════════════════════════
+RUN pip install --no-cache-dir torch==2.12.0.dev20260408+cu128 torchaudio==2.11.0.dev20260407+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128 && \
+    pip freeze | grep -E '^torch|^torchaudio|^nvidia-' > /tmp/torch-constraints.txt
+ENV PIP_CONSTRAINT=/tmp/torch-constraints.txt
+
 # ── Lightweight ONNX engines ─────────────────────────────────────
 RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
 
@@ -70,21 +79,8 @@ RUN pip install --no-cache-dir orpheus-speech || true
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
-# ═══════════════════════════════════════════════════════════════════
-# ═══════════════════════════════════════════════════════════════════
-# Restore torch nightly — pinned to the SAME snapshot as stack.current.
-# Engine packages above install stable torch as a dependency.
-# ═══════════════════════════════════════════════════════════════════
-ARG TORCH_VERSION=2.12.0.dev20260408+cu128
-ARG TORCHAUDIO_VERSION=2.11.0.dev20260407+cu128
-# Same command as stack.current — full dependency tree from nightly index.
-# The nightly index now serves CUDA 13 packages (libcudart, libcupti, etc.)
-# which torch 2.12 nightly requires. This also reinstalls torchvision
-# and other deps to matching versions.
-RUN pip install --no-cache-dir \
-    torch==${TORCH_VERSION} \
-    torchaudio==${TORCHAUDIO_VERSION} \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
+# Torch is pinned via PIP_CONSTRAINT at the top of this file.
+# Engine packages CANNOT downgrade it. No restore step needed.
 
 # Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
