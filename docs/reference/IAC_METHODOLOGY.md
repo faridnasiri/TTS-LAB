@@ -236,3 +236,120 @@ Before starting any engine fix:
 | 5 | `tts-lab-engine-legacy` | 8102 | legacy | indextts, parler | 🔧 Deferred |
 | 6 | `tts-lab-orpheus` | 8002 | cuda | Orpheus 3B | ❌ Blocked |
 | 7 | `tts-lab-s2pro` | 8005 | SGLang | S2-Pro | ❌ Blocked |
+
+---
+
+## 7. IaC Mitigation Improvements (2026-06-22)
+
+This section documents the targeted improvements made to eliminate the core build pipeline and dependency problems identified in the first IaC implementation.
+
+### 7.1 Makefile — Automated Build Pipeline
+
+**Problem:** The 11-step manual checklist (pull → clean cache → build → stop → rm → run → wait → test) was error-prone and slow. Every rebuild required remembering all steps.
+
+**Solution:** `Makefile` at repo root. Single-command builds.
+
+```bash
+# Build one engine image:
+make build-engine ENGINE=current    # tts-lab-engine-current:latest
+make build-engine ENGINE=mid        # tts-lab-engine-mid:latest
+make build-engine ENGINE=qwen       # tts-lab-engine-qwen:latest
+
+# Build + deploy in one command:
+make deploy-engine ENGINE=current
+
+# Full 7-image chain rebuild:
+make rebuild
+
+# Run engine sweep test:
+make sweep
+```
+
+**Key design decisions:**
+- `clean-cache` uses `--filter until=24h` instead of `-af` — preserves base layers, only clears stale cache
+- `pull` runs before every build — ensures latest committed code
+- `--build-arg CACHEBUST=$(date +%s)` — breaks Docker cache for COPY layers deterministically
+- Deploy targets include full `docker run` with all required mounts and env vars
+
+### 7.2 Python Package Structure — Single COPY
+
+**Problem:** Engine Dockerfiles had individual `COPY tts_lab_X.py` statements that went out of sync with the actual files. When `tts_lab_engines.py` was changed but the Dockerfile didn't COPY it, the base image's old version was used. This caused the f5tts fix to silently not deploy for 3 rebuild cycles.
+
+**Solution:** `pyproject.toml` registers all 10 core modules. Dockerfiles use a single glob pattern:
+
+```dockerfile
+COPY pyproject.toml /opt/arthur/
+COPY tts_lab*.py /opt/arthur/
+RUN cd /opt/arthur && pip install --no-deps -e .
+```
+
+**Why this works:**
+- `pip install -e .` creates an editable install in site-packages pointing back to `/opt/arthur/`
+- Python imports resolve correctly regardless of working directory
+- Impossible to forget a file — all `tts_lab*.py` files are copied
+- Adding a new module just requires adding it to `pyproject.toml`
+
+### 7.3 Pinned Torch Nightly Snapshots
+
+**Problem:** `pip install torch --index-url .../nightly/cu128` installed whatever the latest nightly build was. When the index moved from CUDA 12.8 to CUDA 13 toolchain, it broke Dia, OuteTTS, and required adding CUDA 13 NVRTC libraries. A future index update could break things again.
+
+**Solution:** Pin to a known-working snapshot using Docker `ARG`:
+
+```dockerfile
+# In Dockerfile.stack.current:
+ARG TORCH_VERSION=2.12.0.dev20260408+cu128
+ARG TORCHAUDIO_VERSION=2.11.0.dev20260407+cu128
+RUN pip install --no-cache-dir \
+    torch==${TORCH_VERSION} \
+    torchaudio==${TORCHAUDIO_VERSION} \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
+```
+
+```dockerfile
+# In Dockerfile.engine-current (final restore step):
+ARG TORCH_VERSION=2.12.0.dev20260408+cu128
+ARG TORCHAUDIO_VERSION=2.11.0.dev20260407+cu128
+RUN pip install --no-cache-dir --force-reinstall \
+    torch==${TORCH_VERSION} \
+    torchaudio==${TORCHAUDIO_VERSION} \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
+```
+
+**How to update:** Test a new nightly snapshot on the VM first. If all 15 engines pass, update the `ARG` values in both files and rebuild. The pinned versions prevent surprise breakage.
+
+### 7.4 Pinned qwen3tts Transformers Version
+
+**Problem:** qwen_tts 0.1.1 needs transformers >= 5.0 (for ROPE API and auto_docstring) but < 5.12 (check_model_inputs signature changed in 5.12). The engine-qwen container inherited transformers 5.12.1 from stack.current, causing `unexpected keyword argument 'inputs_embeds'`.
+
+**Solution:** Pin transformers in engine-qwen's Dockerfile:
+
+```dockerfile
+# Pin to a version range compatible with qwen_tts 0.1.1
+RUN pip install --no-cache-dir "transformers>=5.0,<5.12" --force-reinstall
+```
+
+This overrides the stack's transformers version for this specific container only.
+
+### 7.5 BuildKit Cache — Targeted Clearing
+
+**Problem:** `docker builder prune -af` cleared ALL BuildKit cache (128+ GB), forcing full rebuilds of every layer including pip installs. This made every rebuild take 20+ minutes.
+
+**Solution:** Use time-based filtering to only clear stale cache:
+
+```makefile
+clean-cache:
+	docker builder prune -f --filter until=24h
+```
+
+This clears cache older than 24 hours — enough to pick up code changes while keeping recent pip installs cached. Combined with `--build-arg CACHEBUST=$(date +%s)` to force COPY layer invalidation.
+
+### 7.6 Results After Mitigation
+
+| Metric | Before | After |
+|--------|:------:|:-----:|
+| Steps to build + deploy | 11 manual | 1 command (`make deploy-engine`) |
+| Build time (cached) | 20+ min | 8-9 min |
+| COPY layer misses | 3+ cycles | 0 (glob pattern) |
+| Torch version | Floating (breakable) | Pinned (stable) |
+| BuildKit cache | Full prune (128 GB) | Time-filtered (stale only) |
+| qwen3tts tf version | 5.12 (broken) | 5.0-5.11 (compatible) |
