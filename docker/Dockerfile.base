@@ -66,12 +66,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     mecab libmecab-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Make Python 3.11 the system default (CUDA base ships with 3.10).
-# Required because torch nightly (>= 2026-06) only provides wheels for Python 3.11+.
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 100 \
-    && update-alternatives --install /usr/bin/python python /usr/bin/python3.11 100 \
-    && python3 --version && python3 -m pip --version
-
 # Add NVIDIA CUDA developer repo for CUDA 13 NVRTC.
 # The PyTorch nightly index (cu128) now serves CUDA 13-linked builds
 # which need libnvrtc-builtins.so.13.0 (dia, outetts).
