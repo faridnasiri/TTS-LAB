@@ -17,15 +17,6 @@ LABEL tts-lab.stack="current"
 
 RUN pip install --no-cache-dir --upgrade pip
 
-# ═══════════════════════════════════════════════════════════════════
-# Prevent ANY pip install from downgrading torch from nightly to stable.
-# Stack.current installs torch 2.12 nightly + CUDA 13 deps. Engine
-# packages must not touch this combination — it causes cascading failures.
-# ═══════════════════════════════════════════════════════════════════
-RUN pip install --no-cache-dir torch==2.12.0.dev20260408+cu128 torchaudio==2.11.0.dev20260407+cu128 --index-url https://download.pytorch.org/whl/nightly/cu128 && \
-    pip freeze | grep -E '^torch|^torchaudio|^nvidia-' > /tmp/torch-constraints.txt
-ENV PIP_CONSTRAINT=/tmp/torch-constraints.txt
-
 # ── Lightweight ONNX engines ─────────────────────────────────────
 RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
 
@@ -42,6 +33,8 @@ RUN pip install --no-cache-dir --no-deps styletts2
 RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
 
 # ── Standard pip engines ─────────────────────────────────────────
+# openai-whisper (ChatTTS dep) fails to build from source — install pre-built first
+RUN pip install --no-cache-dir --only-binary :all: openai-whisper || true
 RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
 RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
 
@@ -79,8 +72,10 @@ RUN pip install --no-cache-dir orpheus-speech || true
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
-# Torch is pinned via PIP_CONSTRAINT at the top of this file.
-# Engine packages CANNOT downgrade it. No restore step needed.
+# Restore torch nightly — engine packages above may have downgraded it.
+# Simple --upgrade approach, same as ad-hoc deployment that worked.
+RUN pip install --no-cache-dir --upgrade torch torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
