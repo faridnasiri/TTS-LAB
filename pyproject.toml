@@ -1,0 +1,24 @@
+[project]
+name = "tts-lab"
+version = "1.0.0"
+description = "Arthur TTS Lab — 28-engine text-to-speech platform"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["setuptools>=65.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = [
+    "tts_lab",
+    "tts_lab_shims",
+    "tts_lab_shims_legacy",
+    "tts_lab_config",
+    "tts_lab_utils",
+    "tts_lab_engines",
+    "tts_lab_dispatch",
+    "tts_lab_ui",
+    "tts_lab_engine_server",
+    "tts_lab_orpheus_server",
+]

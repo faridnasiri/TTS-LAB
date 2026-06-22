@@ -71,27 +71,24 @@ RUN pip install --no-cache-dir orpheus-speech || true
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
 # ═══════════════════════════════════════════════════════════════════
-# CRITICAL: Restore torch nightly as the FINAL step.
-# Engine packages above install stable torch as a dependency,
-# overwriting the nightly build. Reinstall WITH dependencies so
-# CUDA runtime libs (libcupti, libcudart) are correctly linked.
-# Pin exact versions to match stack.current and avoid newer builds
-# that may require different CUDA toolkits.
 # ═══════════════════════════════════════════════════════════════════
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# Restore torch nightly — pinned to the SAME snapshot as stack.current.
+# Engine packages above install stable torch as a dependency.
+# ═══════════════════════════════════════════════════════════════════
+ARG TORCH_VERSION=2.12.0.dev20260408+cu128
+ARG TORCHAUDIO_VERSION=2.11.0.dev20260407+cu128
+RUN pip install --no-cache-dir --force-reinstall \
+    torch==${TORCH_VERSION} \
+    torchaudio==${TORCHAUDIO_VERSION} \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
 
-# Delete broken Dia-1.6B model cache — only keep Dia-1.6B-0626
-RUN rm -rf /opt/models/huggingface/hub/models--nari-labs--Dia-1.6B
-
-# Engine server code (with VRAM leak fix, auto-retry, GPU health endpoint)
-# Also copy engines + dispatch — these change more often than base image code
-COPY tts_lab_shims.py /opt/arthur/
-COPY tts_lab_engine_server.py /opt/arthur/
-COPY tts_lab_engines.py /opt/arthur/
-COPY tts_lab_dispatch.py /opt/arthur/
+# Engine code — install as local package (single COPY, no missing files)
+COPY pyproject.toml /opt/arthur/
+COPY tts_lab*.py /opt/arthur/
+RUN cd /opt/arthur && pip install --no-deps -e .
 
 EXPOSE 8101
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=180s \

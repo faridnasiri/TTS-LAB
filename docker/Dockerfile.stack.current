@@ -3,7 +3,14 @@ LABEL org.opencontainers.image.title="TTS Lab - ML Stack current"
 LABEL org.opencontainers.image.description="torch nightly, transformers 5.12, CUDA 12.8"
 LABEL tts-lab.tier="2-stack"
 LABEL tts-lab.stack-version="current"
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# Pin to a KNOWN WORKING nightly snapshot — prevents CUDA 13 breakage
+# when the nightly index moves forward. Update these when testing new snapshots.
+ARG TORCH_VERSION=2.12.0.dev20260408+cu128
+ARG TORCHAUDIO_VERSION=2.11.0.dev20260407+cu128
+RUN pip install --no-cache-dir \
+    torch==${TORCH_VERSION} \
+    torchaudio==${TORCHAUDIO_VERSION} \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
 RUN pip install --no-cache-dir "transformers>=5.12.0" "accelerate>=0.30.0" "onnxruntime>=1.18.0" "safetensors>=0.4.0" numpy protobuf
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && mkdir -p "${SITE_PKGS}/torchcodec-99.0.0.dist-info" && printf "Metadata-Version: 2.1\nName: torchcodec\nVersion: 99.0.0\n" > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/METADATA" && echo "torchcodec metadata stub created"
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && find /opt/arthur/patches -name "*.py" -exec sed -i "s|/opt/arthur-bench-env/lib/python3.11/site-packages|${SITE_PKGS}|g" {} + && python3 /opt/arthur/patches/patch_transformers_stubs.py && python3 /opt/arthur/patches/fix_transformers_shims.py && echo "Compatibility patches applied"
