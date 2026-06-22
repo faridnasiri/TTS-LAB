@@ -17,13 +17,6 @@ LABEL tts-lab.stack="current"
 
 RUN pip install --no-cache-dir --upgrade pip
 
-# ═══════════════════════════════════════════════════════════════════
-# Lock torch + nvidia packages at CUDA 12 versions (from stack.current).
-# Engine pip installs below must not upgrade these to CUDA 13.
-# ═══════════════════════════════════════════════════════════════════
-RUN pip freeze | grep -E '^(torch|torchaudio|nvidia-)' > /tmp/torch-constraints.txt
-ENV PIP_CONSTRAINT=/tmp/torch-constraints.txt
-
 # ── Lightweight ONNX engines ─────────────────────────────────────
 RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx
 
@@ -40,8 +33,9 @@ RUN pip install --no-cache-dir --no-deps styletts2
 RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
 
 # ── Standard pip engines ─────────────────────────────────────────
-# openai-whisper (ChatTTS dep) fails to build from source — install pre-built first
-RUN pip install --no-cache-dir --only-binary :all: openai-whisper || true
+# openai-whisper (ChatTTS dep) needs setuptools to build
+RUN pip install --no-cache-dir setuptools
+RUN pip install --no-cache-dir openai-whisper || true
 RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
 RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
 
@@ -79,8 +73,14 @@ RUN pip install --no-cache-dir orpheus-speech || true
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
-# Pin versions that engine packages may have changed.
-# Torch/nvidia are locked via PIP_CONSTRAINT above — no restore needed.
+# Restore torch nightly with full deps from nightly index.
+# Engine packages may have installed conflicting nvidia/CUDA versions.
+# Full --force-reinstall from the nightly index ensures matching nvidia
+# packages (CUDA 12 _cu12 variants) as installed by stack.current.
+RUN pip install --no-cache-dir --force-reinstall torch torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu128
+
+# Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
 
 # Engine code — explicit COPY of all 4 files that change between builds
