@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 3 — engine-qwen  (1 engine: Qwen3-TTS)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Qwen3-TTS requires a unique combination that conflicts with
+# engine-current and engine-mid:
+#   - transformers 5.x (for auto_docstring, ROPE init)
+#   - huggingface-hub < 1.0 (qwen_tts 0.1.1 requirement)
+#
+# engine-current has hf-hub >= 1.0 (needed by f5tts). Rather than
+# monkey-patch, we give qwen3tts its own clean container.
+#
+# SIZE: ~8 GB (stack 5 + qwen_tts + model)
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-stack-current:latest
+LABEL org.opencontainers.image.title="TTS Lab — Engine Server (qwen stack)"
+LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B on torch nightly + transformers 5.x"
+LABEL tts-lab.tier="3-engine"
+LABEL tts-lab.stack="qwen"
+
+RUN pip install --no-cache-dir --upgrade pip
+
+# qwen-tts requires huggingface-hub < 1.0 (pinned explicitly)
+RUN pip install --no-cache-dir "huggingface-hub<1.0,>=0.34.0"
+RUN pip install --no-cache-dir qwen-tts
+
+# Shared audio deps
+RUN pip install --no-cache-dir scipy librosa soundfile
+
+# Engine server code
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
+
+EXPOSE 8104
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
+    CMD curl -f http://localhost:8104/health || exit 1
+CMD ["python3", "/opt/arthur/tts_lab_engine_server.py", "--port", "8104", "--stack", "current"]

@@ -48,9 +48,6 @@ RUN pip install --no-cache-dir lightning loralib cachetools kui \
 
 RUN pip install --no-cache-dir omnivoice
 
-# ── Qwen3-TTS (needs transformers 5.x — has rope_type="default" fix in code) ──
-RUN pip install --no-cache-dir qwen-tts
-
 # ── Dia 1.6B ────────────────────────────────────────────────────
 RUN pip install --no-cache-dir git+https://github.com/nari-labs/dia.git
 
