@@ -73,8 +73,11 @@ RUN pip install --no-cache-dir orpheus-speech || true
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
 # Restore torch nightly — engine packages above may have downgraded it.
-# Simple --upgrade approach, same as ad-hoc deployment that worked.
-RUN pip install --no-cache-dir --upgrade torch torchaudio \
+# --upgrade --no-deps: upgrades torch/torchaudio but KEEPS the nvidia-*
+# packages that stack.current installed (CUDA 12 versions). Full --upgrade
+# would pull CUDA 13 nvidia packages from the nightly index, which break
+# transformers' dynamic module loading (BertForMaskedLM, LlamaModel, etc.).
+RUN pip install --no-cache-dir --upgrade --no-deps torch torchaudio \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Pin versions that engine packages may have changed
