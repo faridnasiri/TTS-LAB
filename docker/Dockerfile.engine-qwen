@@ -23,7 +23,7 @@ LABEL tts-lab.stack="qwen"
 # engine-py311 has Python 3.11 + torch nightly CUDA 13 + check_model_inputs fix.
 # qwen_tts 0.1.1 is incompatible with transformers 5.12 (ROPE init, check_model_inputs).
 # Downgrade to 4.x which qwen_tts was built for.
-RUN pip install --no-cache-dir "transformers>=4.50,<5.0" --force-reinstall
+RUN pip install --no-cache-dir "transformers>=4.50,<4.54" --force-reinstall
 RUN pip install --no-cache-dir "huggingface-hub<1.0,>=0.34.0" --force-reinstall
 RUN pip install --no-cache-dir qwen-tts
 
