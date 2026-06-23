@@ -11,10 +11,16 @@ stacks:
       cuda: null
       driver: null
   mid:
-    torch: '>=2.10,<2.11'
+    torch: '>=2.12,<2.15'
     transformers: '>=4.50,<5.0'
     python: '3.10'
-    cuda: '12.1'
+    cuda: '12.8'
+    note: torch nightly for sm_120 (RTX 5060 Ti). 'mid' refers to transformers 4.x, not torch stability.
+    validated_on:
+      torch: 2.12.0.dev20260408+cu128
+      transformers: 4.51.3
+      cuda: '12.8'
+      driver: 580.159.03
   legacy:
     torch: '>=1.13,<1.14'
     transformers: '>=4.46,<5.0'

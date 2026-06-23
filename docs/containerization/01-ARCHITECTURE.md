@@ -2,10 +2,11 @@
 
 > **Date:** 2026-06-23
 > **Status:** Architecture complete — runtime validation in progress
-> **Supersedes:** CONTAINERIZATION_PLAN.md, CONTAINERIZATION_MASTER_PLAN.md, IAC_REWRITE_PLAN.md
+> **Supersedes:** archive/CONTAINERIZATION_PLAN.md, archive/CONTAINERIZATION_MASTER_PLAN.md, archive/IAC_REWRITE_PLAN.md
 > **Sibling docs:**
-> - [CONTAINERIZATION_CURRENT_STATE.md](CONTAINERIZATION_CURRENT_STATE.md) — ad-hoc deployment snapshot (2026-06-21)
-> - [CONTAINERIZATION_ADHOC_REFERENCE.md](CONTAINERIZATION_ADHOC_REFERENCE.md) — day-by-day fix log
+> - [05-STATE-2026-06-21.md](05-STATE-2026-06-21.md) — ad-hoc deployment snapshot (2026-06-21)
+> - [04-ADHOC-LOG.md](04-ADHOC-LOG.md) — day-by-day fix log
+> - [../reference/ARCHITECTURE_REFERENCE.md](../reference/ARCHITECTURE_REFERENCE.md) — deployed-state reference
 > - [../engine_compatibility.yaml](../engine_compatibility.yaml) — machine-readable single source of truth
 
 ---
@@ -570,15 +571,16 @@ TTS-LAB/
 ├── docker-compose.yml               ← 7 services, profiles, volumes, health checks
 ├── docs/
 │   ├── engine_compatibility.yaml    ← Machine-readable single source of truth
-│   └── containerization/
-│       ├── ARCHITECTURE_FINAL.md    ← This document
-│       ├── CONTAINERIZATION_CURRENT_STATE.md
-│       ├── CONTAINERIZATION_ADHOC_REFERENCE.md
-│       ├── CONTAINERIZATION_PLAN.md
-│       ├── CONTAINERIZATION_MASTER_PLAN.md
-│       ├── IAC_REWRITE_PLAN.md
-│       ├── IAC_FIX_PLAN.md
-│       └── IAC_METHODOLOGY.md
+│   ├── containerization/
+│   │   ├── 01-ARCHITECTURE.md          ← This document (design)
+│   │   ├── 02-ENGINE-FIXES.md          ← Engine fixes reference
+│   │   ├── 03-METHODOLOGY.md           ← IaC methodology
+│   │   ├── 04-ADHOC-LOG.md             ← Ad-hoc deployment log
+│   │   ├── 05-STATE-2026-06-21.md      ← Pre-IaC deployment snapshot
+│   │   └── archive/                    ← Superseded plans
+│   ├── reference/
+│   │   └── ARCHITECTURE_REFERENCE.md   ← Deployed-state reference
+│   └── issues/
 ├── scripts/
 │   └── update_engine_status.py      ← Validation gate updater + matrix management
 ├── .github/workflows/

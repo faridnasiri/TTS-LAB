@@ -3,9 +3,9 @@
 > **Date:** 2026-06-21
 > **Status:** Living document — update as new issues are discovered
 > **Related:**
-> - [IAC_REWRITE_PLAN.md](IAC_REWRITE_PLAN.md) — Architecture and container design
-> - [IAC_FIX_PLAN.md](IAC_FIX_PLAN.md) — Remaining work (5 engines)
-> - [CONTAINERIZATION_ADHOC_REFERENCE.md](CONTAINERIZATION_ADHOC_REFERENCE.md) — Day-by-day ad-hoc log
+> - [01-ARCHITECTURE.md](01-ARCHITECTURE.md) — Architecture design
+> - [archive/IAC_REWRITE_PLAN.md](archive/IAC_REWRITE_PLAN.md) — Original IaC rewrite plan
+> - [04-ADHOC-LOG.md](04-ADHOC-LOG.md) — Day-by-day ad-hoc log
 
 ---
 

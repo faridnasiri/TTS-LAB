@@ -283,8 +283,9 @@ docker/Dockerfile.engine-qwen       — stack-py311 → stack-mid, --no-deps, Tr
 tts_lab_shims.py                    — TransformGetItemToIndex no-op context manager
 scripts/update_engine_status.py     — Gate updater, container introspection, history, promotion
 docs/engine_compatibility.yaml      — Maturity classification, validation gates, fingerprints
-docs/containerization/ARCHITECTURE_FINAL.md  — Comprehensive architecture reference
-docs/containerization/IAC_REWRITE_PLAN.md    — Updated with engine-qwen, maturity states, VibeVoice POC
+docs/containerization/01-ARCHITECTURE.md          — Architecture design
+docs/containerization/archive/IAC_REWRITE_PLAN.md — Original IaC rewrite plan (superseded)
+docs/reference/ARCHITECTURE_REFERENCE.md          — Deployed-state reference
 docs/issues/deployment-2026-06-23.md         — Initial deployment findings
 docs/issues/deployment-fixes-2026-06-23.md   — This document
 ```

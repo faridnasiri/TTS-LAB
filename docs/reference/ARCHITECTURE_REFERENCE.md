@@ -744,17 +744,14 @@ TTS-LAB/
 │   ├── reference/
 │   │   └── ARCHITECTURE_REFERENCE.md   This document
 │   ├── containerization/
-│   │   ├── ARCHITECTURE_FINAL.md       Architecture design document
-│   │   ├── CONTAINERIZATION_CURRENT_STATE.md
-│   │   ├── CONTAINERIZATION_ADHOC_REFERENCE.md
-│   │   ├── CONTAINERIZATION_MASTER_PLAN.md
-│   │   ├── CONTAINERIZATION_PLAN.md
-│   │   ├── IAC_REWRITE_PLAN.md
-│   │   ├── IAC_FIX_PLAN.md
-│   │   └── IAC_METHODOLOGY.md
+│   │   ├── 01-ARCHITECTURE.md          Architecture design document
+│   │   ├── 02-ENGINE-FIXES.md          Engine fixes reference
+│   │   ├── 03-METHODOLOGY.md           IaC methodology & lessons
+│   │   ├── 04-ADHOC-LOG.md             Ad-hoc deployment day-by-day log
+│   │   ├── 05-STATE-2026-06-21.md      Pre-IaC deployment snapshot
+│   │   └── archive/                    Superseded plans (4 docs)
 │   └── issues/
 │       ├── chattts-encode-prompt-decode-bug.md
-│       ├── deployment-2026-06-23.md
 │       └── deployment-fixes-2026-06-23.md
 ├── scripts/
 │   ├── update_engine_status.py          Validation gate updater
