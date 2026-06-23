@@ -41,18 +41,20 @@ LABEL tts-lab.stack="qwen"
 LABEL tts-lab.maturity="experimental"
 
 # ── Pinned dependency window ──────────────────────────────────────
-# Order matters: pin transformers first (before qwen-tts pulls deps),
-# then hf-hub (qwen_tts 0.1.1 conflicts with >= 1.0), then the engine.
-RUN pip install --no-cache-dir \
+# Order matters: install qwen-tts first (it pulls latest transformers),
+# then force-downgrade transformers to the compatible range.
+# qwen_tts 0.1.1 is incompatible with TransformGetItemToIndex (tf >= 4.54).
+RUN pip install --no-cache-dir qwen-tts==0.1.1
+
+RUN pip install --no-cache-dir --force-reinstall \
     "transformers>=4.51,<4.54" \
     "huggingface-hub>=0.34,<1.0"
-
-RUN pip install --no-cache-dir qwen-tts==0.1.1
 
 # ── Build-time validation — fail fast, not at runtime ─────────────
 RUN python3 -c "import qwen_tts; print('qwen_tts OK')" \
     && python3 -c "from qwen_tts import Qwen3TTSModel; print('Qwen3TTSModel OK')" \
-    && python3 -c "from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS; assert 'default' in ROPE_INIT_FUNCTIONS, 'ROPE_INIT_FUNCTIONS missing default — wrong transformers version'; print('ROPE default OK')"
+    && python3 -c "import transformers; v = transformers.__version__; print(f'transformers {v}'); from packaging import version; assert version.parse(v) < version.parse('4.54'), f'transformers {v} >= 4.54 — TransformGetItemToIndex will break qwen_tts'; print('transformers version OK')" \
+    && python3 -c "from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS; assert 'default' in ROPE_INIT_FUNCTIONS, 'ROPE_INIT_FUNCTIONS missing default'; print('ROPE default OK')"
 
 # ── Shared audio processing ───────────────────────────────────────
 RUN pip install --no-cache-dir scipy librosa soundfile
