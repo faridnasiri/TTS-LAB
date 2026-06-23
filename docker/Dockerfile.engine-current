@@ -88,17 +88,17 @@ RUN pip install --no-cache-dir --force-reinstall \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev && rm -rf /var/lib/apt/lists/*
 
-# ── torchcodec stub for XTTS ────────────────────────────────────
-# coqui-tts 2.9+ requires torchcodec for audio I/O. The pip package
-# doesn't exist for torch nightly. Create metadata + module stub.
+# ── torchcodec stub for XTTS + f5tts ────────────────────────────
+# coqui-tts 2.9+ and transformers ASR pipeline require torchcodec.
+# The pip package doesn't exist for torch nightly. Create a full stub.
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     mkdir -p "${SITE_PKGS}/torchcodec-99.0.0.dist-info" && \
     printf "Metadata-Version: 2.1\nName: torchcodec\nVersion: 99.0.0\n" \
        > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/METADATA" && \
     printf "" > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/RECORD" && \
-    mkdir -p "${SITE_PKGS}/torchcodec" && \
-    printf "from ._stub import *  # noqa\n" > "${SITE_PKGS}/torchcodec/__init__.py" && \
-    printf "# torchcodec stub — coqui-tts 2.9+ compat. Audio I/O falls back to soundfile.\n" > "${SITE_PKGS}/torchcodec/_stub.py" && \
+    mkdir -p "${SITE_PKGS}/torchcodec/decoders" && \
+    printf "# torchcodec stub for coqui-tts + transformers compat\n" > "${SITE_PKGS}/torchcodec/__init__.py" && \
+    printf "class AudioDecoder:\n    pass\n" > "${SITE_PKGS}/torchcodec/decoders/__init__.py" && \
     echo "torchcodec stub created"
 
 # Pin versions that engine packages may have changed.
