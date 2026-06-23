@@ -20,12 +20,13 @@
 
 FROM tts-lab-base:latest
 LABEL org.opencontainers.image.title="TTS Lab — ML Stack mid"
-LABEL org.opencontainers.image.description="torch 2.10 stable, transformers 4.x, CUDA 12.1"
+LABEL org.opencontainers.image.description="torch nightly, transformers 4.x, CUDA 12.8 — sm_120 support"
 LABEL tts-lab.tier="2-stack"
 LABEL tts-lab.stack-version="mid"
 
-# torch 2.10 stable (NOT nightly — these engines don't need Blackwell sm_120 support)
-RUN pip install --no-cache-dir torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+# torch nightly for Blackwell sm_120 support (RTX 5060 Ti).
+# These engines don't need nightly features, but stable torch lacks sm_120.
+RUN pip install --no-cache-dir --pre torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # transformers 4.x — before ROPE init API changed in 5.x.
 # qwen3tts needs ROPE_INIT_FUNCTIONS["default"] which was removed in 5.x.
