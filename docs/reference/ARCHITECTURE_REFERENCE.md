@@ -797,5 +797,49 @@ TTS-LAB/
 | **Network** | Bridge: tts-lab-net (172.18.0.0/16) |
 | **Best RTF** | piper 3.7×, omnivoice 4.5×, qwen3tts 4.7× |
 | **Worst RTF** | xtts 44.7×, styletts2 35.8×, outetts 34.9× |
+| **Image digests** | See [§18 Image Digests](#18-image-digests) |
+
+---
+
+## 18. Image Digests (2026-06-23)
+
+Reproducible image references — torch nightly is not reproducible, but image digests are.
+
+| Image | Digest (sha256) |
+|-------|-----------------|
+| `tts-lab-base:latest` | `5e0730e0f5eb8dd264084f6cf9b3f5c50bed779d5bda294d0aa75081f2a0e66e` |
+| `tts-lab-stack-current:latest` | `4e9cad18a53ecee5cfab04c4444eaa2e24562fac16b8189ad01f408468cf8572` |
+| `tts-lab-stack-mid:latest` | `d6e3fda2397897558dfba6660c456d61a17993c9e7f1d420207e2500d323950b` |
+| `tts-lab-engine-current:latest` | `967f76c5b7ed4721a1af4185791c4784057718775e2469466df9f42d40713482` |
+| `tts-lab-engine-mid:latest` | `8aca47588a3003de6aa3e5fe45abb90b504c0f7d6c925af03b0893d69a5fc114` |
+| `tts-lab-engine-qwen:latest` | `cad1765179db1e1644e6f6937cda6c1600a58a17beb8b63d23e3dad8244e3713` |
+| `tts-lab-orchestrator:latest` | `8d4329477074aa7adcedc83517f465769ba9fabd98f4d54ef6154b04db3e20aa` |
+
+## 19. Disk Monitoring
+
+**Current usage (2026-06-23):**
+
+| Path | Used | Total | Free |
+|------|------|-------|------|
+| `/opt/models` (data disk) | 137 GB | 177 GB | **33 GB** |
+| `/` (root, Docker images) | 572 GB | 630 GB | 59 GB |
+
+**First resource to exhaust:** `/opt/models` — 33 GB free with active model downloads.
+Docker build cache adds ~50 GB to root disk after image builds.
+
+**Cleanup commands:**
+```bash
+# Reclaim Docker build cache (> 30 days old):
+docker builder prune --filter "until=720h" --force
+
+# Reclaim unused Docker images:
+docker image prune -a --force
+
+# Full cleanup (aggressive):
+docker system prune -a --volumes --force
+
+# Check largest model directories:
+du -sh /opt/models/huggingface/hub/models--* | sort -rh | head -10
+```
 | **Fastest response** | piper 3s, qwen3tts 4s |
 | **Slowest response** | styletts2 63s, xtts 62s |
