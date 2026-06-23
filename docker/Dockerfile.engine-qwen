@@ -14,20 +14,15 @@
 # SIZE: ~8 GB (stack 5 + qwen_tts + model)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-stack-current:latest
+FROM tts-lab-engine-py311:latest
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (qwen stack)"
-LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B on torch nightly + transformers 5.x"
+LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B on Python 3.11 + CUDA 13"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="qwen"
 
-RUN pip install --no-cache-dir --upgrade pip
-
-# qwen_tts 0.1.1 is incompatible with transformers >= 5.12
-# (check_model_inputs signature changed). Pin to 5.0-5.11.
-RUN pip install --no-cache-dir "transformers>=5.0,<5.12" --force-reinstall
-
-# qwen-tts requires huggingface-hub < 1.0 (pinned explicitly)
-RUN pip install --no-cache-dir "huggingface-hub<1.0,>=0.34.0"
+# engine-py311 has Python 3.11 + torch nightly CUDA 13 + check_model_inputs fix.
+# qwen_tts needs huggingface-hub < 1.0 (doesn't conflict with engine-py311's hf-hub >=1.0).
+RUN pip install --no-cache-dir "huggingface-hub<1.0,>=0.34.0" --force-reinstall
 RUN pip install --no-cache-dir qwen-tts
 
 # Shared audio deps

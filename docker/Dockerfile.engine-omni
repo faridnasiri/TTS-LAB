@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# engine-omni — omnivoice with latest transformers
+# ═══════════════════════════════════════════════════════════════════
+#
+# omnivoice needs transformers newer than 5.12 (HiggsAudioV2TokenizerModel
+# architecture). Uses engine-py311 as base (Python 3.11 + CUDA 13).
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-engine-py311:latest
+LABEL org.opencontainers.image.title="TTS Lab — Engine Server (omni)"
+LABEL org.opencontainers.image.description="OmniVoice on latest transformers"
+LABEL tts-lab.tier="3-engine"
+LABEL tts-lab.stack="omni"
+
+# Upgrade transformers to latest available (may have HiggsAudioV2TokenizerModel)
+RUN pip install --no-cache-dir --upgrade transformers
+
+EXPOSE 8106
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:8106/health || exit 1
+CMD ["python3", "tts_lab_engine_server.py", "--port", "8106", "--stack", "current"]
