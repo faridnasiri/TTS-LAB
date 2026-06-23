@@ -91,15 +91,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ── torchcodec stub for XTTS + f5tts ────────────────────────────
 # coqui-tts 2.9+ and transformers ASR pipeline require torchcodec.
 # The pip package doesn't exist for torch nightly. Create a full stub.
+ARG TORCHCODEC_STUB=1
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
     mkdir -p "${SITE_PKGS}/torchcodec-99.0.0.dist-info" && \
     printf "Metadata-Version: 2.1\nName: torchcodec\nVersion: 99.0.0\n" \
        > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/METADATA" && \
     printf "" > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/RECORD" && \
     mkdir -p "${SITE_PKGS}/torchcodec/decoders" && \
-    printf "# torchcodec stub for coqui-tts + transformers compat\n" > "${SITE_PKGS}/torchcodec/__init__.py" && \
+    printf "from .decoders import AudioDecoder\n" > "${SITE_PKGS}/torchcodec/__init__.py" && \
     printf "class AudioDecoder:\n    pass\n" > "${SITE_PKGS}/torchcodec/decoders/__init__.py" && \
-    echo "torchcodec stub created"
+    python3 -c "from torchcodec.decoders import AudioDecoder; print('torchcodec stub verified')"
 
 # Pin versions that engine packages may have changed.
 # numpy < 2.0 critical: engine packages (bark, melo, outetts, etc.)
