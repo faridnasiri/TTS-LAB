@@ -16,15 +16,16 @@
 #   No install-then-downgrade
 #
 # PINNED (this layer):
-#   transformers 4.51–4.54      — ROPE_INIT_FUNCTIONS["default"] intact
+#   transformers == 4.51.3      — before TransformGetItemToIndex (4.54)
 #   huggingface-hub 0.34–1.0    — qwen_tts 0.1.1 compatibility
 #   qwen-tts == 0.1.1           — last known-compatible release
 #
 # INCOMPATIBILITIES THIS AVOIDS:
 #   - ROPE_INIT_FUNCTIONS["default"] removed in tf 5.x
-#   - TransformGetItemToIndex added in tf 4.54 (qwen_tts chokes)
+#   - TransformGetItemToIndex added in tf 4.54 (qwen_tts 0.1.1 crashes)
 #   - huggingface-hub >= 1.0 removes is_offline_mode (qwen_tts 0.1.1)
 #   - inputs_embeds signature changed in tf 5.x
+#   Deployed fix: install qwen-tts first, then --force-reinstall tf==4.51.3
 #
 # MODEL: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice  (gated — needs HF_TOKEN)
 #
@@ -47,7 +48,7 @@ LABEL tts-lab.maturity="experimental"
 RUN pip install --no-cache-dir qwen-tts==0.1.1
 
 RUN pip install --no-cache-dir --force-reinstall \
-    "transformers>=4.51,<4.54" \
+    "transformers==4.51.3" \
     "huggingface-hub>=0.34,<1.0"
 
 # ── Build-time validation — fail fast, not at runtime ─────────────
