@@ -363,3 +363,133 @@ This clears cache older than 24 hours — enough to pick up code changes while k
 | Torch version | Floating (breakable) | Pinned (stable) |
 | BuildKit cache | Full prune (128 GB) | Time-filtered (stale only) |
 | qwen3tts tf version | 5.12 (broken) | 5.0-5.11 (compatible) |
+
+---
+
+## 8. engine-py311 Session — Findings & Solutions (2026-06-22)
+
+### 8.1 The CUDA 12/13 Deadlock
+
+**Problem:** After the PyTorch nightly index moved to CUDA 13 toolchain, `torch` wheels (cu128) compiled for CUDA 12.8 could not coexist with `torchvision` wheels compiled for CUDA 13. The failure chain was:
+
+```
+Engine load → transformers → image_utils → torchvision
+→ RuntimeError: PyTorch CUDA 12.8 vs torchvision CUDA 13.0
+```
+
+This blocked 10+ engines in engine-current (4 worked: matcha, piper, kokoro, outetts — all ONNX/lightweight engines that don't use torchvision).
+
+**Failed approaches (2 days of attempts):**
+- `--upgrade torch` without `--no-deps`: pulled CUDA 13 nvidia packages, broke torchvision
+- `--upgrade --no-deps`: missing CUDA runtime libraries (libcupti.so.12)
+- `--force-reinstall`: same CUDA 13/12 mismatch
+- `PIP_CONSTRAINT`: too restrictive, prevented engine package installs
+- Multiple rebuilts with slight flag variations: Docker cache masked real issues
+
+**Root cause:** `pip install torch --index-url .../nightly/cu128` installs torch (CUDA 12.8) but its dependencies pull nvidia-* CUDA 13 packages. Engine packages that need torchvision get a CUDA 13 version. Mixing CUDA 12 and 13 in one container is fundamentally broken.
+
+**Solution: engine-py311 container.** Separate container with unified CUDA 13 stack:
+
+```dockerfile
+FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+# Python 3.11 (required by torchvision nightly >= 2026-06)
+RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+# All torch/torchvision/torchaudio from SAME index (cu130)
+RUN pip install --pre torch torchvision torchaudio --index-url .../nightly/cu130
+```
+
+**Key insight:** When two dependencies require different CUDA major versions that cannot coexist, a new container is the correct IaC solution — not trying to force them together.
+
+### 8.2 LD_LIBRARY_PATH Trap
+
+**Problem:** `update-alternatives` to Python 3.11 causes pip to install nvidia libraries to `/usr/local/lib/python3.11/dist-packages/nvidia/*/lib/`. The dynamic linker can't find these paths at runtime. Docker ignores `ENV LD_LIBRARY_PATH` during `RUN` (build) steps.
+
+**Symptom:** `import torch` succeeds during `docker run` but fails during `docker build` on subsequent RUN steps.
+
+**Fix:** Set `LD_LIBRARY_PATH` explicitly inline during RUN commands that need GPU libraries:
+
+```dockerfile
+ENV NVIDIA_LIB_PATH="/usr/local/lib/python3.11/dist-packages/nvidia/cuda_runtime/lib:..."
+ENV LD_LIBRARY_PATH="${NVIDIA_LIB_PATH}:..."
+# For build-time validation:
+RUN LD_LIBRARY_PATH="${NVIDIA_LIB_PATH}" pip install --pre torch ...
+```
+
+Also add `cuda-nvrtc-13-0` system package for `libnvrtc-builtins.so.13.0` (needed by outetts, dia).
+
+### 8.3 check_model_inputs Global Fix
+
+**Problem:** `transformers` 5.12 `check_model_inputs` decorator validates kwargs against function signatures. Older engine code (chatterbox, chattts) passes `inputs_embeds`, `attention_mask`, `position_ids` as kwargs. The decorator rejects these → all model inferences fail.
+
+**Failed approaches:**
+- Per-model `__wrapped__` bypass: saved `_orig_llama_forward` was already wrapped, and the wrapper was applied before our patch
+- Per-engine pass-through in `_load_*`: too late — decorators run at import time, not call time
+- Stripping kwargs in `_patched_llama_forward`: playing whack-a-mole with kwarg names
+
+**Solution:** Replace the `check_model_inputs` factory function itself in `tts_lab_shims.py`, BEFORE any model is imported:
+
+```python
+# In tts_lab_shims.py, before any engine imports:
+import transformers.utils.generic as _tug
+
+def _noop_check_model_inputs(*args, **kwargs):
+    """Identity pass-through — returns function unchanged."""
+    if len(args) == 1 and callable(args[0]) and not kwargs:
+        return args[0]  # used as @check_model_inputs without ()
+    def _identity(func):
+        return func
+    return _identity
+
+_tug.check_model_inputs = _noop_check_model_inputs
+```
+
+This runs once at engine server startup. All subsequent `@check_model_inputs` decorators are no-ops. Fixed chatterbox, chattts, and partially qwen3tts.
+
+### 8.4 Container Strategy Decisions
+
+After this session, the production architecture is:
+
+| Container | Port | Engines | Rationale |
+|-----------|:----:|:-------:|-----------|
+| **engine-py311** | 8105 | 14 | Primary: CUDA 13 + Python 3.11 unified stack |
+| **engine-omni** | 8106 | 1 | omnivoice needs transformers upgrade (FROM engine-py311) |
+| **engine-qwen** | 8104 | 1 | qwen3tts needs tf 4.x + hf-hub <1.0 (FROM engine-py311) |
+| **orchestrator** | 8009 | UI | Web interface + HTTP dispatch |
+
+**Decommissioned:**
+- engine-current (74 GB, 4 engines) — replaced by engine-py311 (52 GB, 14 engines)
+- engine-mid (17 GB, 0 engines) — never worked, engines moved to engine-py311
+- Old systemd arthur-lab service (port 8001) — stale venv, all engines broken
+
+**Design principle:** One container = one incompatible dependency set. If an engine needs a different transformers version, CUDA version, or Python version than the primary container, it gets its own lightweight container derived FROM the primary.
+
+### 8.5 qwen3tts Remaining Issues
+
+qwen3tts requires a very specific combination:
+- transformers >= 5.0 (for `auto_docstring`)
+- transformers < 5.12 (before `check_model_inputs` signature change)
+- transformers WITHOUT `TransformGetItemToIndex` (class added in 4.54, incompatible with torch 2.11)
+- `ROPE_INIT_FUNCTIONS["default"]` (removed in tf 5.x)
+- `huggingface-hub < 1.0` (qwen_tts 0.1.1 requirement)
+
+These five constraints span three different transformers version ranges (4.50-4.53, 5.0-5.11, 5.12+). No single version satisfies all five. The `check_model_inputs` issue is resolved by our global shims fix, but `TransformGetItemToIndex` remains. qwen3tts needs one of:
+- An older transformers without TransformGetItemToIndex (< 4.50) — but then `auto_docstring` is missing
+- A newer transformers with TransformGetItemToIndex fixed for torch 2.11
+- A qwen_tts update from upstream
+
+### 8.6 VRAM Management Across Containers
+
+**Discovery:** Multiple GPU containers share the SAME physical GPU. A heavy engine loaded in one container consumes VRAM that other containers cannot use. With 16 GB total:
+- engine-py311 alone: 14 engines work (one at a time via lazy-load)
+- engine-py311 + engine-qwen: conflicts (qwen3tts may OOM)
+- engine-py311 + engine-omni: works (omnivoice is lightweight)
+
+**Best practice:** Run only the primary engine container (engine-py311). Start auxiliary containers (engine-qwen, engine-omni) on demand and stop them when done.
+
+### 8.7 Docker Build Cache Can Mask Code Changes
+
+**Re-confirmed:** Even `--no-cache` rebuilds can serve stale code if BuildKit cache is not explicitly cleared. Always run before code-change rebuilds:
+
+```bash
+docker builder prune -f --filter until=1h
+```
