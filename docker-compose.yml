@@ -121,7 +121,17 @@ services:
       dockerfile: docker/Dockerfile.engine-current
     image: tts-lab-engine-current:latest
     container_name: tts-lab-engine-current
-    <<: *model-volume
+    volumes:
+      - /opt/models:/opt/models
+      - /tmp/tts_uploads:/tmp/tts_uploads
+      - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       <<: *common-env
       SUNO_USE_SMALL_MODELS: "False"
