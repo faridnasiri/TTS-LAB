@@ -42,14 +42,16 @@ LABEL tts-lab.stack="qwen"
 LABEL tts-lab.maturity="experimental"
 
 # ── Pinned dependency window ──────────────────────────────────────
-# Order matters: install qwen-tts first (it pulls latest transformers),
-# then force-downgrade transformers to the compatible range.
-# qwen_tts 0.1.1 is incompatible with TransformGetItemToIndex (tf >= 4.54).
-RUN pip install --no-cache-dir qwen-tts==0.1.1
+# qwen_tts 0.1.1 pulls latest transformers → breaks on TransformGetItemToIndex.
+# Strategy: install qwen-tts --no-deps to prevent transformer upgrade,
+# then manually install its deps with pinned versions.
+RUN pip install --no-cache-dir --no-deps qwen-tts==0.1.1
 
-RUN pip install --no-cache-dir --force-reinstall \
+# Install qwen_tts dependencies, with transformers pinned
+RUN pip install --no-cache-dir \
     "transformers==4.51.3" \
-    "huggingface-hub>=0.34,<1.0"
+    "huggingface-hub>=0.34,<1.0" \
+    accelerate einops librosa onnxruntime soundfile sox torchaudio
 
 # ── Build-time validation — fail fast, not at runtime ─────────────
 RUN python3 -c "import qwen_tts; print('qwen_tts OK')" \
