@@ -56,12 +56,12 @@ Docker images can inherit from each other using `FROM`. Think of it like class i
 │ ~+12 GB → 17 GB total        │ │ ~+8 GB → 12.5 GB total           │
 │                               │ │                                  │
 │ FROM stack-current:latest     │ │ FROM stack-mid:latest            │
-│ 22 engines WITH FIXES BAKED:  │ │ 3 engines:                       │
-│  piper, kokoro, melo, matcha  │ │  qwen3tts (needs ROPE default)  │
-│  chattts, outetts, bark       │ │  VibeVoice (vibevoice package)  │
-│  styletts2, f5tts, dia        │ │  Higgs (AutoModelForSeq2SeqLM)  │
-│  xtts, chatterbox, fishspeech │ │                                  │
-│  chatterboxturbo, omnivoice   │ │ Port 8103                        │
+│ 22 engines WITH FIXES BAKED:  │ │ 2 engines (POC pending):         │
+│  piper, kokoro, melo, matcha  │ │  VibeVoice (vibevoice package)  │
+│  chattts, outetts, bark       │ │  Higgs (AutoModelForSeq2SeqLM)  │
+│  styletts2, f5tts, dia        │ │                                  │
+│  xtts, chatterbox, fishspeech │ │ Port 8103                        │
+│  chatterboxturbo, omnivoice   │ │                                  │
 │  zonos, csm, orpheus, ...     │ │                                  │
 │                               │ │                                  │
 │ MeCab + unidic download       │ │                                  │
@@ -72,7 +72,22 @@ Docker images can inherit from each other using `FROM`. Think of it like class i
 │ Port 8101                     │ │                                  │
 └──────────────────────────────┘ └──────────────────────────────────┘
 
-                  ┌──────────────────────────────────┐
+           │
+           ▼
+┌──────────────────────────────────┐
+│ LAYER 3: engine-qwen             │
+│ ~+3 GB → 8 GB total              │
+│                                   │
+│ FROM stack-mid:latest             │
+│ 1 engine (dedicated):             │
+│  Qwen3-TTS 1.7B (needs ROPE)     │
+│                                   │
+│ Pinned: tf 4.51-4.54              │
+│         hf-hub 0.34-1.0           │
+│         qwen-tts == 0.1.1         │
+│                                   │
+│ Port 8104                         │
+└──────────────────────────────────┘
                   │ SGLang (pre-built, 1 engine only) │
                   │ lmsysorg/sglang-omni:dev  ~8 GB   │
                   │                                   │
@@ -86,16 +101,17 @@ Docker images can inherit from each other using `FROM`. Think of it like class i
 
 Compare to the current ad-hoc monolith: **57 GB** (50 GB engine + 7 GB orchestrator, no layer sharing).
 
-### 1.2 Container Map (6 Containers — 5 custom + 1 pre-built)
+### 1.2 Container Map (7 Containers — 6 custom + 1 pre-built)
 
 | # | Container | Image | Port | GPU | Engines | Status |
 |---|-----------|-------|:----:|:---:|:-------:|--------|
 | 1 | `orchestrator` | `tts-lab-orchestrator` | 8001 | No | Web UI | ✅ Ready |
 | 2 | `engine-current` | `tts-lab-engine-current` | 8101 | Yes | **15** (piper→zonos) | ✅ Ready |
-| 3 | `engine-mid` | `tts-lab-engine-mid` | 8103 | Yes | **3** (qwen3tts, VibeVoice, Higgs) | 🆕 Ready |
-| 4 | `engine-legacy` | `tts-lab-engine-legacy` | 8102 | Yes | 2 (indextts, parler) | 🔧 Deferred |
-| 5 | `orpheus` | `tts-lab-orpheus` | 8002 | Yes | 1 | 🔧 Blocked |
-| 6 | `s2pro` | SGLang pre-built | 8005 | Yes | 1 (S2-Pro) | ❌ Blocked upstream |
+| 3 | `engine-mid` | `tts-lab-engine-mid` | 8103 | Yes | **2** (VibeVoice, Higgs) | 🧪 POC pending |
+| 4 | `engine-qwen` | `tts-lab-engine-qwen` | 8104 | Yes | **1** (Qwen3-TTS) | 🧪 EXPERIMENTAL |
+| 5 | `engine-legacy` | `tts-lab-engine-legacy` | 8102 | Yes | 2 (indextts, parler) | 🔧 Deferred |
+| 6 | `orpheus` | `tts-lab-orpheus` | 8002 | Yes | 1 | 🔧 Blocked |
+| 7 | `s2pro` | SGLang pre-built | 8005 | Yes | 1 (S2-Pro) | ❌ BLOCKED upstream |
 
 ### 1.3 GPU Strategy
 
@@ -103,16 +119,16 @@ The RTX 5060 Ti has 16 GB VRAM. The engine-current container uses lazy-load: onl
 
 **VRAM budgeting with engine-mid:**
 - engine-current (lazy, 1 engine): ~300 MB – 12 GB
-- engine-mid (lazy, 1 engine): ~3 GB (qwen3tts), ~6 GB (VibeVoice), ~9 GB (Higgs)
+- engine-mid (lazy, 1 engine): ~6 GB (VibeVoice), ~9 GB (Higgs)
+- engine-qwen (lazy, 1 engine): ~3 GB (Qwen3-TTS)
 - Total with both: can fit a light engine-current engine + one engine-mid engine (13-15 GB of 16 GB)
 
-### 1.4 engine-mid — The Middle-Ground Stack (NEW)
+### 1.4 engine-mid — The Middle-Ground Stack (VibeVoice + Higgs POC)
 
-Three engines need transformers 4.x but can't use the legacy stack (torch 1.13 is too old for them). They also run as **local models** — no SGLang needed.
+Two engines need transformers 4.x but can't use the legacy stack (torch 1.13 is too old for them). They also run as **local models** — no SGLang needed. Qwen3-TTS has been moved to its own dedicated container (engine-qwen) to avoid dependency drift.
 
 | Engine | Why Not engine-current | Why Not engine-legacy | Solution |
 |--------|----------------------|----------------------|----------|
-| **qwen3tts** | transformers 5.x removed `ROPE_INIT_FUNCTIONS["default"]` | torch 1.13 too old | transformers 4.x + torch 2.x |
 | **VibeVoice** | `vibevoice` pip package conflicts with tf 5.12.1 | torch 1.13 too old | tf 4.x + `vibevoice` package |
 | **Higgs** | `higgs` architecture not in tf 5.12 | torch 1.13 too old | tf 4.x with `higgs` support |
 
@@ -128,13 +144,138 @@ Layer 2: tts-lab-stack-mid (~+3 GB → ~4.5 GB total)
 
 Layer 3: tts-lab-engine-mid (~+8 GB → ~12.5 GB total)
   FROM tts-lab-stack-mid:latest
-  qwen-tts, vibevoice, higgs
+  vibevoice, higgs (2 engines — POC pending)
   Port 8103
 ```
 
+### 1.4b VibeVoice POC — Staged Validation Plan
+
+Before VibeVoice is promoted to SUPPORTED, it must pass a 4-stage validation. The outcome of each stage determines whether engine-mid local inference is viable or whether the SGLang path must be used instead.
+
+#### Stage 1 — Config loading (gate: transformers compatibility)
+
+```bash
+docker run --rm --gpus all \
+  -v /opt/models/huggingface:/root/.cache/huggingface \
+  tts-lab-stack-mid:latest \
+  python3 -c "
+from transformers import AutoConfig
+cfg = AutoConfig.from_pretrained('microsoft/VibeVoice-1.5B', trust_remote_code=True)
+print(cfg)
+"
+```
+
+**Pass:** The vibevoice architecture registers with transformers 4.x. Proceed to Stage 2.
+**Fail:** SGLang path is the only option. Stop here.
+
+#### Stage 2 — Model loading (gate: custom code + weights)
+
+```bash
+docker run --rm --gpus all \
+  -v /opt/models/huggingface:/root/.cache/huggingface \
+  tts-lab-stack-mid:latest \
+  python3 -c "
+import torch
+from transformers import AutoModel
+model = AutoModel.from_pretrained(
+    'microsoft/VibeVoice-1.5B',
+    trust_remote_code=True,
+    device_map='cuda',
+    torch_dtype=torch.bfloat16,
+)
+print(f'Model loaded: {type(model).__name__}')
+print(f'VRAM: {torch.cuda.memory_allocated() / 1e9:.1f} GB')
+"
+```
+
+**Pass:** Model loads without OOM or import errors. Record VRAM. Proceed to Stage 3.
+**Fail:** Custom code incompatible with this transformers version, or OOM.
+
+#### Stage 3 — Minimal inference (gate: generation pipeline)
+
+```bash
+docker run --rm --gpus all \
+  -v /opt/models/huggingface:/root/.cache/huggingface \
+  tts-lab-stack-mid:latest \
+  python3 -c "
+import torch, soundfile as sf
+from transformers import AutoModel
+model = AutoModel.from_pretrained(
+    'microsoft/VibeVoice-1.5B',
+    trust_remote_code=True,
+    device_map='cuda',
+    torch_dtype=torch.bfloat16,
+)
+# Short prompt to validate the full pipeline
+audio = model.generate('Hello world.', voice='default')
+sf.write('/tmp/vibevoice_test.wav', audio[0], 24000)
+print(f'Generated {len(audio[0])} samples, sr=24000')
+"
+```
+
+**Pass:** Audio file produced, sounds like speech (not silence/noise). Proceed to Stage 4.
+**Fail:** Generation crashes, produces silence, or garbled output.
+
+#### Stage 4 — VRAM measurement (gate: fit alongside engine-current)
+
+```bash
+# Measure: nvidia-smi before load
+# Load VibeVoice + run inference
+# Measure: nvidia-smi after load
+# Difference = VRAM footprint
+nvidia-smi --query-gpu=memory.used --format=csv,noheader
+```
+
+**Pass:** VRAM footprint ≤ 7 GB (fits alongside a light engine-current engine on 16 GB).
+**Fail:** If > 10 GB, VibeVoice requires its own GPU or must wait for SGLang.
+
+#### Outcome matrix
+
+| Stage 1 | Stage 2 | Stage 3 | Stage 4 | Result |
+|:-------:|:-------:|:-------:|:-------:|--------|
+| ✅ | ✅ | ✅ | ✅ | **SUPPORTED** — move to engine-mid |
+| ✅ | ✅ | ✅ | ❌ VRAM | **EXPERIMENTAL** — needs dedicated GPU or SGLang |
+| ✅ | ✅ | ❌ | — | **BLOCKED** — inference incompatible |
+| ✅ | ❌ | — | — | **BLOCKED** — model loading fails |
+| ❌ | — | — | — | **BLOCKED** — wait for SGLang upstream |
+
+### 1.5 engine-qwen — Dedicated Qwen3-TTS Container (NEW)
+
+Qwen3-TTS was originally planned for engine-mid, but its dependency constraints are too narrow to share a container. It needs:
+
+- `transformers >= 4.51, < 4.54` (ROPE_INIT_FUNCTIONS present, TransformGetItemToIndex not yet added)
+- `huggingface-hub >= 0.34, < 1.0` (qwen_tts 0.1.1 conflicts with hf-hub >= 1.0)
+- `qwen-tts == 0.1.1`
+
+These pins conflict with both engine-current (torch nightly, tf 5.12, hf-hub >= 1.0) and would cause dependency drift if kept inside engine-mid alongside VibeVoice and Higgs.
+
+**The engine-qwen stack:**
+```
+Layer 1: tts-lab-base (~1.5 GB) ← SAME base, shared
+Layer 2: tts-lab-stack-mid (~+3 GB → ~4.5 GB total)
+  FROM tts-lab-base:latest
+  torch 2.10.0 stable (cu121)
+  transformers 4.51.3
+
+Layer 3: tts-lab-engine-qwen (~+3 GB → ~8 GB total)
+  FROM tts-lab-stack-mid:latest
+  transformers 4.51-4.54 (pinned)
+  huggingface-hub 0.34-1.0 (pinned)
+  qwen-tts == 0.1.1
+  Validation: ROPE default check at build time
+  Port 8104
+```
+
+**Key design decisions:**
+- Uses `stack-mid` (torch 2.10 stable, CUDA 12.1) — no nightly regressions
+- No install-then-downgrade (stack-mid already has tf 4.x)
+- Build-time validation catches dependency breakage before runtime
+- Model is gated: `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` requires HF_TOKEN
+
 **New Dockerfiles needed:**
 - `docker/Dockerfile.stack.mid` — torch 2.10 stable + transformers 4.x
-- `docker/Dockerfile.engine-mid` — FROM stack.mid, 3 engines
+- `docker/Dockerfile.engine-mid` — FROM stack.mid, 2 engines (VibeVoice, Higgs)
+- `docker/Dockerfile.engine-qwen` — FROM stack.mid, 1 engine (Qwen3-TTS)
 
 **Updated Container Map:**
 
@@ -142,10 +283,68 @@ Layer 3: tts-lab-engine-mid (~+8 GB → ~12.5 GB total)
 |-----------|-------|:----:|:---:|--------|
 | orchestrator | `tts-lab-orchestrator` | 8001 | No | ✅ |
 | engine-current | `tts-lab-engine-current` | 8101 | Yes | ✅ (15 engines) |
-| **engine-mid** | **`tts-lab-engine-mid`** | **8103** | **Yes** | **🆕 (3 engines)** |
+| engine-mid | `tts-lab-engine-mid` | 8103 | Yes | 🧪 (2 engines, POC pending) |
+| **engine-qwen** | **`tts-lab-engine-qwen`** | **8104** | **Yes** | **🧪 (1 engine, EXPERIMENTAL)** |
 | engine-legacy | `tts-lab-engine-legacy` | 8102 | Yes | 🔧 Deferred |
 | orpheus | `tts-lab-orpheus` | 8002 | Yes | 🔧 Blocked |
-| S2-Pro | SGLang | 8005 | Yes | ❌ Blocked upstream |
+| S2-Pro | SGLang | 8005 | Yes | ❌ BLOCKED upstream |
+
+---
+
+## 1.6 Engine Maturity Classification
+
+Container existence ≠ engine readiness. Every engine is assigned one of three maturity states to prevent future contributors from assuming a container builds correctly means it works.
+
+### States
+
+| State | Icon | Meaning | Synthesis Tested? | Container Validated? |
+|-------|:----:|---------|:-----------------:|:--------------------:|
+| **SUPPORTED** | ✅ | Synthesis confirmed working on the target hardware | ✅ Yes | ✅ Yes |
+| **EXPERIMENTAL** | 🧪 | Container definition ready, not yet validated at runtime | ❌ No | 🟡 Build only |
+| **BLOCKED** | ❌ | Cannot work — upstream dependency missing or incompatible | ❌ No | N/A |
+
+### Engine-by-Engine Maturity (Current)
+
+| Engine | Maturity | Container | Blocker |
+|--------|:--------:|-----------|---------|
+| **piper** | ✅ SUPPORTED | engine-current | — |
+| **kokoro** | ✅ SUPPORTED | engine-current | — |
+| **melo** | ✅ SUPPORTED | engine-current | — |
+| **matcha** | ✅ SUPPORTED | engine-current | — |
+| **chattts** | ✅ SUPPORTED | engine-current | — |
+| **outetts** | ✅ SUPPORTED | engine-current | — |
+| **bark** | ✅ SUPPORTED | engine-current | — |
+| **styletts2** | ✅ SUPPORTED | engine-current | — |
+| **f5tts** | ✅ SUPPORTED | engine-current | — |
+| **dia** | ✅ SUPPORTED | engine-current | — |
+| **chatterbox** | ✅ SUPPORTED | engine-current | — |
+| **chatterboxturbo** | ✅ SUPPORTED | engine-current | — |
+| **fishspeech** | ✅ SUPPORTED | engine-current | — |
+| **omnivoice** | ✅ SUPPORTED | engine-current | — |
+| **zonos** | ✅ SUPPORTED | engine-current | — |
+| **xtts** | ✅ SUPPORTED | engine-current | torchcodec issue (nightly) |
+| **cosyvoice** | 🧪 EXPERIMENTAL | engine-current | Model download, hyperpyyaml |
+| **csm** | 🧪 EXPERIMENTAL | engine-current | Meta license gated |
+| **manatts** | 🧪 EXPERIMENTAL | engine-current | Not configured |
+| **neutts** | 🧪 EXPERIMENTAL | engine-current | Not configured |
+| **openvoice** | 🧪 EXPERIMENTAL | engine-current | Checkpoints not downloaded |
+| **qwen3tts** | 🧪 EXPERIMENTAL | engine-qwen | Build + HF_TOKEN + synthesis test |
+| **vibevoice** | 🧪 EXPERIMENTAL | engine-mid | POC: AutoModel → inference → VRAM |
+| **higgs** | 🧪 EXPERIMENTAL | engine-mid | POC: AutoModelForSeq2SeqLM → inference |
+| **orpheus** | 🔧 BLOCKED | orpheus | vllm vs torch nightly incompatibility |
+| **indextts** | 🔧 BLOCKED | engine-legacy | Needs legacy stack build |
+| **parler** | 🔧 BLOCKED | engine-legacy | Needs legacy stack build |
+| **s2pro** | ❌ BLOCKED | s2pro (SGLang) | SGLang transformers too old; paged KV cache, RadixAttention required |
+
+### Maturity Lifecycle
+
+```
+EXPERIMENTAL  ──(synthesis test passes)──▶  SUPPORTED
+EXPERIMENTAL  ──(blocker found)─────────▶  BLOCKED
+BLOCKED       ──(upstream releases fix)─▶  EXPERIMENTAL
+```
+
+No engine moves from EXPERIMENTAL to SUPPORTED without a confirmed synthesis test on the target hardware (RTX 5060 Ti, 16 GB VRAM). No engine moves from BLOCKED to EXPERIMENTAL without the upstream blocker being resolved.
 
 ---
 
@@ -417,18 +616,19 @@ Covers:
 | 3 | `docker/Dockerfile.engine-current` | **Rewrite** | All 12 ad-hoc fixes as RUN steps |
 | 4 | `docker/Dockerfile.orchestrator` | No change | Already correct |
 | 5 | `docker/Dockerfile.stack.mid` | **New** | torch 2.10 stable + transformers 4.x |
-| 6 | `docker/Dockerfile.engine-mid` | **New** | qwen3tts, VibeVoice, Higgs |
-| 7 | `docker-compose.yml` | **Edit** | Add engine-mid service, update orchestrator port to 8001 |
-| 8 | `.github/workflows/build-images.yml` | **Edit** | Add engine-mid build job, update path triggers |
-| 9 | `.github/workflows/deploy.yml` | **New** | SSH deploy via workflow_dispatch |
-| 10 | `ansible/site.yml` | **New** | Main playbook |
-| 11 | `ansible/inventory.yml` | **New** | VM connection details |
-| 12 | `ansible/group_vars/tts-lab.yml` | **New** | Variables |
-| 13 | `ansible/roles/docker/tasks/main.yml` | **New** | Install Docker + NVIDIA toolkit |
-| 14 | `ansible/roles/disk/tasks/main.yml` | **New** | Mount data disk |
-| 15 | `ansible/roles/deploy/tasks/main.yml` | **New** | Pull images + start |
-| 16 | `ansible/roles/monitoring/tasks/main.yml` | **New** | Health checks + log rotation |
-| 17 | `docs/operations/RUNBOOK.md` | **New** | Beginner-friendly operations guide |
+| 6 | `docker/Dockerfile.engine-mid` | **New** | VibeVoice, Higgs (2 engines) |
+| 7 | `docker/Dockerfile.engine-qwen` | **New** | Qwen3-TTS (1 engine, dedicated) |
+| 8 | `docker-compose.yml` | **Edit** | Add engine-mid + engine-qwen services, update orchestrator port to 8001 |
+| 9 | `.github/workflows/build-images.yml` | **Edit** | Add engine-mid + engine-qwen build jobs, update path triggers |
+| 10 | `.github/workflows/deploy.yml` | **New** | SSH deploy via workflow_dispatch |
+| 11 | `ansible/site.yml` | **New** | Main playbook |
+| 12 | `ansible/inventory.yml` | **New** | VM connection details |
+| 13 | `ansible/group_vars/tts-lab.yml` | **New** | Variables |
+| 14 | `ansible/roles/docker/tasks/main.yml` | **New** | Install Docker + NVIDIA toolkit |
+| 15 | `ansible/roles/disk/tasks/main.yml` | **New** | Mount data disk |
+| 16 | `ansible/roles/deploy/tasks/main.yml` | **New** | Pull images + start |
+| 17 | `ansible/roles/monitoring/tasks/main.yml` | **New** | Health checks + log rotation |
+| 18 | `docs/operations/RUNBOOK.md` | **New** | Beginner-friendly operations guide |
 
 ---
 

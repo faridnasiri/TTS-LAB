@@ -1,0 +1,347 @@
+stacks:
+  current:
+    torch: '>=2.12,<2.13'
+    transformers: '>=5.12.1,<5.13'
+    python: '3.10'
+    cuda: '12.8'
+    note: torch is nightly (2.12.0.dev*) — range captures major version only
+    validated_on:
+      torch: null
+      transformers: null
+      cuda: null
+      driver: null
+  mid:
+    torch: '>=2.10,<2.11'
+    transformers: '>=4.50,<5.0'
+    python: '3.10'
+    cuda: '12.1'
+  legacy:
+    torch: '>=1.13,<1.14'
+    transformers: '>=4.46,<5.0'
+    python: '3.10'
+    cuda: '11.7'
+engines:
+  piper:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 400
+    notes: ONNX CPU — no torch dependency
+  kokoro:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 200
+    notes: ONNX CPU
+  melo:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 1400
+    notes: Needs MeCab + unidic
+  matcha:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 200
+    notes: ONNX flow-matching — real-time (0.24× RTF)
+  chattts:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 2000
+    notes: 'Ref voice: LZMA encode/decode bug — fallback to random speaker'
+  outetts:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 2000
+    notes: LLM-based. Auto-capped max_length. 15-26× RTF.
+  bark:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 12000
+    notes: Heavy VRAM (~12 GB)
+  styletts2:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 1500
+    notes: Real-time (0.22× RTF). Needs langchain<0.3.0.
+  f5tts:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 3000
+    notes: Voice cloning. Needs hf-hub>=1.0.
+  dia:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 4000
+    notes: 1.6B model. Use Dia-1.6B-0626 only. Monkey-patched KV cache.
+  chatterbox:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 2000
+    notes: Needs torchcodec metadata stub
+  chatterboxturbo:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 1500
+    notes: One-step distilled — near real-time (1.11× RTF)
+  fishspeech:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 3000
+    notes: Voice cloning. Needs lightning (not pytorch_lightning).
+  omnivoice:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 2000
+    notes: 600+ languages. Real-time (0.67× RTF).
+  zonos:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 3000
+    notes: Voice cloning. Backbone copy from git repo needed.
+  xtts:
+    status: supported
+    container: engine-current
+    stack: current
+    vram_est_mb: 2000
+    notes: torchcodec issue with torch nightly — coqui-tts installs but may not synth
+  qwen3tts:
+    status: experimental
+    container: engine-qwen
+    stack: mid
+    vram_est_mb: 3000
+    dependencies:
+      torch: '>=2.10,<2.11'
+      transformers: '>=4.51,<4.54'
+      huggingface_hub: '>=0.34,<1.0'
+      qwen_tts: ==0.1.1
+    incompatibilities:
+    - ROPE_INIT_FUNCTIONS['default'] removed in transformers 5.x
+    - TransformGetItemToIndex added in transformers 4.54 (qwen_tts chokes)
+    - is_offline_mode removed in huggingface-hub >= 1.0
+    - inputs_embeds signature changed in transformers 5.x
+    gated_model: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    needs_hf_token: true
+    promotion_requirements:
+    - build_import
+    - model_load
+    - synthesis
+    - vram_measured
+    validated_on:
+      torch: null
+      transformers: null
+      cuda: null
+      driver: null
+    validation:
+      build_import:
+        status: pending
+        last_tested: null
+        description: qwen_tts import + ROPE default check (build-time)
+      model_load:
+        status: pending
+        last_tested: null
+        description: Qwen3TTSModel.from_pretrained on RTX 5060 Ti
+      synthesis:
+        status: pending
+        last_tested: null
+        description: generate_custom_voice or generate_voice_clone — valid audio
+      vram_measured:
+        status: pending
+        last_tested: null
+        description: nvidia-smi before/after — target ≤ 3.5 GB
+  vibevoice:
+    status: experimental
+    container: engine-mid
+    stack: mid
+    vram_est_mb: 6500
+    dependencies:
+      torch: '>=2.10,<2.11'
+      transformers: '>=4.50,<5.0'
+      vibevoice: '>=0.0.1'
+    sglang_fallback: lmsysorg/sglang-omni:dev --model microsoft/VibeVoice-1.5B
+    notes: No Python code in HF repo — needs trust_remote_code or vibevoice package
+    promotion_requirements:
+    - config_load
+    - model_load
+    - inference
+    - vram_measured
+    validated_on:
+      torch: null
+      transformers: null
+      cuda: null
+      driver: null
+    validation:
+      config_load:
+        status: pending
+        last_tested: null
+        description: AutoConfig.from_pretrained with trust_remote_code=True
+      model_load:
+        status: pending
+        last_tested: null
+        description: AutoModel.from_pretrained on RTX 5060 Ti — no OOM
+      inference:
+        status: pending
+        last_tested: null
+        description: model.generate('Hello world.') — valid audio, not silence/noise
+      vram_measured:
+        status: pending
+        last_tested: null
+        description: nvidia-smi before/after — target ≤ 7 GB
+  higgs:
+    status: experimental
+    container: engine-mid
+    stack: mid
+    vram_est_mb: 9000
+    dependencies:
+      torch: '>=2.10,<2.11'
+      transformers: '>=4.50,<5.0'
+    sglang_fallback: lmsysorg/sglang-omni:dev --model bosonai/higgs-audio-v3-tts-4b
+    notes: Architecture compatible with AutoModelForSeq2SeqLM in tf 4.x
+    promotion_requirements:
+    - config_load
+    - model_load
+    - inference
+    - vram_measured
+    validated_on:
+      torch: null
+      transformers: null
+      cuda: null
+      driver: null
+    validation:
+      config_load:
+        status: pending
+        last_tested: null
+        description: AutoConfig.from_pretrained on bosonai/higgs-audio-v3-tts-4b
+      model_load:
+        status: pending
+        last_tested: null
+        description: AutoModelForSeq2SeqLM.from_pretrained on RTX 5060 Ti — no OOM
+      inference:
+        status: pending
+        last_tested: null
+        description: generate() — valid audio output
+      vram_measured:
+        status: pending
+        last_tested: null
+        description: nvidia-smi before/after — target ≤ 9 GB
+  cosyvoice:
+    status: experimental
+    container: engine-current
+    stack: current
+    vram_est_mb: 3000
+    notes: Needs git clone + model download + hyperpyyaml
+  csm:
+    status: experimental
+    container: engine-current
+    stack: current
+    vram_est_mb: 4000
+    notes: Meta license gated. Needs torchtune, torchao, moshi, silentcipher.
+  manatts:
+    status: experimental
+    container: engine-current
+    stack: current
+    vram_est_mb: 1500
+    notes: Persian multi-speaker Tacotron2 — not configured
+  neutts:
+    status: experimental
+    container: engine-current
+    stack: current
+    vram_est_mb: 1000
+    notes: NeuTTS Air — not configured
+  openvoice:
+    status: experimental
+    container: engine-current
+    stack: current
+    vram_est_mb: 3000
+    notes: Checkpoints not downloaded
+  orpheus:
+    status: blocked
+    container: orpheus
+    stack: cuda
+    vram_est_mb: 6000
+    blocker: vllm incompatible with torch nightly
+    gated_model: canopylabs/orpheus-3b-0.1-ft
+    needs_hf_token: true
+  indextts:
+    status: blocked
+    container: engine-legacy
+    stack: legacy
+    vram_est_mb: 4000
+    blocker: Needs legacy stack build (torch 1.13 + tf 4.46)
+  parler:
+    status: blocked
+    container: engine-legacy
+    stack: legacy
+    vram_est_mb: 3000
+    blocker: Needs legacy stack build (torch 1.13 + tf 4.46)
+  s2pro:
+    status: blocked
+    container: s2pro
+    stack: sglang
+    vram_est_mb: 11000
+    blocker: SGLang image bundles transformers 5.6.0 — too old for fishaudio/s2-pro architecture
+    sglang_model: fishaudio/s2-pro
+    sglang_image: lmsysorg/sglang-omni:dev
+    requires:
+    - paged KV cache
+    - RadixAttention
+    - CUDA graph replay
+    notes: Do not attempt local inference. Do not fork model code. Wait for upstream SGLang release.
+    upstream_watch:
+    - https://github.com/sgl-project/sglang/releases
+    - https://huggingface.co/fishaudio/s2-pro
+summary:
+  total: 28
+  supported: 16
+  deprecated: 0
+  experimental: 8
+  blocked: 4
+  containers:
+    engine-current:
+      total: 21
+      supported: 16
+      deprecated: 0
+      experimental: 5
+      blocked: 0
+    engine-legacy:
+      total: 2
+      supported: 0
+      deprecated: 0
+      experimental: 0
+      blocked: 2
+    engine-mid:
+      total: 2
+      supported: 0
+      deprecated: 0
+      experimental: 2
+      blocked: 0
+    engine-qwen:
+      total: 1
+      supported: 0
+      deprecated: 0
+      experimental: 1
+      blocked: 0
+    orpheus:
+      total: 1
+      supported: 0
+      deprecated: 0
+      experimental: 0
+      blocked: 1
+    s2pro:
+      total: 1
+      supported: 0
+      deprecated: 0
+      experimental: 0
+      blocked: 1

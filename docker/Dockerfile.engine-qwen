@@ -1,44 +1,67 @@
 # syntax=docker/dockerfile:1
 # ═══════════════════════════════════════════════════════════════════
-# TIER 3 — engine-qwen  (1 engine: Qwen3-TTS)
+# TIER 3 — engine-qwen  (1 engine: Qwen3-TTS 1.7B)
 # ═══════════════════════════════════════════════════════════════════
 #
-# Qwen3-TTS requires a unique combination that conflicts with
-# engine-current and engine-mid:
-#   - transformers 5.x (for auto_docstring, ROPE init)
-#   - huggingface-hub < 1.0 (qwen_tts 0.1.1 requirement)
+# Dedicated container — no dependency drift into engine-current.
 #
-# engine-current has hf-hub >= 1.0 (needed by f5tts). Rather than
-# monkey-patch, we give qwen3tts its own clean container.
+# Qwen3-TTS requires a narrow version window that conflicts with
+# both engine-current (torch nightly, tf 5.12, hf-hub >= 1.0)
+# and engine-legacy (torch 1.13 too old for qwen_tts).
 #
-# SIZE: ~8 GB (stack 5 + qwen_tts + model)
+# STACK (inherited from tts-lab-stack-mid):
+#   torch 2.10 stable (cu121)   — stable, well-tested CUDA 12.1
+#   transformers 4.x            — before ROPE API removal in 5.x
+#   No nightly regressions
+#   No install-then-downgrade
+#
+# PINNED (this layer):
+#   transformers 4.51–4.54      — ROPE_INIT_FUNCTIONS["default"] intact
+#   huggingface-hub 0.34–1.0    — qwen_tts 0.1.1 compatibility
+#   qwen-tts == 0.1.1           — last known-compatible release
+#
+# INCOMPATIBILITIES THIS AVOIDS:
+#   - ROPE_INIT_FUNCTIONS["default"] removed in tf 5.x
+#   - TransformGetItemToIndex added in tf 4.54 (qwen_tts chokes)
+#   - huggingface-hub >= 1.0 removes is_offline_mode (qwen_tts 0.1.1)
+#   - inputs_embeds signature changed in tf 5.x
+#
+# MODEL: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice  (gated — needs HF_TOKEN)
+#
+# MATURITY: EXPERIMENTAL — container defined, not yet validated at runtime
+#
+# SIZE: ~8 GB (stack-mid ~4.5 + qwen_tts + model weights ~3 GB)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-stack-py311:latest
-LABEL org.opencontainers.image.title="TTS Lab — Engine Server (qwen stack)"
-LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B on Python 3.11 + CUDA 13"
+FROM tts-lab-stack-mid:latest
+LABEL org.opencontainers.image.title="TTS Lab — Engine Server (qwen)"
+LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B — torch 2.10 stable + tf 4.51-4.54"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="qwen"
+LABEL tts-lab.maturity="experimental"
 
-# qwen_tts 0.1.1 needs tf 4.x (ROPE_INIT_FUNCTIONS, no TransformGetItemToIndex)
-RUN pip install --no-cache-dir "transformers>=4.50,<4.54" --force-reinstall
-RUN pip install --no-cache-dir "huggingface-hub<1.0,>=0.34.0" --force-reinstall
-RUN pip install --no-cache-dir qwen-tts
+# ── Pinned dependency window ──────────────────────────────────────
+# Order matters: pin transformers first (before qwen-tts pulls deps),
+# then hf-hub (qwen_tts 0.1.1 conflicts with >= 1.0), then the engine.
+RUN pip install --no-cache-dir \
+    "transformers>=4.51,<4.54" \
+    "huggingface-hub>=0.34,<1.0"
 
-# Shared audio deps
+RUN pip install --no-cache-dir qwen-tts==0.1.1
+
+# ── Build-time validation — fail fast, not at runtime ─────────────
+RUN python3 -c "import qwen_tts; print('qwen_tts OK')" \
+    && python3 -c "from qwen_tts import Qwen3TTSModel; print('Qwen3TTSModel OK')" \
+    && python3 -c "from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS; assert 'default' in ROPE_INIT_FUNCTIONS, 'ROPE_INIT_FUNCTIONS missing default — wrong transformers version'; print('ROPE default OK')"
+
+# ── Shared audio processing ───────────────────────────────────────
 RUN pip install --no-cache-dir scipy librosa soundfile
 
-# Engine server code
-WORKDIR /opt/arthur
-COPY pyproject.toml .
-COPY tts_lab*.py ./
-RUN pip install --no-deps -e .
-
-ENV COQUI_TOS_AGREED=1
-ENV HF_HOME=/opt/models/huggingface
-ENV XDG_CACHE_HOME=/opt/models/cache
-ENV TOKENIZERS_PARALLELISM=false
-ENV PYTHONUNBUFFERED=1
+# ── Engine server code ────────────────────────────────────────────
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
 
 EXPOSE 8104
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \

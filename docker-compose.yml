@@ -89,8 +89,9 @@ services:
       MATCHA_URL: http://engine-current:8101
       MANATTS_URL: http://engine-current:8101
       CSM_URL: http://engine-current:8101
-      # Middle-ground engines (transformers 4.x + torch 2.x)
-      QWEN3TTS_URL: http://engine-mid:8103
+      # Dedicated engine containers
+      QWEN3TTS_URL: http://engine-qwen:8104
+      # VibeVoice / Higgs — POC pending; route to engine-mid once validated
       VIBEVOICE_URL: http://engine-mid:8103
       HIGGS_URL: http://engine-mid:8103
       # Legacy engines
@@ -112,6 +113,7 @@ services:
     depends_on:
       - engine-current
       - engine-mid
+      - engine-qwen
       - engine-legacy
 
   # ═══════════════════════════════════════════════════════════════
@@ -138,7 +140,7 @@ services:
       - tts-lab-net
 
   # ═══════════════════════════════════════════════════════════════
-  # Engine-Mid — 3 engines on torch 2.10 stable + tf 4.x
+  # Engine-Mid — 2 engines (VibeVoice + Higgs) on torch 2.10 stable + tf 4.x
   # ═══════════════════════════════════════════════════════════════
   engine-mid:
     build:
@@ -155,6 +157,30 @@ services:
       - mid
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8103/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Engine-Qwen — Qwen3-TTS 1.7B on torch 2.10 stable + tf 4.51-4.54
+  # ═══════════════════════════════════════════════════════════════
+  engine-qwen:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.engine-qwen
+    image: tts-lab-engine-qwen:latest
+    container_name: tts-lab-engine-qwen
+    <<: *model-volume
+    <<: *gpu-config
+    environment:
+      <<: *common-env
+      HF_TOKEN: ${HF_TOKEN:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8104/health"]
       interval: 30s
       timeout: 10s
       retries: 3
