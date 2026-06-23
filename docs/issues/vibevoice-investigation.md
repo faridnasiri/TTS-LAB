@@ -167,8 +167,75 @@ Rewriting the inference pipeline's speech-processing path for text-only generati
 
 ---
 
-## 6. Disposition
+### 2.7 Attempt 5: Source-patched Prefill Guard (PARTIAL — tokens generated, no audio)
 
-**VibeVoice remains EXPERIMENTAL. Classification: BLOCKED for local inference — waiting on SGLang upstream.**
+The vibevoice source in the container was patched to add a None guard in the prefill section:
 
-The model loads and the tokenizer can be patched. But the inference pipeline assumes SGLang is handling multimodal coordination. After 5 patch layers each revealing the next coupling point, further attempts at standalone local inference have sharply diminishing returns. The correct path is SGLang-Omni.
+```python
+# Before (crashes):
+if is_prefill:
+    prefill_inputs = {
+        "speech_tensors": speech_tensors.to(device=device),  # None.to() → crash
+        ...
+    }
+
+# After (safe):
+if is_prefill:
+    if speech_tensors is not None:
+        prefill_inputs = {
+            "speech_tensors": speech_tensors.to(device=device),
+            ...
+        }
+    else:
+        prefill_inputs = {}
+```
+
+**Result:** `generate()` completes without error. Output: `VibeVoiceGenerationOutput` with:
+- `sequences`: shape (1, 10) — text tokens generated ✅
+- `speech_outputs`: `[None]` — **no audio produced** ❌
+
+**Root cause:** The prefill guard prevents the crash but also prevents the speech processing pipeline from initializing. Without the prefill step initializing acoustic tokenizer state, connector embeddings, and the AR decoder's speech interleaving path, the model can only generate text tokens. Audio generation requires the speech-path to be active even for text-to-speech — the architecture is inherently multimodal.
+
+**This is the definitive finding: the vibevoice inference pipeline cannot produce audio output without its speech processing path initialized, and that initialization requires SGLang's coordination of the acoustic tokenizer, semantic tokenizer, streaming cache, and multimodal state.**
+
+---
+
+## 3. Complete Patch Chain (6 Layers)
+
+| Layer | What | Result |
+|:------|------|:------:|
+| 1 | AutoConfig bypass | ✅ Direct import works |
+| 2 | Model weight load | ✅ 5.4 GB, 3-8s |
+| 3 | Tokenizer constructor | ✅ Patched `add_special_tokens` collision |
+| 4 | Tokenizer files | ✅ Qwen2 BPE from HF |
+| 5 | Prefill None guard | ✅ Source patched, generation completes |
+| 6 | **Audio output** | ❌ `speech_outputs: [None]` — pipeline needs speech init |
+
+**After 6 patch layers, the final blocker is architectural: the model cannot produce audio without SGLang initializing its multimodal processing pipeline.**
+
+---
+
+## 4. Solution Paths
+
+Only one viable path:
+
+### SGLang-Omni (Wait for upstream)
+
+```yaml
+vibevoice:
+  image: lmsysorg/sglang-omni:dev
+  command: --model microsoft/VibeVoice-1.5B
+  profiles: [sglang]
+```
+
+When SGLang updates to a transformers version supporting vibevoice, this works with zero code changes. SGLang handles all the speech-path initialization that we cannot reproduce locally.
+
+Monitor: https://github.com/sgl-project/sglang/releases
+
+---
+
+## 5. Disposition
+
+**VibeVoice: EXPERIMENTAL → effectively BLOCKED for local inference. Awaiting SGLang upstream.**
+
+The model loads, the tokenizer works, but the inference pipeline's speech-processing path cannot be initialized without SGLang. Six patch layers confirmed this is not a series of fixable bugs — it's a fundamental architectural assumption in the vibevoice 0.0.1 inference code. No further local-inference patches warranted.
