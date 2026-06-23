@@ -42,22 +42,18 @@ LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="qwen"
 LABEL tts-lab.maturity="experimental"
 
-# ── Pinned dependency window ──────────────────────────────────────
-# qwen_tts 0.1.1 pulls latest transformers → breaks on TransformGetItemToIndex.
-# Strategy: install qwen-tts --no-deps to prevent transformer upgrade,
-# then manually install its deps with pinned versions.
-RUN pip install --no-cache-dir --no-deps qwen-tts==0.1.1
+# ── qwen_tts with its preferred transformers ──────────────────────
+# qwen_tts 0.1.1 requires transformers==4.57.3 (exact pin in metadata).
+# TransformGetItemToIndex in masking_utils is patched at runtime by
+# tts_lab_shims.py with a working no-op context manager.
+RUN pip install --no-cache-dir qwen-tts==0.1.1
 
-# Install qwen_tts dependencies, with transformers pinned
-RUN pip install --no-cache-dir \
-    "transformers==4.53.3" \
-    "huggingface-hub>=0.34,<1.0" \
-    accelerate einops librosa onnxruntime soundfile sox torchaudio
+RUN pip install --no-cache-dir "huggingface-hub>=0.34,<1.0"
 
 # ── Build-time validation — fail fast, not at runtime ─────────────
+# TransformGetItemToIndex is patched at runtime by tts_lab_shims.py.
 RUN python3 -c "import qwen_tts; print('qwen_tts OK')" \
     && python3 -c "from qwen_tts import Qwen3TTSModel; print('Qwen3TTSModel OK')" \
-    && python3 -c "import transformers; v = transformers.__version__; print(f'transformers {v}'); from packaging import version; assert version.parse(v) < version.parse('4.54'), f'transformers {v} >= 4.54 — TransformGetItemToIndex will break qwen_tts'; print('transformers version OK')" \
     && python3 -c "from transformers.modeling_rope_utils import ROPE_INIT_FUNCTIONS; assert 'default' in ROPE_INIT_FUNCTIONS, 'ROPE_INIT_FUNCTIONS missing default'; print('ROPE default OK')"
 
 # ── Shared audio processing ───────────────────────────────────────

@@ -443,14 +443,28 @@ except Exception:
     pass
 
 # ── transformers.masking_utils (added in 4.54, needed by qwen_tts) ───────────
+# TransformGetItemToIndex context manager is broken in some transformers versions.
+# Replace it with a working no-op context manager.
 try:
     import transformers.masking_utils  # noqa — exists on 4.54+
+    # Fix TransformGetItemToIndex if it exists but has broken __enter__
+    if hasattr(transformers.masking_utils, "TransformGetItemToIndex"):
+        _tgtii = transformers.masking_utils.TransformGetItemToIndex
+        if not hasattr(_tgtii, "__enter__") or not hasattr(_tgtii, "__exit__"):
+            class _NoopTransformGetItemToIndex:
+                def __enter__(self): return self
+                def __exit__(self, *a): pass
+            transformers.masking_utils.TransformGetItemToIndex = _NoopTransformGetItemToIndex
 except Exception:
     _mu = types.ModuleType("transformers.masking_utils")
     _mu.create_causal_mask = lambda *a, **kw: None
     _mu.create_sliding_window_causal_mask = lambda *a, **kw: None
     _mu.create_causal_4d_mask = lambda *a, **kw: None
     _mu.prepare_4d_causal_attention_mask = lambda *a, **kw: None
+    class _NoopTransformGetItemToIndex:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    _mu.TransformGetItemToIndex = _NoopTransformGetItemToIndex
     sys.modules["transformers.masking_utils"] = _mu
     try:
         import transformers as _tf3
