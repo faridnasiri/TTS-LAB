@@ -148,8 +148,17 @@ services:
       dockerfile: docker/Dockerfile.engine-mid
     image: tts-lab-engine-mid:latest
     container_name: tts-lab-engine-mid
-    <<: *model-volume
-    <<: *gpu-config
+    volumes:
+      - /opt/models:/opt/models
+      - /tmp/tts_uploads:/tmp/tts_uploads
+      - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       <<: *common-env
     restart: unless-stopped
@@ -173,8 +182,17 @@ services:
       dockerfile: docker/Dockerfile.engine-qwen
     image: tts-lab-engine-qwen:latest
     container_name: tts-lab-engine-qwen
-    <<: *model-volume
-    <<: *gpu-config
+    volumes:
+      - /opt/models:/opt/models
+      - /tmp/tts_uploads:/tmp/tts_uploads
+      - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
       <<: *common-env
       HF_TOKEN: ${HF_TOKEN:-}
@@ -221,11 +239,20 @@ services:
     container_name: tts-lab-orpheus
     ports:
       - "8002:8002"
-    <<: *model-volume
+    volumes:
+      - /opt/models:/opt/models
+      - /tmp/tts_uploads:/tmp/tts_uploads
+      - /opt/arthur/reference_voices:/opt/arthur/reference_voices
     environment:
       <<: *common-env
       HF_TOKEN: ${HF_TOKEN:-}
-    <<: *gpu-config
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     restart: unless-stopped
     profiles:
       - gpu
