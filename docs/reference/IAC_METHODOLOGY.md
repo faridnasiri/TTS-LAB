@@ -493,3 +493,90 @@ These five constraints span three different transformers version ranges (4.50-4.
 ```bash
 docker builder prune -f --filter until=1h
 ```
+
+---
+
+## 9. Tiered py311 Architecture — Final Design (2026-06-22)
+
+### 9.1 The Mistake Repeated
+
+engine-py311 was initially built as a 52 GB monolith (`FROM nvidia/cuda`). engine-omni and engine-qwen inherited FROM it, each adding another 52 GB. Total unique: ~157 GB.
+
+This was the same mistake made with engine-current. The root cause: focus on "make it work" over "make it right" during debugging.
+
+### 9.2 The Fix: 3-Tier Architecture
+
+```
+base-py311 (7.2 GB)              ← Python 3.11, system pkgs, NVRTC, LD_LIBRARY_PATH
+  └── stack-py311 (16.4 GB)      ← torch CUDA 13, tf 5.12, ML utils, NLTK
+        ├── engine-py311 (52 GB, ~12 GB unique)  ← 14 engine packages
+        ├── engine-omni  (17 GB,  ~1 GB unique)  ← omnivoice + upgraded tf
+        └── engine-qwen  (18 GB,  ~1 GB unique)  ← qwen-tts + tf 4.x
+```
+
+**Total unique on disk: ~37 GB** (vs 157 GB before — 4.2× smaller).
+
+### 9.3 Key Design Rules (Learned Twice Now)
+
+1. **Base image = what ALL containers agree on.** System packages, Python version, NVIDIA libs, LD paths. Never engine-specific code.
+
+2. **Stack image = what a STACK of engines agrees on.** Torch version, transformers version, shared ML utilities. A stack is defined by a CUDA version + Python version + transformers major version.
+
+3. **Engine image = what ONE engine or engine GROUP needs that differs from the stack.** Pip packages, model files, engine server code. Thin layer (~1-12 GB) on top of the stack.
+
+4. **When two engines need different transformers major versions, they go in different containers — but share the same base+stack when possible.**
+
+5. **When an engine needs a completely different CUDA version → different base → different stack → different container.**
+
+### 9.4 Container Decision Matrix
+
+| If engine needs... | Action |
+|-------------------|--------|
+| Same torch, same tf, different pip packages | Add to engine-py311 |
+| Same torch, different tf major version | New engine container FROM stack-py311 |
+| Same torch, different hf-hub version | New engine container FROM stack-py311 |
+| Different torch/CUDA version | New base + new stack + new engine |
+| SGLang / vllm server | Pre-built external container |
+
+### 9.5 Final Container Inventory
+
+| # | Image | Size | Shared | Engines | Status |
+|---|-------|------|:------:|:-------:|:------:|
+| 1 | `base-py311` | 7.2 GB | All 3 | — | ✅ |
+| 2 | `stack-py311` | 16.4 GB | All 3 | — | ✅ |
+| 3 | `engine-py311` | 52 GB (12 unique) | — | **14** | ✅ |
+| 4 | `engine-omni` | 17 GB (1 unique) | — | omnivoice | ✅ |
+| 5 | `engine-qwen` | 18 GB (1 unique) | — | qwen3tts | 🔧 |
+| 6 | `orchestrator` | 7.5 GB | — | UI | ✅ |
+
+### 9.6 Engine Status — Final
+
+| Status | Count | Engines |
+|--------|:-----:|---------|
+| ✅ Working | **15** | matcha, piper, kokoro, melo, styletts2, xtts, chatterboxturbo, chatterbox, chattts, fishspeech, zonos, bark, dia, outetts, omnivoice |
+| 🔧 Fixable | 2 | f5tts (torchcodec), csm (model path) |
+| 🔧 Partial | 1 | qwen3tts (TransformGetItemToIndex) |
+| ❌ SGLang | 3 | higgs, vibevoice, s2pro |
+| ❌ vllm | 1 | orpheus |
+| ⏭️ Skip | 6 | cosyvoice, indextts, manatts, neutts, openvoice, parler |
+
+### 9.7 Dockerfile Inventory (Complete)
+
+```
+docker/
+├── Dockerfile.base              # Tier 1 — CUDA 12.8, Python 3.10 (legacy)
+├── Dockerfile.base-py311        # Tier 1 — CUDA 12.8, Python 3.11 (current) 🆕
+├── Dockerfile.stack.current     # Tier 2 — torch nightly CUDA 12
+├── Dockerfile.stack.mid         # Tier 2 — torch 2.10 + tf 4.x
+├── Dockerfile.stack-py311       # Tier 2 — torch nightly CUDA 13 🆕
+├── Dockerfile.engine-current    # Tier 3 — 22 engines (CUDA 12)
+├── Dockerfile.engine-mid        # Tier 3 — VibeVoice, Higgs
+├── Dockerfile.engine-py311      # Tier 3 — 14 engines (CUDA 13) 🆕
+├── Dockerfile.engine-omni       # Tier 3 — omnivoice 🆕
+├── Dockerfile.engine-qwen       # Tier 3 — Qwen3-TTS
+├── Dockerfile.orchestrator      # Web UI
+└── Dockerfile.orpheus           # Orpheus vllm
+```
+
+**Active (used in deployment):** base-py311, stack-py311, engine-py311, engine-omni, engine-qwen, orchestrator.
+**Legacy (kept for reference):** base, stack.current, stack.mid, engine-current, engine-mid, orpheus.
