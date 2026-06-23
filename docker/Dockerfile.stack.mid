@@ -25,8 +25,8 @@ LABEL tts-lab.tier="2-stack"
 LABEL tts-lab.stack-version="mid"
 
 # torch nightly for Blackwell sm_120 support (RTX 5060 Ti).
-# These engines don't need nightly features, but stable torch lacks sm_120.
-RUN pip install --no-cache-dir --pre torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# cu130: consistent with stack-current, avoids cu128 torchvision version skew.
+RUN pip install --no-cache-dir --pre torch torchaudio --index-url https://download.pytorch.org/whl/nightly/cu130
 
 # transformers 4.x — before ROPE init API changed in 5.x.
 # qwen3tts needs ROPE_INIT_FUNCTIONS["default"] which was removed in 5.x.

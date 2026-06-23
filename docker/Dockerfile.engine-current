@@ -74,12 +74,13 @@ RUN pip install --no-cache-dir orpheus-speech || true
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
 # Restore torch nightly with full deps from nightly index.
-# Engine packages may have installed mismatched torchvision (CUDA 13).
-# Force-reinstall torch+torchaudio+torchvision together from same index
-# to ensure all three are compiled for the same CUDA version.
+# Engine packages may have installed mismatched torchvision or torch
+# with different CUDA versions. Force-reinstall all three together
+# from the same index. cu130 chosen because cu128 had 1-day version
+# skew between torch and torchvision (20260408 vs 20260407).
 RUN pip install --no-cache-dir --force-reinstall \
     torch torchaudio torchvision \
-    --index-url https://download.pytorch.org/whl/nightly/cu128
+    --index-url https://download.pytorch.org/whl/nightly/cu130
 
 # Pin versions that engine packages may have changed
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0"
