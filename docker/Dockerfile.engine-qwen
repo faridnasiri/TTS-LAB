@@ -16,7 +16,8 @@
 #   No install-then-downgrade
 #
 # PINNED (this layer):
-#   transformers == 4.51.3      — before TransformGetItemToIndex (4.54)
+#   transformers == 4.53.3      — auto_docstring present (>= 4.52), before
+#                                  TransformGetItemToIndex (>= 4.54)
 #   huggingface-hub 0.34–1.0    — qwen_tts 0.1.1 compatibility
 #   qwen-tts == 0.1.1           — last known-compatible release
 #
@@ -49,7 +50,7 @@ RUN pip install --no-cache-dir --no-deps qwen-tts==0.1.1
 
 # Install qwen_tts dependencies, with transformers pinned
 RUN pip install --no-cache-dir \
-    "transformers==4.51.3" \
+    "transformers==4.53.3" \
     "huggingface-hub>=0.34,<1.0" \
     accelerate einops librosa onnxruntime soundfile sox torchaudio
 
