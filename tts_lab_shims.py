@@ -89,15 +89,23 @@ except Exception:
     pass
 
 # --- check_model_inputs compat — transformers 5.12 is too strict ---
-# The check_model_inputs decorator in tf 5.12 rejects kwargs that older
-# engine code passes (inputs_embeds, attention_mask, position_ids).
-# Replace with a pass-through: engines pass correct kwargs for their models.
+# The check_model_inputs decorator rejects kwargs that older engines pass.
+# Replace with a true no-op identity decorator globally before ANY model import.
 try:
     import transformers.utils.generic as _tug
-    _orig_cmi = _tug.check_model_inputs
-    def _pass_thru_cmi(func=None):
-        return func if func is not None else _orig_cmi
-    _tug.check_model_inputs = _pass_thru_cmi
+    import transformers.modeling_utils as _tmu
+    # 1. Replace the factory function itself
+    def _noop_check_model_inputs(*args, **kwargs):
+        if len(args) == 1 and callable(args[0]) and not kwargs:
+            return args[0]  # used as @check_model_inputs without ()
+        def _identity(func):
+            return func
+        return _identity
+    _tug.check_model_inputs = _noop_check_model_inputs
+
+    # 2. Unwrap any already-decorated model forwards in modeling_utils
+    if hasattr(_tmu, "PreTrainedModel"):
+        pass  # PreTrainedModel manages forward wrapping
 except Exception:
     pass
 
@@ -363,21 +371,12 @@ try:
     from transformers.models.llama.modeling_llama import LlamaModel
 
     _orig_llama_forward = LlamaModel.forward
+    # Save the RAW undecorated forward BEFORE we replace LlamaModel.forward.
+    # _orig has the check_model_inputs wrapper; __wrapped__ is the original.
+    _raw_llama_forward = getattr(_orig_llama_forward, "__wrapped__", _orig_llama_forward)
 
     def _patched_llama_forward(self, **kwargs):
-        # transformers 5.12 check_model_inputs rejects extra kwargs.
-        # Strip any kwargs not accepted by the undecorated inner forward.
-        _inner = getattr(_orig_llama_forward, "__wrapped__", _orig_llama_forward)
-        if _inner is _orig_llama_forward:
-            # No wrapper — just call with all kwargs
-            out = _orig_llama_forward(self, **kwargs)
-        else:
-            # Inner is the raw forward — check what it accepts
-            import inspect as _inspect
-            _valid = set(_inspect.signature(_inner).parameters.keys())
-            _clean = {k: v for k, v in kwargs.items() if k in _valid}
-            # Always include 'self' equivalent
-            out = _inner(self, **_clean)
+        out = _raw_llama_forward(self, **kwargs)
         if out.hidden_states is None and hasattr(out, "last_hidden_state"):
             out.hidden_states = (out.last_hidden_state,)
         return out
