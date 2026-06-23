@@ -7,14 +7,32 @@
 # architecture). Uses engine-py311 as base (Python 3.11 + CUDA 13).
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-engine-py311:latest
+FROM tts-lab-stack-py311:latest
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (omni)"
 LABEL org.opencontainers.image.description="OmniVoice on latest transformers"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="omni"
 
-# Upgrade transformers to latest available (may have HiggsAudioV2TokenizerModel)
+# Upgrade transformers to latest for HiggsAudioV2TokenizerModel support
 RUN pip install --no-cache-dir --upgrade transformers
+
+# OmniVoice engine
+RUN pip install --no-cache-dir omnivoice
+
+# Shared audio processing
+RUN pip install --no-cache-dir scipy librosa soundfile
+
+# Engine server code
+WORKDIR /opt/arthur
+COPY pyproject.toml .
+COPY tts_lab*.py ./
+RUN pip install --no-deps -e .
+
+ENV COQUI_TOS_AGREED=1
+ENV HF_HOME=/opt/models/huggingface
+ENV XDG_CACHE_HOME=/opt/models/cache
+ENV TOKENIZERS_PARALLELISM=false
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8106
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \

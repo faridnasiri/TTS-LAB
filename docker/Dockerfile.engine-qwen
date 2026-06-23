@@ -14,15 +14,13 @@
 # SIZE: ~8 GB (stack 5 + qwen_tts + model)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-engine-py311:latest
+FROM tts-lab-stack-py311:latest
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (qwen stack)"
 LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B on Python 3.11 + CUDA 13"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="qwen"
 
-# engine-py311 has Python 3.11 + torch nightly CUDA 13 + check_model_inputs fix.
-# qwen_tts 0.1.1 is incompatible with transformers 5.12 (ROPE init, check_model_inputs).
-# Downgrade to 4.x which qwen_tts was built for.
+# qwen_tts 0.1.1 needs tf 4.x (ROPE_INIT_FUNCTIONS, no TransformGetItemToIndex)
 RUN pip install --no-cache-dir "transformers>=4.50,<4.54" --force-reinstall
 RUN pip install --no-cache-dir "huggingface-hub<1.0,>=0.34.0" --force-reinstall
 RUN pip install --no-cache-dir qwen-tts
@@ -30,12 +28,17 @@ RUN pip install --no-cache-dir qwen-tts
 # Shared audio deps
 RUN pip install --no-cache-dir scipy librosa soundfile
 
-# Engine code — explicit COPY of all 4 files that change between builds
-ARG CACHEBUST=0
-COPY tts_lab_shims.py /opt/arthur/
-COPY tts_lab_engine_server.py /opt/arthur/
-COPY tts_lab_engines.py /opt/arthur/
-COPY tts_lab_dispatch.py /opt/arthur/
+# Engine server code
+WORKDIR /opt/arthur
+COPY pyproject.toml .
+COPY tts_lab*.py ./
+RUN pip install --no-deps -e .
+
+ENV COQUI_TOS_AGREED=1
+ENV HF_HOME=/opt/models/huggingface
+ENV XDG_CACHE_HOME=/opt/models/cache
+ENV TOKENIZERS_PARALLELISM=false
+ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8104
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \

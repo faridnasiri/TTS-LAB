@@ -1,0 +1,35 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 2 — tts-lab-stack-py311  (~+13 GB → ~20 GB total)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Unified CUDA 13 Python 3.11 ML stack.
+# Shared by engine-py311, engine-omni, engine-qwen.
+# ═══════════════════════════════════════════════════════════════════
+
+FROM tts-lab-base-py311:latest
+
+# ── Unified CUDA 13 Nightly Stack ─────────────────────────────────
+# Explicit LD_LIBRARY_PATH ensures wheels validate at build time
+RUN LD_LIBRARY_PATH="${NVIDIA_LIB_PATH}" pip install --no-cache-dir --pre \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu130
+
+# ── Core ML libraries ─────────────────────────────────────────────
+RUN pip install --no-cache-dir \
+    "transformers==5.12.1" \
+    "accelerate>=0.30.0" \
+    "onnxruntime>=1.18.0" \
+    "safetensors>=0.4.0" \
+    numpy protobuf \
+    "huggingface-hub>=1.0" \
+    setuptools
+
+# ── Python utilities (shared by all engine containers) ────────────
+RUN pip install --no-cache-dir \
+    "fastapi>=0.111.0" "uvicorn[standard]>=0.29.0" \
+    "pydantic>=2.0.0" "httpx>=0.27.0" \
+    "soundfile>=0.12.1" nltk requests psutil
+
+# ── NLTK data ─────────────────────────────────────────────────────
+RUN python3 -c "import nltk; nltk.download('punkt', quiet=True); nltk.download('punkt_tab', quiet=True); nltk.download('cmudict', quiet=True); nltk.download('averaged_perceptron_tagger', quiet=True); nltk.download('averaged_perceptron_tagger_eng', quiet=True)"
