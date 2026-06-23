@@ -215,6 +215,8 @@ services:
     environment:
       <<: *common-env
     restart: unless-stopped
+    profiles:
+      - legacy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8102/health"]
       interval: 30s
