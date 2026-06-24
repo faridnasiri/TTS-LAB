@@ -140,6 +140,7 @@ services:
               capabilities: [gpu]
     environment:
       <<: *common-env
+      HF_TOKEN: ${HF_TOKEN:-}
       SUNO_USE_SMALL_MODELS: "False"
     restart: unless-stopped
     healthcheck:
