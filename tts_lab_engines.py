@@ -16,7 +16,7 @@ from tts_lab_shims  import _N_CORES, DEVICE
 from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, INDEXTTS_DIR, OPENVOICE_MODELS_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
-    PERSIAN_VITS_MODELS, slog,
+    slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
 
@@ -1578,127 +1578,6 @@ def _synth_mmsfas(inst, text, params):
     return _to_wav(arr, model.config.sampling_rate), model.config.sampling_rate
 
 
-# ── SpeechT5 Persian ──────────────────────────────────────────────────────────
-
-# Default reference WAV for xvector extraction — John (clean neutral male)
-# This is language-agnostic: xvectors capture speaker timbre, not language.
-_SPEECHT5_DEFAULT_REF = "/tmp/tts_uploads/el_john_clean_neutral_and_inviting.wav"
-
-def _load_speecht5_fa():
-    """Load fine-tuned SpeechT5 for Persian with real xvector speaker embedding.
-
-    Uses speechbrain/spkrec-xvect-voxceleb to extract xvectors from a
-    reference WAV. Falls back to random embedding if extraction fails.
-    """
-    from transformers import SpeechT5ForTextToSpeech, SpeechT5Processor, SpeechT5HifiGan
-    from speechbrain.inference.speaker import EncoderClassifier
-    import torch, wave, numpy as np
-
-    model = SpeechT5ForTextToSpeech.from_pretrained("Hamid20/speecht5_tts_persian").to(DEVICE)
-    processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
-    vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan").to(DEVICE)
-
-    # Extract xvector from default reference
-    try:
-        classifier = EncoderClassifier.from_hparams(
-            source="speechbrain/spkrec-xvect-voxceleb",
-            run_opts={"device": DEVICE},
-        )
-        ref_path = Path(_SPEECHT5_DEFAULT_REF)
-        if not ref_path.exists():
-            raise FileNotFoundError(f"Default ref not found: {ref_path}")
-        with wave.open(str(ref_path), "rb") as w:
-            audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
-        ref_tensor = torch.tensor(audio).unsqueeze(0).to(DEVICE)
-        spk_embed = classifier.encode_batch(ref_tensor).squeeze(0)  # [1, 512]
-        slog("LOAD", "speecht5_fa", f"Xvector from {ref_path.name} — shape {spk_embed.shape}")
-    except Exception as e:
-        slog("LOAD", "speecht5_fa", f"Xvector failed ({e}) — using random fallback")
-        spk_embed = torch.randn(1, 512).to(DEVICE)
-
-    return (model, processor, vocoder, spk_embed, classifier if "classifier" in dir() else None)
-
-def _synth_speecht5_fa(inst, text, params):
-    import torch, wave, numpy as np
-    model, processor, vocoder, default_spk, classifier = inst
-
-    # Use uploaded reference audio if available
-    spk = default_spk
-    ref_id = params.get("audio_prompt_id", "")
-    if ref_id and classifier is not None:
-        ref_path = UPLOAD_DIR / f"{ref_id}.wav"
-        if ref_path.exists():
-            try:
-                with wave.open(str(ref_path), "rb") as w:
-                    audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
-                ref_tensor = torch.tensor(audio).unsqueeze(0).to(DEVICE)
-                spk = classifier.encode_batch(ref_tensor).squeeze(0)
-            except Exception:
-                pass  # Fall back to default
-
-    inputs = processor(text=text, return_tensors="pt").to(DEVICE)
-    speech = model.generate_speech(inputs["input_ids"], spk, vocoder=vocoder)
-    arr = speech.cpu().numpy().squeeze()
-
-    return _to_wav(arr, 16000), 16000
-
-
-# ── Persian VITS Community Models (shared loader) ──────────────────────────────
-def _load_persian_vits(engine_key):
-    """Shared loader for Kamtera + Saillab Persian VITS models.
-
-    Downloads individual checkpoint + config files from HF Hub
-    (NOT snapshot_download — would pull 7+ GB per repo).
-    Checkpoints are ~998 MB training checkpoints; Coqui TTS Synthesizer
-    extracts the model key from the state dict automatically.
-    """
-    from TTS.utils.synthesizer import Synthesizer
-    from huggingface_hub import hf_hub_download as _hf_dl
-
-    info = PERSIAN_VITS_MODELS[engine_key]
-    token = os.environ.get("HUGGING_FACE_HUB_TOKEN") if info["gated"] else None
-
-    ckpt_path = _hf_dl(repo_id=info["repo"], filename=info["checkpoint"],
-                       cache_dir=str(MODELS_DIR / "huggingface"), token=token)
-    cfg_path = _hf_dl(repo_id=info["repo"], filename=info["config"],
-                      cache_dir=str(MODELS_DIR / "huggingface"), token=token)
-
-    kwargs = dict(tts_checkpoint=ckpt_path, tts_config_path=cfg_path,
-                  use_cuda=DEVICE == "cuda")
-
-    if info.get("speakers"):
-        spk_path = _hf_dl(repo_id=info["repo"], filename=info["speakers"],
-                          cache_dir=str(MODELS_DIR / "huggingface"), token=token)
-        kwargs["tts_speakers_file"] = spk_path
-
-    synthesizer = Synthesizer(**kwargs)
-    slog("LOAD", engine_key, f"Loaded {info['repo']} ({info['checkpoint']})")
-    return synthesizer
-
-def _synth_persian_vits(inst, text, params):
-    """Shared synth for Persian VITS models.
-
-    VITS grapheme models don't need phonemization — pass text directly.
-    Some models support speaker_name for multi-speaker selection.
-    """
-    speaker = params.get("speaker", None)
-    try:
-        wavs = inst.tts(text, speaker_name=speaker) if speaker else inst.tts(text)
-    except TypeError:
-        wavs = inst.tts(text)
-    arr = np.array(wavs)
-    if arr.ndim > 1:
-        arr = arr.squeeze()
-    return _to_wav(arr, inst.output_sample_rate), inst.output_sample_rate
-
-# Per-engine loaders (thin wrappers):
-def _load_kamtera_f():  return _load_persian_vits("kamtera_f")
-def _load_kamtera_m():  return _load_persian_vits("kamtera_m")
-def _load_gptinf_fa():  return _load_persian_vits("gptinf_fa")
-def _load_zabanzad_f(): return _load_persian_vits("zabanzad_f")
-def _load_zabanzad_m(): return _load_persian_vits("zabanzad_m")
-
-
 # ── 24. Chatterbox-Turbo ───────────────────────────────────────────────────────
 def _load_chatterboxturbo(model="default"):
     """Load Chatterbox-Turbo TTS (350M distilled one-step model).
@@ -2051,11 +1930,7 @@ LOADERS: dict = {
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
     "neutts":     _load_neutts,   "indextts":  _load_indextts,
     "manatts":    _load_manatts,  "mmsfas":    _load_mmsfas,
-    "kamtera_f":  _load_kamtera_f,"kamtera_m": _load_kamtera_m,
-    "zabanzad_f": _load_zabanzad_f,"zabanzad_m":_load_zabanzad_m,
-    "gptinf_fa":  _load_gptinf_fa,"speecht5_fa":_load_speecht5_fa,
-    "zonos":      _load_zonos,
-    "openvoice":  _load_openvoice,
+    "zonos":      _load_zonos,    "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
     "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
 }
@@ -2072,9 +1947,6 @@ SYNTHERS: dict = {
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
     "neutts":     _synth_neutts,   "indextts":  _synth_indextts,
     "manatts":    _synth_manatts,  "mmsfas":    _synth_mmsfas,
-    "kamtera_f":  _synth_persian_vits,"kamtera_m":_synth_persian_vits,
-    "zabanzad_f": _synth_persian_vits,"zabanzad_m":_synth_persian_vits,
-    "gptinf_fa":  _synth_persian_vits,"speecht5_fa":_synth_speecht5_fa,
     "zonos":      _synth_zonos,
     "openvoice":  _synth_openvoice,
     "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
