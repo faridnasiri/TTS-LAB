@@ -80,6 +80,7 @@ services:
       COSYVOICE_URL: http://engine-current:8101
       FISHSPEECH_URL: http://engine-current:8101
       CHATTERBOX_URL: http://engine-current:8101
+      CHATTERBOX_FA_URL: http://engine-current:8101
       CHATTERBOXTURBO_URL: http://engine-current:8101
       OMNIVOICE_URL: http://engine-current:8101
       OPENVOICE_URL: http://engine-current:8101

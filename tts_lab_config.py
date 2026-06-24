@@ -219,6 +219,7 @@ MODEL_INFO = {
     "cosyvoice":  {"label":"CosyVoice2",    "size":"2 GB",               "rtf_est":"not built",             "ram_est_mb":2500, "heavy":True, "notes":"⚠ git clone needed + openai-whisper build failure.","arthur_fit":3},
     "parler":     {"label":"Parler-TTS",    "size":"2.5-3.3 GB",         "rtf_est":"skipped",               "ram_est_mb":1500, "heavy":True, "notes":"⚠ SKIPPED: needs legacy stack (torch 1.x + tf 4.x).","arthur_fit":4},
     "chatterbox": {"label":"Chatterbox",    "size":"3.0 GB",             "rtf_est":"RTF 2.42×",            "ram_est_mb":1800, "heavy":True, "notes":"Exaggeration slider + voice cloning. Long-form chunking.","arthur_fit":5},
+    "chatterbox_fa":{"label":"Chatterbox Persian ♀","size":"3.0 GB",      "rtf_est":"RTF 2.4×",             "ram_est_mb":1800, "heavy":True, "notes":"Persian fine-tune (30-layer T3, 2454 tokens). 75% nz audio. Best Persian in lab.","arthur_fit":5},
     "fishspeech": {"label":"Fish Speech",   "size":"~1.1 GB",            "rtf_est":"RTF 3.48×",            "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning. Persian via LM tokenizer.","arthur_fit":4},
     "csm":        {"label":"Sesame CSM 1B", "size":"~2 GB",              "rtf_est":"blocked (Meta)",        "ram_est_mb":2000, "heavy":True, "notes":"⚠ All deps ready. Blocked: meta-llama/Llama-3.2-1B gated.","arthur_fit":4},
     "qwen3tts":   {"label":"Qwen3-TTS",     "size":"~3 GB",              "rtf_est":"skipped",               "ram_est_mb":2000, "heavy":True, "notes":"⚠ SKIPPED: tf 5.x ROPE KeyError. Needs mid stack.","arthur_fit":3},
@@ -240,7 +241,7 @@ MODEL_INFO = {
 MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
-    "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
+    "cosyvoice","parler","chatterbox","chatterbox_fa","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "neutts","indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro",
 ]

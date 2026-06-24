@@ -601,7 +601,7 @@ def _load_chatterbox(model="default"):
             "hootan09/ChatterBox",
             allow_patterns=["t3_fa.safetensors", "mtl_tokenizer.json"],
         ))
-        inst = ChatterboxTTS.from_pretrained(device="cpu")
+        inst = ChatterboxTTS.from_pretrained(device=DEVICE)  # GPU — was "cpu", caused device mismatch
         t3_new = T3(hp=T3Config.multilingual())
         t3_state = load_file(str(fa_dir / "t3_fa.safetensors"))
         t3_new.load_state_dict(t3_state, strict=True)
@@ -610,7 +610,7 @@ def _load_chatterbox(model="default"):
         inst.s3gen = inst.s3gen.to(DEVICE)
         inst.device = DEVICE
         inst.tokenizer = EnTokenizer(str(fa_dir / "mtl_tokenizer.json"))
-        inst._needs_persian_char_map = True  # mTL tokenizer missing آ/أ/إ — text-level mapping in synth
+        inst._needs_persian_char_map = True
         return inst
 
     if model == "v3":
@@ -1925,6 +1925,7 @@ LOADERS: dict = {
     "f5tts":      _load_f5tts,    "dia":       _load_dia,
     "xtts":       _load_xtts,     "cosyvoice": _load_cosyvoice,
     "parler":     _load_parler,   "chatterbox":_load_chatterbox,
+    "chatterbox_fa": lambda: _load_chatterbox(model="persian"),
     "chatterboxturbo": _load_chatterboxturbo,
     "fishspeech": _load_fishspeech,"csm":      _load_csm,
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
@@ -1942,6 +1943,7 @@ SYNTHERS: dict = {
     "f5tts":      _synth_f5tts,    "dia":       _synth_dia,
     "xtts":       _synth_xtts,     "cosyvoice": _synth_cosyvoice,
     "parler":     _synth_parler,   "chatterbox":_synth_chatterbox,
+    "chatterbox_fa": _synth_chatterbox,
     "chatterboxturbo": _synth_chatterboxturbo,
     "fishspeech": _synth_fishspeech,"csm":      _synth_csm,
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
