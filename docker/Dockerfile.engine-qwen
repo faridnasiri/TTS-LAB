@@ -61,6 +61,7 @@ RUN pip install --no-cache-dir scipy librosa soundfile
 
 # ── Engine server code ────────────────────────────────────────────
 COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
 COPY tts_lab_engines.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/

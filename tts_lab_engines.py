@@ -1578,6 +1578,62 @@ def _synth_mmsfas(inst, text, params):
     return _to_wav(arr, model.config.sampling_rate), model.config.sampling_rate
 
 
+# ── Persian VITS Community Models (shared loader) ──────────────────────────────
+def _load_persian_vits(engine_key):
+    """Shared loader for Kamtera + Saillab Persian VITS models.
+
+    Downloads individual checkpoint + config files from HF Hub
+    (NOT snapshot_download — would pull 7+ GB per repo).
+    Checkpoints are ~998 MB training checkpoints; Coqui TTS Synthesizer
+    extracts the model key from the state dict automatically.
+    """
+    from TTS.utils.synthesizer import Synthesizer
+    from huggingface_hub import hf_hub_download as _hf_dl
+
+    info = PERSIAN_VITS_MODELS[engine_key]
+    token = os.environ.get("HUGGING_FACE_HUB_TOKEN") if info["gated"] else None
+
+    ckpt_path = _hf_dl(repo_id=info["repo"], filename=info["checkpoint"],
+                       cache_dir=str(MODELS_DIR / "huggingface"), token=token)
+    cfg_path = _hf_dl(repo_id=info["repo"], filename=info["config"],
+                      cache_dir=str(MODELS_DIR / "huggingface"), token=token)
+
+    kwargs = dict(tts_checkpoint=ckpt_path, tts_config_path=cfg_path,
+                  use_cuda=DEVICE == "cuda")
+
+    if info.get("speakers"):
+        spk_path = _hf_dl(repo_id=info["repo"], filename=info["speakers"],
+                          cache_dir=str(MODELS_DIR / "huggingface"), token=token)
+        kwargs["tts_speakers_file"] = spk_path
+
+    synthesizer = Synthesizer(**kwargs)
+    slog("LOAD", engine_key, f"Loaded {info['repo']} ({info['checkpoint']})")
+    return synthesizer
+
+def _synth_persian_vits(inst, text, params):
+    """Shared synth for Persian VITS models.
+
+    VITS grapheme models don't need phonemization — pass text directly.
+    Some models support speaker_name for multi-speaker selection.
+    """
+    speaker = params.get("speaker", None)
+    try:
+        wavs = inst.tts(text, speaker_name=speaker) if speaker else inst.tts(text)
+    except TypeError:
+        wavs = inst.tts(text)
+    arr = np.array(wavs)
+    if arr.ndim > 1:
+        arr = arr.squeeze()
+    return _to_wav(arr, inst.output_sample_rate), inst.output_sample_rate
+
+# Per-engine loaders (thin wrappers):
+def _load_kamtera_f():  return _load_persian_vits("kamtera_f")
+def _load_kamtera_m():  return _load_persian_vits("kamtera_m")
+def _load_gptinf_fa():  return _load_persian_vits("gptinf_fa")
+def _load_zabanzad_f(): return _load_persian_vits("zabanzad_f")
+def _load_zabanzad_m(): return _load_persian_vits("zabanzad_m")
+
+
 # ── 24. Chatterbox-Turbo ───────────────────────────────────────────────────────
 def _load_chatterboxturbo(model="default"):
     """Load Chatterbox-Turbo TTS (350M distilled one-step model).
@@ -1930,7 +1986,10 @@ LOADERS: dict = {
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
     "neutts":     _load_neutts,   "indextts":  _load_indextts,
     "manatts":    _load_manatts,  "mmsfas":    _load_mmsfas,
-    "zonos":      _load_zonos,    "openvoice":  _load_openvoice,
+    "kamtera_f":  _load_kamtera_f,"kamtera_m": _load_kamtera_m,
+    "zabanzad_f": _load_zabanzad_f,"zabanzad_m":_load_zabanzad_m,
+    "gptinf_fa":  _load_gptinf_fa,"zonos":     _load_zonos,
+    "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
     "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
 }
@@ -1947,7 +2006,9 @@ SYNTHERS: dict = {
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
     "neutts":     _synth_neutts,   "indextts":  _synth_indextts,
     "manatts":    _synth_manatts,  "mmsfas":    _synth_mmsfas,
-    "zonos":      _synth_zonos,
+    "kamtera_f":  _synth_persian_vits,"kamtera_m":_synth_persian_vits,
+    "zabanzad_f": _synth_persian_vits,"zabanzad_m":_synth_persian_vits,
+    "gptinf_fa":  _synth_persian_vits,"zonos":   _synth_zonos,
     "openvoice":  _synth_openvoice,
     "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
     "omnivoice":  _synth_omnivoice,"s2pro":     _synth_s2pro,

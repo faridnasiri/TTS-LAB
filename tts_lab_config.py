@@ -114,6 +114,15 @@ MANATTS_REPO_DIR   = Path("/opt/models/Persian-MultiSpeaker-Tacotron2")
 MANATTS_MODEL_REPO = "MahtaFetrat/Persian-Tacotron2-on-ManaTTS"
 MANATTS_MAX_CHARS  = 200
 
+# ── Persian VITS model registry (verified filenames 2026-06-23) ──────────────────
+PERSIAN_VITS_MODELS = {
+    "kamtera_f":  {"repo":"Kamtera/persian-tts-female-vits",   "checkpoint":"best_model_30824.pth","config":"config.json","speakers":None,  "gated":False},
+    "kamtera_m":  {"repo":"Kamtera/persian-tts-male-vits",     "checkpoint":"best_model_98066.pth","config":"config.json","speakers":None,  "gated":False},
+    "gptinf_fa":  {"repo":"karim23657/persian-tts-female-GPTInformal-Persian-vits","checkpoint":"best_model_98066.pth","config":"config.json","speakers":None,"gated":False},
+    "zabanzad_f": {"repo":"saillab/ZabanZad_VITS_Female","checkpoint":"best_model_15397.pth","config":"config.json","speakers":"speakers1.pth","gated":True},
+    "zabanzad_m": {"repo":"saillab/ZabanZad_VITS_MAle",  "checkpoint":"checkpoint_61000.pth","config":"config.json","speakers":None,"gated":True},
+}
+
 # ── OmniVoice language catalogue (600+ languages — key ones for the UI) ────────
 OMNIVOICE_LANGUAGES = [
     ("fa",  "Persian / Farsi (فارسی)"),
@@ -230,6 +239,11 @@ MODEL_INFO = {
     "matcha":     {"label":"Matcha-TTS (FA/EN)","size":"~74 MB per voice",  "rtf_est":"RTF 0.24× ⚡",          "ram_est_mb":400,  "heavy":False,"notes":"Fast flow-matching ONNX. Real-time! Khadijah (F) + Musa (M).","arthur_fit":3},
     "manatts":    {"label":"ManaTTS (FA)",  "size":"~371 MB + encoder",    "rtf_est":"not available",         "ram_est_mb":2500, "heavy":True, "notes":"⚠ parallel-wavegan not available on PyPI.","arthur_fit":3},
     "mmsfas":     {"label":"MMS Persian (Meta)","size":"~150 MB",           "rtf_est":"RTF ~0.5×",            "ram_est_mb":200,  "heavy":False,"notes":"Meta MMS-TTS Persian VITS. Reference baseline. CC-BY-NC.","arthur_fit":5},
+    "kamtera_f":  {"label":"Kamtera Persian ♀","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",              "ram_est_mb":500,  "heavy":False,"notes":"Community VITS female Persian. ~31K steps. Popular.","arthur_fit":5},
+    "kamtera_m":  {"label":"Kamtera Persian ♂","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",              "ram_est_mb":500,  "heavy":False,"notes":"Community VITS male Persian. ~98K steps.","arthur_fit":5},
+    "zabanzad_f": {"label":"ZabanZad VITS ♀","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",                "ram_est_mb":500,  "heavy":False,"notes":"⚠ Gated Saillab female. Needs HF token. Active ZabanZad PoC model.","arthur_fit":4},
+    "zabanzad_m": {"label":"ZabanZad VITS ♂","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",                "ram_est_mb":500,  "heavy":False,"notes":"⚠ Gated Saillab male. Needs HF token. Active ZabanZad PoC model.","arthur_fit":4},
+    "gptinf_fa":  {"label":"GPTInformal Persian","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",           "ram_est_mb":500,  "heavy":False,"notes":"Trained on colloquial Persian. Handles slang and casual speech.","arthur_fit":3},
     "chatterboxturbo": {"label":"Chatterbox-Turbo","size":"~700 MB",       "rtf_est":"RTF 1.11×",            "ram_est_mb":1500, "heavy":True, "notes":"350M distilled one-step TTS. Voice cloning. Near real-time!","arthur_fit":4},
     "vibevoice":  {"label":"VibeVoice-1.5B","size":"~6 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":6500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
@@ -241,7 +255,8 @@ MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
-    "neutts","indextts","manatts","mmsfas","zonos","openvoice",
+    "neutts","indextts","manatts","mmsfas","kamtera_f","kamtera_m",
+    "zabanzad_f","zabanzad_m","gptinf_fa","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro",
 ]
 

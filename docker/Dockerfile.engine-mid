@@ -44,9 +44,10 @@ RUN pip install --no-cache-dir vibevoice
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer scipy librosa soundfile
 
-# Engine code — explicit COPY of all 4 files that change between builds
+# Engine code — explicit COPY of files that change between builds
 ARG CACHEBUST=0
 COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
 COPY tts_lab_engines.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/

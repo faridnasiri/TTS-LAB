@@ -107,10 +107,11 @@ RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
 # have compiled C extensions against numpy 1.x ABI.
 RUN pip install --no-cache-dir "protobuf>=5.0,<6.0" "huggingface-hub>=1.0" "numpy>=1.26,<2.0"
 
-# Engine code — explicit COPY of all 4 files that change between builds
+# Engine code — explicit COPY of files that change between builds
 # CACHEBUST ensures COPY always sees latest source (invalidation is local to this layer)
 ARG CACHEBUST=0
 COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
 COPY tts_lab_engines.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/
