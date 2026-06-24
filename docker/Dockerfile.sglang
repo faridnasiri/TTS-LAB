@@ -21,6 +21,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # SGLang with all dependencies (flash-attn, triton, etc.)
 RUN pip install --no-cache-dir "sglang[all]"
 
+# Force torch nightly for Blackwell sm_120 (RTX 5060 Ti).
+# SGLang pins torch to stable 2.11 — override with nightly.
+RUN pip install --no-cache-dir --force-reinstall --pre \
+    torch torchaudio \
+    --index-url https://download.pytorch.org/whl/nightly/cu130
+
 ENV HF_HOME=/opt/models/huggingface
 EXPOSE 8000
 
