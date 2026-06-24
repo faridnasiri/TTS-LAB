@@ -25,6 +25,13 @@ ENV ORCHESTRATOR_MODE=1
 # Format: {ENGINE_NAME}_URL=http://container:port
 # Example: PIPER_URL=http://engine-current:8101
 
+# ── Application code (override base image staleness) ──────────────
+ARG CACHEBUST=0
+COPY tts_lab.py /opt/arthur/
+COPY tts_lab_config.py /opt/arthur/
+COPY tts_lab_ui.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
+
 EXPOSE 8001
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s \
     CMD curl -f http://localhost:8001/status || exit 1
