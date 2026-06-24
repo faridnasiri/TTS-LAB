@@ -1,7 +1,9 @@
 # Persian/Farsi TTS in Arthur TTS Lab — Comprehensive Reference
 
-> Date: 2026-06-12  
+> Date: 2026-06-12 (updated 2026-06-23)
 > Summary of all Persian TTS engines evaluated, integrated, and debugged.
+> **New:** [PERSIAN_TTS_HUGGINGFACE_CATALOG.md](PERSIAN_TTS_HUGGINGFACE_CATALOG.md) — complete HF catalog of 20 Persian models
+> **New:** [PERSIAN_TTS_INTEGRATION_PLAN.md](PERSIAN_TTS_INTEGRATION_PLAN.md) — container integration plan for 10 new models
 
 ---
 
