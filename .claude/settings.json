@@ -9,7 +9,23 @@
       "Bash(docker *)",
       "Bash(git push *)",
       "Bash(git add *)",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(nvidia-smi *)",
+      "Bash(systemctl *)",
+      "Bash(journalctl *)",
+      "Bash(python3 *)",
+      "Bash(pip *)",
+      "Bash(ansible-playbook *)",
+      "Bash(docker compose *)",
+      "Bash(make *)",
+      "Bash(gh *)",
+      "Bash(grep *)",
+      "Bash(find *)",
+      "Bash(du *)",
+      "Bash(df *)",
+      "Bash(cat /opt/arthur/.env)",
+      "Bash(cat /opt/arthur-img/.env)",
+      "Bash(source /opt/arthur-bench-env/bin/activate && *)"
     ]
   }
 }
