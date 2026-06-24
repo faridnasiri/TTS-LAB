@@ -1640,11 +1640,6 @@ def _synth_speecht5_fa(inst, text, params):
     speech = model.generate_speech(inputs["input_ids"], spk, vocoder=vocoder)
     arr = speech.cpu().numpy().squeeze()
 
-    # Normalize — SpeechT5 output tends to be quiet
-    peak = np.abs(arr).max()
-    if peak > 0.001:
-        arr = arr * (0.95 / peak)
-
     return _to_wav(arr, 16000), 16000
 
 
