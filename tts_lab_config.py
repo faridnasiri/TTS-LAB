@@ -241,9 +241,10 @@ MODEL_INFO = {
     "mmsfas":     {"label":"MMS Persian (Meta)","size":"~150 MB",           "rtf_est":"RTF ~0.5×",            "ram_est_mb":200,  "heavy":False,"notes":"Meta MMS-TTS Persian VITS. Reference baseline. CC-BY-NC.","arthur_fit":5},
     "kamtera_f":  {"label":"Kamtera Persian ♀","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",              "ram_est_mb":500,  "heavy":False,"notes":"Community VITS female Persian. ~31K steps. Popular.","arthur_fit":5},
     "kamtera_m":  {"label":"Kamtera Persian ♂","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",              "ram_est_mb":500,  "heavy":False,"notes":"Community VITS male Persian. ~98K steps.","arthur_fit":5},
-    "zabanzad_f": {"label":"ZabanZad VITS ♀","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",                "ram_est_mb":500,  "heavy":False,"notes":"⚠ Gated Saillab female. Needs HF token. Active ZabanZad PoC model.","arthur_fit":4},
-    "zabanzad_m": {"label":"ZabanZad VITS ♂","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",                "ram_est_mb":500,  "heavy":False,"notes":"⚠ Gated Saillab male. Needs HF token. Active ZabanZad PoC model.","arthur_fit":4},
+    "zabanzad_f": {"label":"ZabanZad VITS ♀","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",                "ram_est_mb":500,  "heavy":False,"notes":"⚠ BLOCKED: private Saillab repo. Request access at hf.co/saillab/ZabanZad_VITS_Female.","arthur_fit":2},
+    "zabanzad_m": {"label":"ZabanZad VITS ♂","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",                "ram_est_mb":500,  "heavy":False,"notes":"⚠ BLOCKED: private Saillab repo. Request access at hf.co/saillab/ZabanZad_VITS_MAle.","arthur_fit":2},
     "gptinf_fa":  {"label":"GPTInformal Persian","size":"~1 GB (ckpt)","rtf_est":"RTF ~0.5×",           "ram_est_mb":500,  "heavy":False,"notes":"Trained on colloquial Persian. Handles slang and casual speech.","arthur_fit":3},
+    "speecht5_fa":{"label":"SpeechT5 Persian","size":"~400 MB","rtf_est":"RTF ~1.0×",                  "ram_est_mb":500,  "heavy":False,"notes":"⚠ EXPERIMENTAL: random xvector fallback. Needs proper speaker embedding for quality.","arthur_fit":2},
     "chatterboxturbo": {"label":"Chatterbox-Turbo","size":"~700 MB",       "rtf_est":"RTF 1.11×",            "ram_est_mb":1500, "heavy":True, "notes":"350M distilled one-step TTS. Voice cloning. Near real-time!","arthur_fit":4},
     "vibevoice":  {"label":"VibeVoice-1.5B","size":"~6 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":6500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
@@ -256,7 +257,7 @@ MODEL_ORDER = [
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "neutts","indextts","manatts","mmsfas","kamtera_f","kamtera_m",
-    "zabanzad_f","zabanzad_m","gptinf_fa","zonos","openvoice",
+    "zabanzad_f","zabanzad_m","gptinf_fa","speecht5_fa","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro",
 ]
 

@@ -1578,6 +1578,40 @@ def _synth_mmsfas(inst, text, params):
     return _to_wav(arr, model.config.sampling_rate), model.config.sampling_rate
 
 
+# ── SpeechT5 Persian ──────────────────────────────────────────────────────────
+def _load_speecht5_fa():
+    """Load fine-tuned SpeechT5 for Persian.
+
+    NOTE: This fine-tune lacks built-in speaker embeddings.
+    We use a random xvector as fallback — quality will be poor.
+    For production use, integrate speechbrain/spkrec-xvect-voxceleb
+    to extract real xvectors from a reference WAV.
+    """
+    from transformers import SpeechT5ForTextToSpeech, SpeechT5Processor, SpeechT5HifiGan
+    import torch
+    model = SpeechT5ForTextToSpeech.from_pretrained("Hamid20/speecht5_tts_persian").to(DEVICE)
+    processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
+    vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan").to(DEVICE)
+    # Random xvector — produces robotic but intelligible speech
+    default_spk = torch.randn(1, 512).to(DEVICE)
+    return (model, processor, vocoder, default_spk)
+
+def _synth_speecht5_fa(inst, text, params):
+    import torch
+    model, processor, vocoder, default_spk = inst
+    inputs = processor(text=text, return_tensors="pt").to(DEVICE)
+    # Use uploaded reference audio for xvector extraction if available
+    ref_id = params.get("audio_prompt_id", "")
+    if ref_id:
+        ref_path = UPLOAD_DIR / f"{ref_id}.wav"
+        if ref_path.exists():
+            # TODO: integrate speechbrain xvector extraction here
+            pass
+    speech = model.generate_speech(inputs["input_ids"], default_spk, vocoder=vocoder)
+    arr = speech.cpu().numpy().squeeze()
+    return _to_wav(arr, 16000), 16000
+
+
 # ── Persian VITS Community Models (shared loader) ──────────────────────────────
 def _load_persian_vits(engine_key):
     """Shared loader for Kamtera + Saillab Persian VITS models.
@@ -1988,7 +2022,8 @@ LOADERS: dict = {
     "manatts":    _load_manatts,  "mmsfas":    _load_mmsfas,
     "kamtera_f":  _load_kamtera_f,"kamtera_m": _load_kamtera_m,
     "zabanzad_f": _load_zabanzad_f,"zabanzad_m":_load_zabanzad_m,
-    "gptinf_fa":  _load_gptinf_fa,"zonos":     _load_zonos,
+    "gptinf_fa":  _load_gptinf_fa,"speecht5_fa":_load_speecht5_fa,
+    "zonos":      _load_zonos,
     "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
     "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
@@ -2008,7 +2043,8 @@ SYNTHERS: dict = {
     "manatts":    _synth_manatts,  "mmsfas":    _synth_mmsfas,
     "kamtera_f":  _synth_persian_vits,"kamtera_m":_synth_persian_vits,
     "zabanzad_f": _synth_persian_vits,"zabanzad_m":_synth_persian_vits,
-    "gptinf_fa":  _synth_persian_vits,"zonos":   _synth_zonos,
+    "gptinf_fa":  _synth_persian_vits,"speecht5_fa":_synth_speecht5_fa,
+    "zonos":      _synth_zonos,
     "openvoice":  _synth_openvoice,
     "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
     "omnivoice":  _synth_omnivoice,"s2pro":     _synth_s2pro,
