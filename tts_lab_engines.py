@@ -16,7 +16,7 @@ from tts_lab_shims  import _N_CORES, DEVICE
 from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, INDEXTTS_DIR, OPENVOICE_MODELS_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
-    slog,
+    PERSIAN_VITS_MODELS, slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
 
