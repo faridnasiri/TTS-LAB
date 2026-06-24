@@ -229,6 +229,7 @@ MODEL_INFO = {
     "openvoice":  {"label":"OpenVoice v2",  "size":"~600 MB",            "rtf_est":"not built",             "ram_est_mb":1500, "heavy":True, "notes":"⚠ Build failure — av package Cython.","arthur_fit":3},
     "matcha":     {"label":"Matcha-TTS (FA/EN)","size":"~74 MB per voice",  "rtf_est":"RTF 0.24× ⚡",          "ram_est_mb":400,  "heavy":False,"notes":"Fast flow-matching ONNX. Real-time! Khadijah (F) + Musa (M).","arthur_fit":3},
     "manatts":    {"label":"ManaTTS (FA)",  "size":"~371 MB + encoder",    "rtf_est":"not available",         "ram_est_mb":2500, "heavy":True, "notes":"⚠ parallel-wavegan not available on PyPI.","arthur_fit":3},
+    "mmsfas":     {"label":"MMS Persian (Meta)","size":"~150 MB",           "rtf_est":"RTF ~0.5×",            "ram_est_mb":200,  "heavy":False,"notes":"Meta MMS-TTS Persian VITS. Reference baseline. CC-BY-NC.","arthur_fit":5},
     "chatterboxturbo": {"label":"Chatterbox-Turbo","size":"~700 MB",       "rtf_est":"RTF 1.11×",            "ram_est_mb":1500, "heavy":True, "notes":"350M distilled one-step TTS. Voice cloning. Near real-time!","arthur_fit":4},
     "vibevoice":  {"label":"VibeVoice-1.5B","size":"~6 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":6500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
@@ -240,7 +241,7 @@ MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
-    "neutts","indextts","manatts","zonos","openvoice",
+    "neutts","indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro",
 ]
 

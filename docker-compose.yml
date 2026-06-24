@@ -86,6 +86,7 @@ services:
       ZONOS_URL: http://engine-current:8101
       MATCHA_URL: http://engine-current:8101
       MANATTS_URL: http://engine-current:8101
+      MMSFAS_URL: http://engine-current:8101
       CSM_URL: http://engine-current:8101
       # Dedicated engine containers
       QWEN3TTS_URL: http://engine-qwen:8104

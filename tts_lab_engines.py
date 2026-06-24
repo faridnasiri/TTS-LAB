@@ -1555,6 +1555,29 @@ def _synth_manatts(inst, text, params):
     return _to_wav(wav_out, inst["sr"]), inst["sr"]
 
 
+# ── MMS Persian TTS (Meta) ───────────────────────────────────────────────────
+def _load_mmsfas():
+    """Load Meta MMS-TTS Persian VITS model.
+
+    Reference-quality baseline for Persian TTS benchmarking.
+    Non-deterministic (variational) — produces natural variation.
+    """
+    from transformers import VitsModel, AutoTokenizer
+    import torch
+    model = VitsModel.from_pretrained("facebook/mms-tts-fas").to(DEVICE)
+    tokenizer = AutoTokenizer.from_pretrained("facebook/mms-tts-fas")
+    return (model, tokenizer)
+
+def _synth_mmsfas(inst, text, params):
+    import torch
+    model, tokenizer = inst
+    inputs = tokenizer(text, return_tensors="pt").to(DEVICE)
+    with torch.no_grad():
+        output = model(**inputs).waveform
+    arr = output.cpu().numpy().squeeze()
+    return _to_wav(arr, model.config.sampling_rate), model.config.sampling_rate
+
+
 # ── 24. Chatterbox-Turbo ───────────────────────────────────────────────────────
 def _load_chatterboxturbo(model="default"):
     """Load Chatterbox-Turbo TTS (350M distilled one-step model).
@@ -1906,8 +1929,8 @@ LOADERS: dict = {
     "fishspeech": _load_fishspeech,"csm":      _load_csm,
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
     "neutts":     _load_neutts,   "indextts":  _load_indextts,
-    "manatts":    _load_manatts,  "zonos":     _load_zonos,
-    "openvoice":  _load_openvoice,
+    "manatts":    _load_manatts,  "mmsfas":    _load_mmsfas,
+    "zonos":      _load_zonos,    "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
     "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
 }
@@ -1923,7 +1946,8 @@ SYNTHERS: dict = {
     "fishspeech": _synth_fishspeech,"csm":      _synth_csm,
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
     "neutts":     _synth_neutts,   "indextts":  _synth_indextts,
-    "manatts":    _synth_manatts,  "zonos":     _synth_zonos,
+    "manatts":    _synth_manatts,  "mmsfas":    _synth_mmsfas,
+    "zonos":      _synth_zonos,
     "openvoice":  _synth_openvoice,
     "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
     "omnivoice":  _synth_omnivoice,"s2pro":     _synth_s2pro,
