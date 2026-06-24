@@ -16,13 +16,13 @@ Synthesize speech from text using Chatterbox TTS.
 {
   "text": "string (required)",
   "params": {
-    "model": "default",
+    "model": "persian",
     "audio_prompt_id": "",
     "seed": "0",
     "exaggeration": "0.65",
     "cfg_weight": "0.5",
     "repetition_penalty": "1.5",
-    "use_g2p": "persian_phonemizer",
+    "use_g2p": "none",
     "max_length": "20000",
     "chunk_silence_ms": "350"
   }
@@ -40,9 +40,9 @@ Synthesize speech from text using Chatterbox TTS.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `model` | string | `"default"` | **`"default"`** — English-only 0.5B (16 layers, 704 BPE tokens).<br>**`"persian"`** — Persian fine-tune 0.5B (30 layers, 2352 BPE tokens) from `hootan09/ChatterBox`. Auto-enables G2P + Persian char mapping.<br>**`"v3"`** — Multilingual v3 1.0B (30 layers, 2454 grapheme tokens) from `ResembleAI/chatterbox`. |
+| `model` | string | `"persian"` | **`"persian"`** — Persian fine-tune 0.5B (30 layers, 2454 BPE tokens) from `hootan09/ChatterBox`. Default. Handles both Persian and English.<br>**`"default"`** — English-only 0.5B (16 layers, 704 BPE tokens). Faster startup, smaller VRAM.<br>**`"v3"`** — Multilingual v3 1.0B (30 layers, 2454 grapheme tokens) from `ResembleAI/chatterbox`. 23 languages. |
 
-Switching `model` between calls triggers a full unload + reload (seconds). Same model across calls reuses the loaded instance.
+Switching `model` between calls triggers a full unload + reload (~10-15s). Same model across calls reuses the loaded instance. Persian is the default — no model param needed for Persian/English text.
 
 #### Voice Cloning (Speaker Conditioning)
 
@@ -70,7 +70,7 @@ Reference WAVs should be **5-10 seconds** for best speaker embedding extraction.
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
-| `use_g2p` | string | `"persian_phonemizer"` | Grapheme-to-phoneme provider for Persian. **`"persian_phonemizer"`** — adds combining diacritics (~1.5–2× token expansion). Enables correct short vowel pronunciation.<br>**`"none"`** — skip G2P. Use for English text or when diacritics are already present. |
+| `use_g2p` | string | `"none"` | Grapheme-to-phoneme provider for Persian. **`"none"`** — raw text (default). Persian T3 handles raw text natively.<br>**`"persian_phonemizer"`** — adds combining vowel marks. May improve pronunciation but doubles token count (~1.5–2× expansion). |
 
 #### Chunking (Long-Form Synthesis)
 
@@ -322,7 +322,6 @@ resp = requests.post(
             "model": "persian",
             "seed": "1234",
             "exaggeration": "0.65",
-            "use_g2p": "persian_phonemizer",
         },
     },
     timeout=300,

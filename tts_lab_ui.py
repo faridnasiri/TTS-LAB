@@ -289,19 +289,31 @@ def _build_params(name: str) -> str:
         )
 
     if name == "chatterbox":
+        cb_models = [
+            ("persian", "Persian (فارسی) — 0.5B, 30-layer T3"),
+            ("default", "English — 0.5B, 16-layer T3"),
+            ("v3",     "Multilingual — 1.0B, 30-layer, 23 languages"),
+        ]
         return (
             _row(
+                _grp("Model", _sel("model", cb_models, "persian")),
                 _grp('Exaggeration <span class="range-val">0.65</span>', _rng("exaggeration", "0.0", "1.0", "0.05", "0.65", "0=flat, 1=expressive")),
-                _grp('CFG weight <span class="range-val">0.5</span>', _rng("cfg_weight", "0.1", "1.0", "0.05", "0.5", "lower=natural")),
             )
             + _row(
+                _grp('CFG weight <span class="range-val">0.5</span>', _rng("cfg_weight", "0.1", "1.0", "0.05", "0.5", "lower=natural")),
                 _grp('Seed <span class="range-val">0</span>', _rng("seed", "0", "9999", "1", "0", "0=random")),
-                _grp('Repetition penalty <span class="range-val">1.5</span>', _rng("repetition_penalty", "1.0", "3.0", "0.1", "1.5", "2.0=standard, higher=less repetitive")),
+            )
+            + _row(
+                _grp('Repetition penalty <span class="range-val">1.5</span>', _rng("repetition_penalty", "1.0", "3.0", "0.1", "1.5", "2.0=standard")),
+                _grp('Chunk silence <span class="range-val">350ms</span>', _rng("chunk_silence_ms", "0", "2000", "50", "350", "ms between chunks")),
             )
             + f'<div class="param-row">{_upload_widget("cb-file", "cb-status", "cb-prompt-id", "Voice cloning reference WAV (optional)")}</div>'
             + _row(
                 _grp('Max Length <span class="range-val">20000</span>', _rng("max_length", "500", "20000", "500", "20000", "tokens — higher=longer audio")),
-                _grp('Chunk silence <span class="range-val">350ms</span>', _rng("chunk_silence_ms", "0", "2000", "50", "350", "ms between chunks")),
+                _grp('G2P', '<select class="form-select form-select-sm bg-dark text-light border-secondary" data-param="use_g2p">'
+                     '<option value="none">Off (faster)</option>'
+                     '<option value="persian_phonemizer">Persian G2P (adds vowel marks)</option>'
+                     '</select>'),
             )
         )
 
