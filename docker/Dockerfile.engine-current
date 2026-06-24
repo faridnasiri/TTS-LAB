@@ -73,6 +73,9 @@ RUN pip install --no-cache-dir orpheus-speech || true
 # ── Shared audio processing ─────────────────────────────────────
 RUN pip install --no-cache-dir phonemizer>=3.2.1 scipy librosa hyperpyyaml soundfile
 
+# ── SpeechT5 xvector extraction ─────────────────────────────────
+RUN pip install --no-cache-dir speechbrain
+
 # Restore torch nightly with full deps from nightly index.
 # Engine packages may have installed mismatched torchvision or torch
 # with different CUDA versions. Force-reinstall all three together

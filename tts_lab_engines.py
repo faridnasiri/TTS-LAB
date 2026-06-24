@@ -1579,36 +1579,72 @@ def _synth_mmsfas(inst, text, params):
 
 
 # ── SpeechT5 Persian ──────────────────────────────────────────────────────────
-def _load_speecht5_fa():
-    """Load fine-tuned SpeechT5 for Persian.
 
-    NOTE: This fine-tune lacks built-in speaker embeddings.
-    We use a random xvector as fallback — quality will be poor.
-    For production use, integrate speechbrain/spkrec-xvect-voxceleb
-    to extract real xvectors from a reference WAV.
+# Default reference WAV for xvector extraction — John (clean neutral male)
+# This is language-agnostic: xvectors capture speaker timbre, not language.
+_SPEECHT5_DEFAULT_REF = "/tmp/tts_uploads/el_john_clean_neutral_and_inviting.wav"
+
+def _load_speecht5_fa():
+    """Load fine-tuned SpeechT5 for Persian with real xvector speaker embedding.
+
+    Uses speechbrain/spkrec-xvect-voxceleb to extract xvectors from a
+    reference WAV. Falls back to random embedding if extraction fails.
     """
     from transformers import SpeechT5ForTextToSpeech, SpeechT5Processor, SpeechT5HifiGan
-    import torch
+    from speechbrain.inference.speaker import EncoderClassifier
+    import torch, wave, numpy as np
+
     model = SpeechT5ForTextToSpeech.from_pretrained("Hamid20/speecht5_tts_persian").to(DEVICE)
     processor = SpeechT5Processor.from_pretrained("microsoft/speecht5_tts")
     vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan").to(DEVICE)
-    # Random xvector — produces robotic but intelligible speech
-    default_spk = torch.randn(1, 512).to(DEVICE)
-    return (model, processor, vocoder, default_spk)
+
+    # Extract xvector from default reference
+    try:
+        classifier = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-xvect-voxceleb",
+            run_opts={"device": DEVICE},
+        )
+        ref_path = Path(_SPEECHT5_DEFAULT_REF)
+        if not ref_path.exists():
+            raise FileNotFoundError(f"Default ref not found: {ref_path}")
+        with wave.open(str(ref_path), "rb") as w:
+            audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+        ref_tensor = torch.tensor(audio).unsqueeze(0).to(DEVICE)
+        spk_embed = classifier.encode_batch(ref_tensor).squeeze(0)  # [1, 512]
+        slog("LOAD", "speecht5_fa", f"Xvector from {ref_path.name} — shape {spk_embed.shape}")
+    except Exception as e:
+        slog("LOAD", "speecht5_fa", f"Xvector failed ({e}) — using random fallback")
+        spk_embed = torch.randn(1, 512).to(DEVICE)
+
+    return (model, processor, vocoder, spk_embed, classifier if "classifier" in dir() else None)
 
 def _synth_speecht5_fa(inst, text, params):
-    import torch
-    model, processor, vocoder, default_spk = inst
-    inputs = processor(text=text, return_tensors="pt").to(DEVICE)
-    # Use uploaded reference audio for xvector extraction if available
+    import torch, wave, numpy as np
+    model, processor, vocoder, default_spk, classifier = inst
+
+    # Use uploaded reference audio if available
+    spk = default_spk
     ref_id = params.get("audio_prompt_id", "")
-    if ref_id:
+    if ref_id and classifier is not None:
         ref_path = UPLOAD_DIR / f"{ref_id}.wav"
         if ref_path.exists():
-            # TODO: integrate speechbrain xvector extraction here
-            pass
-    speech = model.generate_speech(inputs["input_ids"], default_spk, vocoder=vocoder)
+            try:
+                with wave.open(str(ref_path), "rb") as w:
+                    audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768.0
+                ref_tensor = torch.tensor(audio).unsqueeze(0).to(DEVICE)
+                spk = classifier.encode_batch(ref_tensor).squeeze(0)
+            except Exception:
+                pass  # Fall back to default
+
+    inputs = processor(text=text, return_tensors="pt").to(DEVICE)
+    speech = model.generate_speech(inputs["input_ids"], spk, vocoder=vocoder)
     arr = speech.cpu().numpy().squeeze()
+
+    # Normalize — SpeechT5 output tends to be quiet
+    peak = np.abs(arr).max()
+    if peak > 0.001:
+        arr = arr * (0.95 / peak)
+
     return _to_wav(arr, 16000), 16000
 
 
