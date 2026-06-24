@@ -299,12 +299,6 @@ def _ensure_loaded(name: str, params: dict) -> None:
                      f"Voice/temp change: {st.get('loaded_voice')!r}/{st.get('loaded_temperature')!r} "
                      f"→ {wanted_voice!r}/{wanted_temp!r} — evicting")
                 _safe_del(st["instance"]); st["instance"] = None
-        if name == "chatterbox":
-            wanted_model = params.get("model", "default")
-            if st["instance"] and st.get("loaded_model") != wanted_model:
-                slog("LOAD", name,
-                     f"Model change: {st.get('loaded_model')!r} → {wanted_model!r} — evicting")
-                _safe_del(st["instance"]); st["instance"] = None
         if name in ("outetts", "parler", "zonos"):
             key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
             defaults = {"outetts": "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf",
@@ -342,8 +336,6 @@ def _ensure_loaded(name: str, params: dict) -> None:
                     model_arg = params.get("voice", "en_US-ryan-high")
                 elif name == "matcha":
                     model_arg = params.get("voice", "khadijah")
-                elif name == "chatterbox":
-                    model_arg = params.get("model", "default")
                 elif name == "outetts":
                     model_arg = params.get("model_path", "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf")
                 elif name == "parler":
@@ -366,8 +358,6 @@ def _ensure_loaded(name: str, params: dict) -> None:
                 if name == "matcha":
                     st["loaded_voice"] = params.get("voice", "khadijah")
                     st["loaded_temperature"] = str(params.get("temperature", "0.333"))
-                if name == "chatterbox":
-                    st["loaded_model"] = params.get("model", "default")
                 if name in ("outetts", "parler", "zonos"):
                     key = {"outetts": "model_path", "parler": "model_id", "zonos": "variant"}[name]
                     defaults = {"outetts": "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf",

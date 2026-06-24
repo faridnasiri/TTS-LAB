@@ -568,13 +568,11 @@ def _synth_parler(inst, text, params):
 
 
 # ── 13. Chatterbox ────────────────────────────────────────────────────────────
-def _load_chatterbox(model="default"):
-    """Load Chatterbox TTS.
+def _load_chatterbox(model="persian"):
+    """Load Chatterbox TTS — Persian fine-tune by default.
 
-    Models:
-      default — English-only (0.5B, 16 layers, 704 tokens)
-      persian — Persian fine-tune (0.5B, 30 layers, 2454 tokens) from hootan09
-      v3      — Multilingual v3 (1.0B, 30 layers, 2454 tokens, new vocoder) from ResembleAI
+    The Persian T3 (30 layers, 2454 tokens) handles both Persian and English.
+    Defaulting to Persian avoids model-switching: one model, both languages.
     """
     import types, importlib.machinery, shutil
     for _tc in ["torchcodec", "torchcodec._C", "torchcodec.decoders",
