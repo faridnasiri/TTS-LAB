@@ -277,7 +277,7 @@ services:
   # SGLang: VibeVoice-1.5B (~7 GB VRAM)
   # ═══════════════════════════════════════════════════════════════
   vibevoice:
-    image: lmsysorg/sglang-omni:dev
+    image: tts-lab-sglang:latest
     container_name: tts-lab-vibevoice
     ports:
       - "8003:8000"
@@ -303,7 +303,7 @@ services:
   # SGLang: Higgs Audio v3 4B (~9 GB VRAM)
   # ═══════════════════════════════════════════════════════════════
   higgs:
-    image: lmsysorg/sglang-omni:dev
+    image: tts-lab-sglang:latest
     container_name: tts-lab-higgs
     ports:
       - "8004:8000"
@@ -326,10 +326,46 @@ services:
       - tts-lab-net
 
   # ═══════════════════════════════════════════════════════════════
-  # SGLang: Fish S2-Pro 5B (~11 GB VRAM)
+  # Custom SGLang — built from pip (newer than lmsysorg/sglang-omni:dev)
+  # Supports S2-Pro, VibeVoice, Higgs via --model flag
+  # ═══════════════════════════════════════════════════════════════
+  sglang-runtime:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.sglang
+    image: tts-lab-sglang:latest
+    container_name: tts-lab-sglang
+    ports:
+      - "8005:8000"
+    volumes:
+      - /opt/models/huggingface:/opt/models/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_HOME: /opt/models/huggingface
+    restart: unless-stopped
+    profiles:
+      - sglang
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # S2-Pro via SGLang (~11 GB VRAM)
   # ═══════════════════════════════════════════════════════════════
   s2pro:
-    image: lmsysorg/sglang-omni:dev
+    image: tts-lab-sglang:latest
     container_name: tts-lab-s2pro
     ports:
       - "8005:8000"
