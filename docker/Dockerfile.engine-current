@@ -88,19 +88,22 @@ RUN pip install --no-cache-dir --force-reinstall \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev && rm -rf /var/lib/apt/lists/*
 
-# ── torchcodec stub for XTTS + f5tts ────────────────────────────
-# coqui-tts 2.9+ and transformers ASR pipeline require torchcodec.
-# The pip package doesn't exist for torch nightly. Create a full stub.
+# ── torchcodec stub — OmniVoice ASR + XTTS + f5tts ────────────
+# transformers ASR pipeline does isinstance(x, torchcodec.decoders.AudioDecoder)
+# inside DataLoader workers (multiprocessing spawn). Must survive worker import.
 ARG TORCHCODEC_STUB=1
 RUN SITE_PKGS=$(python3 -c "import site; print(site.getsitepackages()[0])") && \
+    rm -rf "${SITE_PKGS}/torchcodec" "${SITE_PKGS}/torchcodec-99.0.0.dist-info" && \
     mkdir -p "${SITE_PKGS}/torchcodec-99.0.0.dist-info" && \
     printf "Metadata-Version: 2.1\nName: torchcodec\nVersion: 99.0.0\n" \
        > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/METADATA" && \
     printf "" > "${SITE_PKGS}/torchcodec-99.0.0.dist-info/RECORD" && \
-    mkdir -p "${SITE_PKGS}/torchcodec/decoders" && \
+    mkdir -p "${SITE_PKGS}/torchcodec" && \
     printf "from .decoders import AudioDecoder\n" > "${SITE_PKGS}/torchcodec/__init__.py" && \
-    printf "class AudioDecoder:\n    pass\n" > "${SITE_PKGS}/torchcodec/decoders/__init__.py" && \
-    python3 -c "from torchcodec.decoders import AudioDecoder; print('torchcodec stub verified')"
+    printf "class AudioDecoder:\n    pass\n" > "${SITE_PKGS}/torchcodec/decoders.py" && \
+    python3 -c "import torchcodec; assert torchcodec.decoders.AudioDecoder; print('stub OK')" && \
+    python3 -c "import torch.multiprocessing as mp; mp.set_start_method('spawn', force=True); \
+import torchcodec; assert torchcodec.decoders.AudioDecoder; print('spawn OK')"
 
 # Pin versions that engine packages may have changed.
 # numpy < 2.0 critical: engine packages (bark, melo, outetts, etc.)
