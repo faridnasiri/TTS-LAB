@@ -289,7 +289,7 @@ def _build_params(name: str) -> str:
         )
 
     if name == "chatterbox":
-        cb_models = [("default", "Default (English, 0.5B)"), ("persian", "Persian fine-tune (FA, 1B)"), ("v3", "Multilingual v3 (1B, 30 layers)")]
+        cb_models = [("default", "Default (English, 0.5B)"), ("persian", "Persian fine-tune (FA, 0.5B, 30-layer T3)"), ("v3", "Multilingual v3 (1.0B, 30 layers)")]
         return (
             _row(
                 _grp("Model", _sel("model", cb_models, "default")),
