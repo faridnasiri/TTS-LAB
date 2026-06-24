@@ -310,10 +310,7 @@ def _build_params(name: str) -> str:
             + f'<div class="param-row">{_upload_widget("cb-file", "cb-status", "cb-prompt-id", "Voice cloning reference WAV (optional)")}</div>'
             + _row(
                 _grp('Max Length <span class="range-val">20000</span>', _rng("max_length", "500", "20000", "500", "20000", "tokens — higher=longer audio")),
-                _grp('G2P', '<select class="form-select form-select-sm bg-dark text-light border-secondary" data-param="use_g2p">'
-                     '<option value="none">Off (faster)</option>'
-                     '<option value="persian_phonemizer">Persian G2P (adds vowel marks)</option>'
-                     '</select>'),
+                _grp('', ''),
             )
         )
 
