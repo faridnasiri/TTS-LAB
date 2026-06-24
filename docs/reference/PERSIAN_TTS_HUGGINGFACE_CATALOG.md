@@ -1,8 +1,9 @@
-# Persian/Farsi TTS Models on Hugging Face — Complete Catalog & Integration Plan
+# Persian/Farsi TTS Models on Hugging Face — Complete Catalog
 
-> **Date:** 2026-06-23
-> **Status:** Research complete — integration plan ready for review
+> **Date:** 2026-06-23 (revised after repo verification)
+> **Status:** Research complete — repo structures verified, filenames confirmed
 > **Related:** [PERSIAN_TTS_MODELS.md](PERSIAN_TTS_MODELS.md) — existing Persian engines in the lab
+> **Related:** [PERSIAN_TTS_INTEGRATION_PLAN.md](PERSIAN_TTS_INTEGRATION_PLAN.md) — code-level integration plan (revised)
 > **Related:** [../engine_compatibility.yaml](../engine_compatibility.yaml) — machine-readable SSOT
 > **Related:** [../containerization/01-ARCHITECTURE.md](../containerization/01-ARCHITECTURE.md) — container topology
 
@@ -68,19 +69,22 @@ Searches conducted across Hugging Face, Google, and arXiv (2026-06-23):
 
 #### VITS-based (Community) — 11 repos
 
-| # | Model | Author | Speakers | Training Data | Downloads/Mo |
-|---|-------|--------|----------|---------------|-------------|
-| 1 | `Kamtera/persian-tts-female-vits` | Kamtera | 1 Female | Persian TTS Dataset (Kaggle) | 104 |
-| 2 | `Kamtera/persian-tts-male-vits` | Kamtera | 1 Male | Fine-tuned from female VITS | ~50 |
-| 3 | `karim23657/persian-tts-female-GPTInformal-Persian-vits` | karim23657 | 1 Female | GPTInformal-Persian (colloquial) | ~20 |
-| 4 | `saillab/persian-tts-azure-grapheme-60K` | Saillab | 1 Speaker | Azure TTS synthetic | ~30 |
-| 5 | `saillab/persian-tts-cv15-reduct-grapheme-multispeaker` | Saillab | Multi | Common Voice 15 (reduced) | ~25 |
-| 6 | `saillab/persian-tts-grapheme-arm24-finetuned-on1` | Saillab | 1 Speaker | ARM24 + fine-tuned on 1 speaker | ~15 |
-| 7 | `saillab/multi_speaker` | Saillab | Multi | Common Voice 15 (90K steps) | ~20 |
-| 8 | `saillab/female_cv_azure_male_azure_female` | Saillab | 1 Female | CV + Azure male + Azure female mixed | ~15 |
-| 9 | `saillab/Multi_Speaker_Cv_plus_Azure_female_in_one_set` | Saillab | Multi | CV + Azure female combined | ~10 |
-| 10 | `mhrahmani/persian-tts-vits-0` | mhrahmani | 1 Speaker | Unknown (57K steps) | gated |
-| 11 | `SeyedAli/Persian-Speech-synthesis-MMS` | SeyedAli | 1 Speaker | Mirror of MMS-TTS-FAS | ~275 |
+| # | Model | Author | Speakers | Training Data | Access |
+|---|-------|--------|----------|---------------|--------|
+| 1 | `Kamtera/persian-tts-female-vits` | Kamtera | 1 Female | Persian TTS Dataset (Kaggle) | ✅ Public |
+| 2 | `Kamtera/persian-tts-male-vits` | Kamtera | 1 Male | Fine-tuned from female VITS | ✅ Public |
+| 3 | `karim23657/persian-tts-female-GPTInformal-Persian-vits` | karim23657 | 1 Female | GPTInformal-Persian (colloquial) | ✅ Public |
+| 4 | `saillab/ZabanZad_VITS_Female` ⭐ | Saillab | 1 Female | CV + Azure mixed | 🔒 Gated (active) |
+| 5 | `saillab/ZabanZad_VITS_MAle` ⭐ | Saillab | 1 Male | CV + Azure mixed | 🔒 Gated (active) |
+| 6 | `saillab/persian-tts-azure-grapheme-60K` | Saillab | 1 Speaker | Azure TTS synthetic | 🔒 Gated (abandoned?) |
+| 7 | `saillab/persian-tts-cv15-reduct-grapheme-multispeaker` | Saillab | Multi | Common Voice 15 (reduced) | 🔒 Gated (abandoned?) |
+| 8 | `saillab/persian-tts-grapheme-arm24-finetuned-on1` | Saillab | 1 Speaker | ARM24 + fine-tune | 🔒 Gated |
+| 9 | `saillab/multi_speaker` | Saillab | Multi | Common Voice 15 (90K steps) | 🔒 Gated |
+| 10 | `mhrahmani/persian-tts-vits-0` | mhrahmani | 1 Speaker | Unknown (57K steps) | 🔒 Private |
+| 11 | `SeyedAli/Persian-Speech-synthesis-MMS` | SeyedAli | 1 Speaker | Mirror of MMS-TTS-FAS | ✅ Public |
+
+> ⭐ = **Actively maintained** (confirmed via ZabanZad PoC app.py). Other Saillab models are commented out in the PoC and may be deprecated.
+> 🔒 = Requires `HUGGING_FACE_HUB_TOKEN` environment variable.
 
 #### Official / Research Models — 5 repos
 
@@ -188,9 +192,9 @@ These models are already integrated and serving in Arthur TTS Lab:
 |----------|-------|
 | **Architecture** | VITS (Coqui TTS framework) |
 | **VRAM** | ~500 MB |
-| **Disk** | ~200 MB |
-| **API** | Coqui TTS: `tts --model_path model.pth --config_path config.json` |
-| **Why #4** | Most widely-used community Persian female TTS (104 downloads/month, 27 Spaces). Good benchmark for community-VITS quality ceiling against your existing Matcha-TTS Khadijah. |
+| **Disk** | ~1 GB (training ckpt: `best_model_30824.pth` + `config.json`) |
+| **API** | Coqui TTS: `Synthesizer(tts_checkpoint=..., tts_config_path=...)` |
+| **Why #4** | Most widely-used community Persian female TTS (104 downloads/month, 27 Spaces). Good benchmark for community-VITS quality ceiling against your existing Matcha-TTS Khadijah. **Verified:** 7 checkpoints in repo; `best_model_30824.pth` is the latest best. Files are ~998 MB training checkpoints (incl. optimizer state). |
 | **Integration effort** | Low — Coqui TTS already installed |
 | **Container** | `engine-current` |
 
@@ -200,34 +204,36 @@ These models are already integrated and serving in Arthur TTS Lab:
 |----------|-------|
 | **Architecture** | VITS (Coqui TTS framework) |
 | **VRAM** | ~500 MB |
-| **Disk** | ~200 MB |
+| **Disk** | ~1 GB (training ckpt: `best_model_98066.pth` + `config.json`) |
 | **API** | Coqui TTS |
-| **Why #5** | Male counterpart to the female VITS. Most of your existing Persian voices are female (Khadijah, Mana-Piper, ManaTTS). This fills the male voice gap. |
+| **Why #5** | Male counterpart to the female VITS. Most of your existing Persian voices are female (Khadijah, Mana-Piper, ManaTTS). This fills the male voice gap. **Verified:** 7 checkpoints; `best_model_98066.pth` is latest best. |
 | **Integration effort** | Low — Coqui TTS already installed |
 | **Container** | `engine-current` |
 
 ### Tier 3: Specialized Value
 
-#### #6 [saillab/persian-tts-azure-grapheme-60K](https://huggingface.co/saillab/persian-tts-azure-grapheme-60K) — Best Studio-Quality VITS
+#### #6 [saillab/ZabanZad_VITS_Female](https://huggingface.co/saillab/ZabanZad_VITS_Female) — Active Saillab Female Model ⭐
 
 | Property | Value |
 |----------|-------|
 | **Architecture** | VITS (grapheme-based, no phonemizer) |
 | **VRAM** | ~500 MB |
-| **Disk** | ~200 MB |
-| **Why #6** | Trained on Azure TTS data — higher recording quality than Common Voice models. Grapheme-based (no phonemizer needed) = simpler pipeline, fewer failure modes. Best reference for "clean studio" Persian VITS quality. |
-| **Integration effort** | Low |
+| **Disk** | ~1 GB (training ckpt: `best_model_15397.pth`, `config.json`, `speakers1.pth`) |
+| **Access** | 🔒 Gated — requires `HUGGING_FACE_HUB_TOKEN` |
+| **Why #6** | This is the **actively maintained** Saillab female model (confirmed via ZabanZad PoC app.py). The `azure-grapheme-60K` and other repos I originally catalogued are commented out in the PoC. Includes `speakers1.pth` for multi-speaker support. |
+| **Integration effort** | Medium — gated, needs token in env |
 | **Container** | `engine-current` |
 
-#### #7 [saillab/persian-tts-cv15-reduct-grapheme-multispeaker](https://huggingface.co/saillab/persian-tts-cv15-reduct-grapheme-multispeaker) — Only Multi-Speaker Persian Model
+#### #7 [saillab/ZabanZad_VITS_MAle](https://huggingface.co/saillab/ZabanZad_VITS_MAle) — Active Saillab Male Model ⭐
 
 | Property | Value |
 |----------|-------|
-| **Architecture** | VITS (multi-speaker, grapheme-based) |
+| **Architecture** | VITS (grapheme-based) |
 | **VRAM** | ~500 MB |
-| **Disk** | ~250 MB (includes `speakers.pth`) |
-| **Why #7** | Only Persian TTS model with multiple built-in speaker identities. No reference audio needed to switch voices — just change speaker ID. Unique capability for A/B voice comparison. |
-| **Integration effort** | Low |
+| **Disk** | ~1 GB (training ckpt: `checkpoint_61000.pth`, `config.json`) |
+| **Access** | 🔒 Gated — requires `HUGGING_FACE_HUB_TOKEN` |
+| **Why #7** | Actively maintained Saillab male voice. Paired with ZabanZad Female. Gives a second male Persian option alongside Kamtera male. |
+| **Integration effort** | Medium — gated |
 | **Container** | `engine-current` |
 
 #### #8 [karim23657/persian-tts-female-GPTInformal-Persian-vits](https://huggingface.co/karim23657/persian-tts-female-GPTInformal-Persian-vits) — Colloquial Persian
@@ -236,8 +242,8 @@ These models are already integrated and serving in Arthur TTS Lab:
 |----------|-------|
 | **Architecture** | VITS |
 | **VRAM** | ~500 MB |
-| **Disk** | ~200 MB |
-| **Why #8** | **Unique:** trained on informal/colloquial Persian (GPTInformal dataset). Handles slang, casual expressions, and everyday speech patterns that formal TTS models struggle with. Complements your existing formal-Persian engines. |
+| **Disk** | ~1 GB (training ckpt: `best_model_98066.pth` + `config.json`) |
+| **Why #8** | **Unique:** trained on informal/colloquial Persian (GPTInformal dataset). Handles slang, casual expressions, and everyday speech patterns that formal TTS models struggle with. Complements your existing formal-Persian engines. **Verified:** 6 checkpoints in repo; includes `tests/` directory (harmless). |
 | **Integration effort** | Low |
 | **Container** | `engine-current` |
 
@@ -308,10 +314,12 @@ These models are already integrated and serving in Arthur TTS Lab:
 
 | Model | Reason to Skip |
 |-------|---------------|
-| `saillab/persian-tts-grapheme-arm24-finetuned-on1` | Checkpoint variant of azure-grapheme-60K; pick the best one |
-| `saillab/multi_speaker` (90K) | Older than cv15-reduct multispeaker; pick the newer one |
-| `saillab/female_cv_azure_male_azure_female` | Inferior data mix vs. pure Azure model |
-| `saillab/Multi_Speaker_Cv_plus_Azure_female_in_one_set` | Redundant with cv15-reduct |
+| `saillab/persian-tts-grapheme-arm24-finetuned-on1` | Gated, commented out in ZabanZad PoC — likely abandoned |
+| `saillab/multi_speaker` (90K) | Gated, commented out in PoC — use ZabanZad_VITS_Female instead |
+| `saillab/female_cv_azure_male_azure_female` | Gated, commented out in PoC |
+| `saillab/Multi_Speaker_Cv_plus_Azure_female_in_one_set` | Gated, commented out in PoC |
+| `saillab/persian-tts-azure-grapheme-60K` | Gated, commented out in PoC — ZabanZad_VITS_Female is the maintained successor |
+| `saillab/persian-tts-cv15-reduct-grapheme-multispeaker` | Gated, commented out in PoC — no active multi-speaker replacement |
 | `SeyedAli/Persian-Speech-synthesis-MMS` | Mirror of facebook/mms-tts-fas — use the original |
 | `Thomcles/Chatterbox-TTS-Persian-Farsi` | Community reports: "poor quality, doesn't sound natural" |
 | `Kamtera/persian-tts-female-glow_tts` | Glow-TTS (2019) superseded by VITS (2021); only add if benchmarking architecture |
