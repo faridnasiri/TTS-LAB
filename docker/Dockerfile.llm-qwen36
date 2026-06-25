@@ -5,37 +5,15 @@
 #
 # Standalone container — does NOT inherit from tts-lab-base.
 # llama.cpp has zero dependency overlap with TTS stacks.
-# Builds llama.cpp from source with CUDA sm_120 support.
+# Uses CUDA devel image (includes nvcc needed to build llama.cpp).
 #
-# SIZE: ~3 GB (image) + ~13 GB (model, mounted at runtime)
+# SIZE: ~5 GB (image) + ~13 GB (model, mounted at runtime)
 # GPU: Required (CUDA 12.8, sm_120 — RTX 5060 Ti)
 # VRAM: ~13 GB (model + KV cache for 4K context)
 # Port: 8006 (OpenAI-compatible API)
 # ═══════════════════════════════════════════════════════════════════
 
-# ── Stage 1: Build llama.cpp with CUDA ────────────────────────────
-FROM nvidia/cuda:12.8.2-devel-ubuntu22.04 AS builder
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    cmake \
-    git \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp && \
-    cd /opt/llama.cpp && \
-    cmake -B build \
-      -DGGML_CUDA=ON \
-      -DCMAKE_CUDA_ARCHITECTURES="120" \
-      -DGGML_CUDA_F16=ON \
-      -DGGML_CUDA_FA=ON \
-      -DCMAKE_BUILD_TYPE=Release && \
-    cmake --build build --config Release -j$(nproc)
-
-# ── Stage 2: Runtime ──────────────────────────────────────────────
-FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.2-devel-ubuntu22.04
 
 LABEL org.opencontainers.image.title="TTS Lab — Qwen 3.6 LLM"
 LABEL org.opencontainers.image.description="Qwen 3.6 35B-A3B MoE via llama.cpp — reasoning & coding"
@@ -43,15 +21,35 @@ LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="llm"
 LABEL tts-lab.gpu="required"
 
-# Copy llama.cpp binaries and CUDA runtime deps from builder
-COPY --from=builder /opt/llama.cpp/build/bin/llama-server /usr/local/bin/
-COPY --from=builder /opt/llama.cpp/build/bin/llama-cli /usr/local/bin/
-
-# Install only runtime CUDA libraries needed by llama.cpp
+# ── Build dependencies + CUDA runtime libs ────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
     curl \
+    ca-certificates \
+    # CUDA runtime libraries needed by llama-server at runtime
     libcublas-12-5 \
     && rm -rf /var/lib/apt/lists/*
+
+# ── Build llama.cpp with CUDA ────────────────────────────────────
+# Let llama.cpp cmake handle architecture auto-detection (it builds
+# for all major architectures by default, including sm_120).
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp && \
+    cd /opt/llama.cpp && \
+    cmake -B build \
+      -DGGML_CUDA=ON \
+      -DGGML_CUDA_F16=ON \
+      -DGGML_CUDA_FA=ON \
+      -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build --config Release -j$(nproc) && \
+    cp build/bin/llama-server /usr/local/bin/ && \
+    cp build/bin/llama-cli /usr/local/bin/
+
+# ── Strip build deps (keep curl + CUDA runtime libs) ──────────────
+RUN apt-get remove -y build-essential cmake git && \
+    apt-get autoremove -y && \
+    apt-get clean
 
 # ── Model directory (mounted at runtime) ─────────────────────────
 RUN mkdir -p /opt/models/llm
@@ -67,16 +65,17 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
 ENV MODEL_PATH=/opt/models/llm/qwen3.6-35b-a3b-tq3_4s.gguf
 ENV CTX_SIZE=4096
 
-CMD llama-server \
-    --model ${MODEL_PATH} \
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["exec llama-server \
+    --model ${MODEL_PATH:-/opt/models/llm/qwen3.6-35b-a3b-tq3_4s.gguf} \
     --host 0.0.0.0 \
     --port 8006 \
     --n-gpu-layers 99 \
-    --ctx-size ${CTX_SIZE} \
+    --ctx-size ${CTX_SIZE:-4096} \
     --parallel 1 \
     --cache-type-k q4_0 \
     --cache-type-v q4_0 \
     --flash-attn on \
     --jinja \
     --threads 4 \
-    --threads-batch 8
+    --threads-batch 8"]
