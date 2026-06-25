@@ -1,0 +1,83 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# TIER 3 — llm-qwen36 (Qwen 3.6 LLM on CUDA 12.8 + llama.cpp)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Standalone container — does NOT inherit from tts-lab-base.
+# llama.cpp has zero dependency overlap with TTS stacks.
+# Builds llama.cpp from source with CUDA sm_120 support.
+#
+# SIZE: ~3 GB (image) + ~13 GB (model, mounted at runtime)
+# GPU: Required (CUDA 12.8, sm_120 — RTX 5060 Ti)
+# VRAM: ~13 GB (model + KV cache for 4K context)
+# Port: 8006 (OpenAI-compatible API)
+# ═══════════════════════════════════════════════════════════════════
+
+FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+
+LABEL org.opencontainers.image.title="TTS Lab — Qwen 3.6 LLM"
+LABEL org.opencontainers.image.description="Qwen 3.6 35B-A3B MoE via llama.cpp — reasoning & coding"
+LABEL tts-lab.tier="3-engine"
+LABEL tts-lab.stack="llm"
+LABEL tts-lab.gpu="required"
+
+# ── Build dependencies ────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# ── Build llama.cpp with CUDA ────────────────────────────────────
+# Pin to a stable commit; bump periodically for optimisations.
+ARG LLAMA_CPP_TAG=b4891
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp && \
+    cd /opt/llama.cpp && \
+    cmake -B build \
+      -DGGML_CUDA=ON \
+      -DCMAKE_CUDA_ARCHITECTURES="120" \
+      -DGGML_CUDA_F16=ON \
+      -DGGML_CUDA_FA=ON \
+      -DCMAKE_BUILD_TYPE=Release && \
+    cmake --build build --config Release -j$(nproc) && \
+    cp build/bin/llama-server /usr/local/bin/ && \
+    cp build/bin/llama-cli /usr/local/bin/
+
+# ── Strip build deps (keep only runtime) ──────────────────────────
+RUN apt-get remove -y build-essential cmake git && \
+    apt-get autoremove -y && \
+    apt-get clean
+
+# ── Health-check tool ─────────────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl && rm -rf /var/lib/apt/lists/*
+
+# ── Model directory (mounted at runtime) ─────────────────────────
+RUN mkdir -p /opt/models/llm
+
+WORKDIR /opt/llama.cpp
+EXPOSE 8006
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
+    CMD curl -f http://localhost:8006/health || exit 1
+
+# Default: Qwen3.6-35B-A3B TQ3_4S (~12.4 GiB)
+# Override MODEL_PATH / CTX_SIZE env vars for different model/quant.
+ENV MODEL_PATH=/opt/models/llm/qwen3.6-35b-a3b-tq3_4s.gguf
+ENV CTX_SIZE=4096
+
+CMD llama-server \
+    --model ${MODEL_PATH} \
+    --host 0.0.0.0 \
+    --port 8006 \
+    --n-gpu-layers 99 \
+    --ctx-size ${CTX_SIZE} \
+    --parallel 1 \
+    --cache-type-k q4_0 \
+    --cache-type-v q4_0 \
+    --flash-attn on \
+    --jinja \
+    --threads 4 \
+    --threads-batch 8

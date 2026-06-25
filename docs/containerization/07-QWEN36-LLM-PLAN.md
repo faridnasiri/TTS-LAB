@@ -85,20 +85,115 @@ Add **Qwen 3.6** (Alibaba's April 2026 open-weight model) as a dedicated reasoni
 
 ## 4. Container Architecture
 
-### 4.1 — Stack Positioning
+### 4.1 — Container Topology (Full Lab + LLM)
 
 ```
-Base (nvidia/cuda:12.8.2-runtime-ubuntu22.04)
-  ├── Stack:current    torch 2.12 + tf 5.12.1
-  │   └── Engine:current    21 TTS engines (port 8101)
-  ├── Stack:mid        torch 2.12 + tf 4.51.3
-  │   ├── Engine:qwen       Qwen3TTS (port 8104)
-  │   └── Engine:mid        VibeVoice, Higgs (port 8103)
-  ├── Stack:legacy     torch 1.13 + tf 4.46
-  │   └── Engine:legacy     IndexTTS, Parler (port 8102)
-  ├── Orchestrator     No ML — HTTP dispatch (port 8001)
-  ├── Orpheus          vllm + CUDA 12.1 (port 8002, blocked)
-  └── LLM:qwen36       llama.cpp + CUDA 12.8 (port 8006)  ← NEW
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                              HOST: RTX 5060 Ti 16 GB VRAM                             │
+│                              arthur@192.168.0.87 :8001                                │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+                                          │
+                    ┌─────────────────────┼─────────────────────┐
+                    │                     │                     │
+                    ▼                     ▼                     ▼
+┌──────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────────┐
+│     orchestrator         │ │    engine-current         │ │    engine-qwen            │
+│     (port 8001)          │ │    (port 8101)            │ │    (port 8104)            │
+│──────────────────────────│ │──────────────────────────│ │──────────────────────────│
+│ Base: tts-lab-base       │ │ Base: stack-current       │ │ Base: stack-mid           │
+│ Stack: none (no ML)      │ │ Stack: current            │ │ Stack: mid                │
+│──────────────────────────│ │──────────────────────────│ │──────────────────────────│
+│ Dependencies:            │ │ torch 2.12 nightly        │ │ torch 2.12 nightly        │
+│   fastapi, uvicorn       │ │ transformers 5.12.1        │ │ transformers 4.51.3        │
+│   httpx, soundfile       │ │ CUDA 12.8                 │ │ CUDA 12.8                 │
+│──────────────────────────│ │──────────────────────────│ │──────────────────────────│
+│ VRAM: ~0 MB (no GPU)     │ │ VRAM: 0-12 GB (lazy)      │ │ VRAM: 0-6 GB (lazy)       │
+│                          │ │ Engines: 21 TTS            │ │ Engines: 1 (Qwen3TTS)     │
+│ Routes to ALL engines    │ │  piper, kokoro, melo,      │ │  gated: Qwen/Qwen3-TTS     │
+│ via {ENGINE}_URL env vars│ │  matcha, chattts, bark,    │ │                            │
+│                          │ │  styletts2, f5tts, dia,    │ │                            │
+│                          │ │  chatterbox, zonos, ...    │ │                            │
+└──────────┬───────────────┘ └──────────────────────────┘ └──────────────────────────┘
+           │
+           ├──────────────────────────────────────────────────────────────────┐
+           │                     │                     │                       │
+           ▼                     ▼                     ▼                       ▼
+┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐ ┌──────────────────────┐
+│   engine-mid          │ │   engine-legacy       │ │   orpheus             │ │  ★ llm-qwen36  (NEW) │
+│   (port 8103)         │ │   (port 8102)         │ │   (port 8002)         │ │   (port 8006)         │
+│───────────────────────│ │───────────────────────│ │───────────────────────│ │───────────────────────│
+│ Base: stack-mid       │ │ Base: stack-legacy    │ │ Base: CUDA 12.1       │ │ Base: CUDA 12.8       │
+│ Stack: mid            │ │ Stack: legacy         │ │ Stack: standalone     │ │ Stack: standalone     │
+│───────────────────────│ │───────────────────────│ │───────────────────────│ │───────────────────────│
+│ torch 2.12 nightly    │ │ torch 1.13             │ │ vllm + CUDA 12.1      │ │ llama.cpp (source)    │
+│ transformers 4.51.3   │ │ transformers 4.46      │ │ numpy >= 2.0           │ │ CUDA 12.8             │
+│ CUDA 12.8             │ │ CUDA 11.7              │ │ protobuf >= 5.0        │ │ GPU: sm_120           │
+│───────────────────────│ │───────────────────────│ │───────────────────────│ │───────────────────────│
+│ VRAM: 0-7 GB (lazy)   │ │ VRAM: 0-4 GB (lazy)   │ │ VRAM: ~6 GB (fixed)    │ │ VRAM: ~13 GB (fixed)  │
+│ Engines: 2             │ │ Engines: 2             │ │ Engines: 1             │ │ Engines: 1 (LLM)      │
+│  VibeVoice, Higgs      │ │  IndexTTS, Parler      │ │  orpheus-3b             │ │  qwen3.6-35b-a3b      │
+│ Profile: mid           │ │ Profile: legacy        │ │ Profile: gpu            │ │ Profile: llm           │
+│ Status: experimental   │ │ Status: BLOCKED        │ │ Status: BLOCKED         │ │ Status: PLANNED        │
+└───────────────────────┘ └───────────────────────┘ └───────────────────────┘ └───────────────────────┘
+
+                    ┌─────────────────────────────────────────────────┐
+                    │          SGLang Instances (profile: sglang)     │
+                    │  All share tts-lab-sglang image                 │
+                    ├──────────────┬──────────────┬───────────────────┤
+                    │  vibevoice   │   higgs      │   s2pro           │
+                    │  port 8003   │   port 8004  │   port 8005       │
+                    │  ~7 GB VRAM  │   ~9 GB VRAM │   ~11 GB VRAM     │
+                    │  EXPERIMENTAL│   EXPERIMENTAL│   BLOCKED        │
+                    └──────────────┴──────────────┴───────────────────┘
+
+
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                         VRAM COEXISTENCE MATRIX (16 GB total)                         │
+├────────────────────────┬──────────┬──────────┬──────────┬──────────┬─────────────────┤
+│                        │ LLM idle │ LLM 35B  │ LLM 27B  │ LLM 14B  │                 │
+│                        │ (0 GB)   │(12.4 GB) │(14.5 GB) │ (9 GB)   │                 │
+├────────────────────────┼──────────┼──────────┼──────────┼──────────┼─────────────────┤
+│ No TTS loaded          │    ✅    │    ✅    │  ✅ tight│    ✅    │                 │
+│ Light TTS (0.2 GB)     │    ✅    │    ✅    │  ✅ tight│    ✅    │ kokoro, piper    │
+│ Medium TTS (2 GB)      │    ✅    │  ✅ tight│    ❌    │    ✅    │ chattts, omnivoice│
+│ Heavy TTS (4-6 GB)     │    ✅    │    ❌    │    ❌    │  ✅ tight│ dia, fishspeech   │
+│ Qwen3TTS (6 GB)        │    ✅    │    ❌    │    ❌    │  ✅ tight│ engine-qwen       │
+│ Bark (12 GB)           │    ✅    │    ❌    │    ❌    │    ❌    │ OOM with any LLM │
+└────────────────────────┴──────────┴──────────┴──────────┴──────────┴─────────────────┘
+
+
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                              NETWORK FLOW (key paths)                                 │
+└──────────────────────────────────────────────────────────────────────────────────────┘
+
+  ── TTS Synthesis (unchanged) ──────────────────────────────────────────────────────────
+  Browser ──POST /synthesize/piper──▶ orchestrator:8001 ──POST /synthesize──▶ engine-current:8101
+  Browser ──POST /synthesize/qwen3tts▶ orchestrator:8001 ──POST /synthesize──▶ engine-qwen:8104
+
+  ── LLM Synthesis with Global Eviction (NEW) ───────────────────────────────────────────
+  Browser ──POST /synthesize/qwen36──▶ orchestrator:8001
+                                          │
+                                          │ ★ Phase 1: EVICT ALL TTS ★
+                                          ├──POST /evict──▶ engine-current:8101    (evicts e.g. chattts)
+                                          ├──POST /evict──▶ engine-qwen:8104       (evicts e.g. qwen3tts)
+                                          ├──POST /evict──▶ engine-mid:8103        (evicts if loaded)
+                                          └──POST /evict──▶ engine-legacy:8102     (evicts if loaded)
+                                          │
+                                          │ ★ Phase 2: VERIFY — all evicted ★
+                                          │
+                                          │ ★ Phase 3: ROUTE TO LLM ★
+                                          └──POST /v1/chat/completions──▶ llm-qwen36:8006
+                                                                              │
+                                                                              │ llama.cpp inference
+                                                                              │ 12.4 GB VRAM used
+                                                                              │ 3.6 GB free
+                                                                              │
+  Browser ◀── JSON text response ──────────│◀──────────────────────────────────┘
+
+  ── TTS engines stay evicted. Next TTS synthesis request triggers lazy reload. ─────────
+
+  Docker network: tts-lab-net (bridge) — all containers communicate by service name
+  Host network: used in Makefile deploy targets (--network host) — direct localhost ports
 ```
 
 ### 4.2 — Why a New Standalone Container
@@ -140,33 +235,199 @@ Dockerfile.llm-qwen36:
 | LLM + Qwen3TTS | 12.4 GB | 6 GB | **18.4 GB** | ❌ OOM |
 | No LLM + heavy TTS | 0 GB | 12 GB | 12 GB | ✅ |
 
-### 5.2 — Coexistence Strategy
+### 5.2 — Coexistence Strategy: Global VRAM Eviction (PRIMARY)
 
-**Option A: Profile-based (Simple, Recommended)**
-- LLM container is behind a `llm` Docker Compose profile
-- User stops TTS-heavy containers before starting LLM, or vice versa
-- Manual VRAM management — user decides what runs
+**The LLM must load into 100% clean VRAM — zero TTS models resident.** This is non-negotiable
+because the 35B-A3B GGUF (~12.4 GB) + any medium TTS engine (>2 GB) exceeds the 16 GB budget.
 
-**Option B: VRAM-aware orchestration (Complex, Future)**
-- Add a `/vram` endpoint to each container that reports `nvidia-smi` usage
-- Orchestrator checks VRAM before dispatching
-- Auto-evict TTS engines before LLM inference
-- Requires significant rework
+The mechanism: **orchestrator-coordinated cross-container eviction**. When a synthesis request
+arrives for `qwen36`, the orchestrator sends `POST /evict` to EVERY engine container BEFORE
+routing to the LLM. Each engine container already has `_evict_current()` — we simply expose it
+as an HTTP endpoint.
 
-**Decision: Start with Option A (profile-based).** The lab is single-user; manual switching is acceptable. Add Option B later if needed.
+```
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                    GLOBAL VRAM EVICTION — SEQUENCE DIAGRAM                             │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 
-### 5.3 — Runtime Configuration
+  User                Orchestrator           engine-current        engine-qwen         llm-qwen36
+  │                       │                       │                    │                   │
+  │ POST /synthesize/qwen36                       │                    │                   │
+  │──────────────────────▶│                       │                    │                   │
+  │                       │                       │                    │                   │
+  │                       │  ★ Phase 1: EVICT ALL TTS ENGINES ★                        │
+  │                       │                       │                    │                   │
+  │                       │ POST /evict (timeout 10s)                   │                   │
+  │                       │──────────────────────▶│                    │                   │
+  │                       │                       │ _evict_current()   │                   │
+  │                       │                       │ torch.cuda.empty   │                   │
+  │                       │                       │ gc.collect()       │                   │
+  │                       │  {"evicted":"chattts",│                    │                   │
+  │                       │   "vram_free_mb":15800}                    │                   │
+  │                       │◀──────────────────────│                    │                   │
+  │                       │                       │                    │                   │
+  │                       │ POST /evict (timeout 10s)                   │                   │
+  │                       │────────────────────────────────────────────▶│                   │
+  │                       │                       │                    │ _evict_current()  │
+  │                       │  {"evicted":"qwen3tts",                    │                   │
+  │                       │   "vram_free_mb":15800}                    │                   │
+  │                       │◀────────────────────────────────────────────│                   │
+  │                       │                       │                    │                   │
+  │                       │  ★ Phase 2: VERIFY — all engines evicted ★                    │
+  │                       │  All TTS engines report "nothing loaded" or evicted OK        │
+  │                       │  Total VRAM free across all TTS containers: ~15.8 GB          │
+  │                       │                       │                    │                   │
+  │                       │  ★ Phase 3: ROUTE TO LLM ★                                    │
+  │                       │                                                              │
+  │                       │ POST /v1/chat/completions                                     │
+  │                       │─────────────────────────────────────────────────────────────▶│
+  │                       │                                                              │
+  │                       │  llama.cpp inference (12.4 GB VRAM used, 3.6 GB free)         │
+  │                       │                                                              │
+  │                       │  {"choices":[{"message":{"content":"def quicksort..."}}]}     │
+  │                       │◀─────────────────────────────────────────────────────────────│
+  │                       │                                                              │
+  │  {"text":"def quicksort..."}                                                          │
+  │◀──────────────────────│                                                              │
+  │                       │                                                              │
+  │  ★ TTS engines stay evicted — reload lazily on next TTS synthesis request ★          │
+  │                       │                                                              │
+```
+
+### 5.3 — Implementation: New `/evict` Endpoint on Engine Containers
+
+Each engine container (`tts_lab_engine_server.py`) already has `_evict_current()` (line 77).
+We expose it as an HTTP endpoint. **This is ~15 lines of code.**
+
+**Added to `tts_lab_engine_server.py`:**
+
+```python
+class EvictResponse(BaseModel):
+    evicted: bool
+    engine_was: str | None = None
+    vram_free_mb: int = 0
+    vram_total_mb: int = 0
+
+@app.post("/evict", response_model=EvictResponse)
+async def evict():
+    """Evict the currently loaded engine. Called by orchestrator before LLM loads."""
+    global _current_engine
+    was = _current_engine
+    _evict_current()
+    try:
+        import torch
+        free, total = torch.cuda.mem_get_info()
+        free_mb = free // 1048576
+        total_mb = total // 1048576
+    except Exception:
+        free_mb, total_mb = 0, 0
+    return EvictResponse(
+        evicted=was is not None,
+        engine_was=was,
+        vram_free_mb=free_mb,
+        vram_total_mb=total_mb,
+    )
+```
+
+### 5.4 — Implementation: Orchestrator Pre-Dispatch Eviction Hook
+
+The orchestrator needs a **global eviction function** that fires before LLM dispatch.
+This lives in `tts_lab_dispatch.py`.
+
+**Added to `tts_lab_dispatch.py`:**
+
+```python
+# ── Engine container URL registry (populated by _build_remote_urls) ──
+_ENGINE_CONTAINER_URLS: set[str] = set()
+
+def _build_remote_urls():
+    global _ENGINE_CONTAINER_URLS
+    _REMOTE_ENGINES.clear()
+    _ENGINE_CONTAINER_URLS.clear()
+    for key, val in os.environ.items():
+        if key.endswith("_URL") and not key.endswith("_SGLANG_URL"):
+            engine_name = key[:-4].lower()
+            _REMOTE_ENGINES[engine_name] = val
+            _ENGINE_CONTAINER_URLS.add(val.rstrip("/"))
+
+
+async def _evict_all_tts_engines(http_client) -> dict[str, dict]:
+    """POST /evict to every known engine container. Returns per-URL results.
+    Called before LLM synthesis to guarantee 100% clean VRAM."""
+    results = {}
+    for base_url in _ENGINE_CONTAINER_URLS:
+        try:
+            evict_url = f"{base_url}/evict"
+            resp = await http_client.post(evict_url, timeout=10.0)
+            results[base_url] = resp.json() if resp.status_code == 200 else {"error": resp.text}
+        except Exception as e:
+            results[base_url] = {"error": str(e)}
+    return results
+
+
+async def _do_synth_qwen36(name: str, text: str, params: dict):
+    """LLM synthesis — evicts all TTS engines first, then dispatches to llama.cpp."""
+    import httpx
+    async with httpx.AsyncClient() as client:
+        # ★ Phase 1: Evict ALL TTS engines from VRAM ★
+        evict_results = await _evict_all_tts_engines(client)
+        slog(f"[dispatch] Global eviction results: {evict_results}")
+
+        # ★ Phase 2: Route to LLM ★
+        llm_url = _REMOTE_ENGINES.get("qwen36", "http://llm-qwen36:8006")
+        payload = {
+            "model": params.get("model", "qwen3.6"),
+            "messages": [
+                {"role": "system", "content": params.get("system_prompt", "You are a helpful assistant.")},
+                {"role": "user", "content": text},
+            ],
+            "temperature": params.get("temperature", 0.7),
+            "max_tokens": params.get("max_tokens", 2048),
+            "top_p": params.get("top_p", 0.9),
+        }
+        resp = await client.post(
+            f"{llm_url}/v1/chat/completions",
+            json=payload,
+            timeout=300.0,
+        )
+        data = resp.json()
+        return {
+            "text": data["choices"][0]["message"]["content"],
+            "tokens": data.get("usage", {}).get("total_tokens", 0),
+            "model": data.get("model", ""),
+        }
+```
+
+### 5.5 — Eviction Failure Handling
+
+| Scenario | Behavior |
+|----------|----------|
+| Engine container unreachable | Log warning, continue — container may be down/stopped |
+| Engine container returns error | Log error, continue — best-effort eviction |
+| All evictions succeed | LLM loads into ~15.8 GB free VRAM |
+| SGLang containers running | Must be **manually stopped** (`docker compose --profile sglang down`) — SGLang doesn't have `/evict` endpoint |
+| Orpheus container running | Must be **manually stopped** — blocked anyway |
+
+**SGLang note:** The SGLang containers (vibevoice, higgs, s2pro) don't run `tts_lab_engine_server.py`
+and don't have an eviction endpoint. If SGLang services are running, they must be stopped manually
+before LLM use. The orchestrator will log a warning if SGLang URLs are configured but unreachable
+during eviction.
+
+### 5.6 — Container Lifecycle (Simplified)
 
 ```bash
-# Docker Compose profile: llm
-docker compose --profile llm up -d     # Start LLM (stop heavy TTS first)
-docker compose --profile llm down      # Stop LLM (free VRAM for TTS)
+# Normal TTS operation — LLM container can be running (idle):
+docker compose up -d                          # orchestrator + engine-current + engine-qwen
+docker compose --profile llm up -d            # + LLM container (llama-server running, no model loaded yet)
 
-# Alternative: direct docker run
-docker run -d --name tts-lab-llm-qwen36 --gpus all --network host \
-  -v /opt/models:/opt/models \
-  -p 8006:8006 \
-  tts-lab-llm-qwen36:latest
+# First LLM request triggers eviction → llama.cpp loads model into VRAM
+# After LLM response: model stays loaded until LLM container is stopped
+
+# Free VRAM for heavy TTS work:
+docker compose --profile llm down             # Stop LLM container → VRAM fully freed
+
+# Or keep LLM loaded, TTS engines reload lazily when needed (light engines only):
+# kokoro/piper (0.2 GB) can reload alongside LLM (12.4 + 0.2 = 12.6 GB, fits)
 ```
 
 ---
@@ -283,16 +544,43 @@ Since this is a text→text LLM (not text→audio), the "synthesis" function dif
 2. The synth function returns `{"text": response, "tokens": n, "tokens_per_sec": rtf}`
 3. The dispatch layer handles text responses differently from audio responses
 
-### 7.4 — Dispatch Flow
+### 7.4 — Dispatch Flow (with Global Eviction)
 
 ```
 User types prompt in UI → POST /synthesize/qwen36
-  → Orchestrator checks _REMOTE_ENGINES["qwen36"]
-  → _do_synth_remote() POSTs to http://llm-qwen36:8006/v1/chat/completions
-  → llama-server generates tokens
-  → Response: {"text": "...", "usage": {"total_tokens": 150, ...}}
-  → Orchestrator returns text response to UI
-  → UI renders in chat panel
+  │
+  │  ┌─────────────────────────────────────────────────────────────┐
+  │  │           Orchestrator: _do_synth_qwen36()                   │
+  │  │                                                              │
+  │  │  ★ Phase 1: GLOBAL EVICTION ★                                │
+  │  │  _evict_all_tts_engines(http_client)                         │
+  │  │    ├─ POST /evict → engine-current:8101   "chattts → freed"  │
+  │  │    ├─ POST /evict → engine-qwen:8104      "qwen3tts → freed" │
+  │  │    ├─ POST /evict → engine-mid:8103       "nothing loaded"   │
+  │  │    └─ POST /evict → engine-legacy:8102    "nothing loaded"   │
+  │  │                                                              │
+  │  │  ★ Phase 2: VERIFY ★                                        │
+  │  │  All engines report evicted — VRAM: ~15.8 GB free            │
+  │  │                                                              │
+  │  │  ★ Phase 3: ROUTE TO LLM ★                                   │
+  │  │  POST /v1/chat/completions → llm-qwen36:8006                 │
+  │  │  Payload: {model, messages, temperature, max_tokens}         │
+  │  │                                                              │
+  │  └─────────────────────────────────────────────────────────────┘
+  │
+  ▼
+llama-server loads model → GPU inference (12.4 GB VRAM, ~107 tok/s)
+  │
+  ▼
+Response: {"choices":[{"message":{"content":"def quicksort..."}}], "usage":{...}}
+  │
+  ▼
+Orchestrator returns: {"text": "def quicksort...", "tokens": 150, "model": "qwen3.6"}
+  │
+  ▼
+UI renders in chat panel (NOT audio player — text-only response)
+
+TTS engines stay evicted. Next TTS synthesis request triggers lazy reload automatically.
 ```
 
 ---
@@ -360,36 +648,57 @@ The LLM chat UI can be:
 | 1.4 | Verify llama-server starts, test with curl | — |
 | 1.5 | Add `llm-qwen36` service to `docker-compose.yml` (profile: `llm`) | `docker-compose.yml` |
 
-### Phase 2: Orchestrator Integration (Day 1-2)
+### Phase 2: Global VRAM Eviction Mechanism (Day 1-2) ⭐ CRITICAL PATH
 
 | Step | Task | Files |
 |------|------|-------|
-| 2.1 | Add `MODEL_INFO["qwen36"]` entry | `tts_lab_config.py` |
-| 2.2 | Add to `MODEL_ORDER` | `tts_lab_config.py` |
-| 2.3 | Add `_load_qwen36()` and `_synth_qwen36()` | `tts_lab_engines.py` |
-| 2.4 | Register in `LOADERS`/`SYNTHERS` dicts | `tts_lab_engines.py` |
-| 2.5 | Handle text responses in dispatch layer | `tts_lab_dispatch.py` |
-| 2.6 | Add `QWEN36_URL` to orchestrator env vars | `docker-compose.yml`, `Makefile` |
+| **2.1** | **Add `POST /evict` endpoint to engine server** | `tts_lab_engine_server.py` |
+| | — Exposes existing `_evict_current()` (line 77) as HTTP endpoint | |
+| | — Returns `{evicted, engine_was, vram_free_mb, vram_total_mb}` | |
+| | — ~15 lines of code | |
+| **2.2** | **Add `_evict_all_tts_engines()` to dispatch** | `tts_lab_dispatch.py` |
+| | — Collects unique engine container URLs from `_ENGINE_CONTAINER_URLS` | |
+| | — `POST /evict` to each container (async, 10s timeout) | |
+| | — Returns per-URL results dict | |
+| **2.3** | **Add `_do_synth_qwen36()` to dispatch** | `tts_lab_dispatch.py` |
+| | — Calls `_evict_all_tts_engines()` before LLM dispatch | |
+| | — Routes to `llm-qwen36:8006/v1/chat/completions` | |
+| | — Returns `{text, tokens, model}` | |
+| **2.4** | **Test eviction + LLM load sequence** | — |
+| | — Load a TTS engine in engine-current, verify VRAM usage | |
+| | — Send LLM request, verify eviction fires | |
+| | — Verify VRAM is clean before llama.cpp loads | |
+| | — Verify TTS engine reloads lazily on next TTS request | |
 
-### Phase 3: UI (Day 2-3)
+### Phase 3: Engine Registration & Config (Day 2)
 
 | Step | Task | Files |
 |------|------|-------|
-| 3.1 | Add `if name == "qwen36":` block for chat interface | `tts_lab_ui.py` |
-| 3.2 | Build chat panel HTML/JS (message list, input, send) | `tts_lab_ui.py` |
-| 3.3 | Handle streaming vs. non-streaming responses | `tts_lab_ui.py` |
-| 3.4 | Add model/temperature/max_tokens controls | `tts_lab_ui.py` |
-| 3.5 | Style chat bubbles, code blocks (syntax highlighting?) | `tts_lab_ui.py` |
+| 3.1 | Add `MODEL_INFO["qwen36"]` entry with `engine_type: "llm"` | `tts_lab_config.py` |
+| 3.2 | Add to `MODEL_ORDER` | `tts_lab_config.py` |
+| 3.3 | Add `_load_qwen36()` (returns URL dict) and `_synth_qwen36()` (delegates to dispatch) | `tts_lab_engines.py` |
+| 3.4 | Register in `LOADERS`/`SYNTHERS` dicts | `tts_lab_engines.py` |
+| 3.5 | Add `QWEN36_URL` to orchestrator env vars | `docker-compose.yml`, `Makefile` |
 
-### Phase 4: Documentation & Polish (Day 3)
+### Phase 4: UI — Chat Interface (Day 2-3)
 
 | Step | Task | Files |
 |------|------|-------|
-| 4.1 | Add engine entry to `engine_compatibility.yaml` | `docs/engine_compatibility.yaml` |
-| 4.2 | Update `CLAUDE.md` with LLM engine info | `CLAUDE.md` |
-| 4.3 | Add Makefile targets (`build-llm`, `deploy-llm`) | `Makefile` |
-| 4.4 | Test VRAM coexistence scenarios | — |
-| 4.5 | E2E test: prompt → response in UI | — |
+| 4.1 | Add `if name == "qwen36":` block for chat interface | `tts_lab_ui.py` |
+| 4.2 | Build chat panel HTML/JS (message list, input, send) | `tts_lab_ui.py` |
+| 4.3 | Add model/temperature/max_tokens/system_prompt controls | `tts_lab_ui.py` |
+| 4.4 | Style chat bubbles, code blocks with syntax highlighting | `tts_lab_ui.py` |
+| 4.5 | Add "LLM engine — text response" indicator (no audio player) | `tts_lab_ui.py` |
+
+### Phase 5: Documentation & Polish (Day 3)
+
+| Step | Task | Files |
+|------|------|-------|
+| 5.1 | Add engine entry to `engine_compatibility.yaml` | `docs/engine_compatibility.yaml` |
+| 5.2 | Update `CLAUDE.md` with LLM engine info + eviction flow | `CLAUDE.md` |
+| 5.3 | Add Makefile targets (`build-llm`, `deploy-llm`) | `Makefile` |
+| 5.4 | Test VRAM coexistence scenarios (all combinations from matrix) | — |
+| 5.5 | E2E test: TTS loaded → LLM request → eviction → text response → TTS reload | — |
 
 ---
 
@@ -531,12 +840,16 @@ Qwen team releases models regularly. The 3.6 series may be superseded. Design fo
 | Phase | Effort | Calendar Time |
 |-------|--------|---------------|
 | Phase 1: Container & Model | 2-3 hours | 1 day |
-| Phase 2: Orchestrator Integration | 2-3 hours | 1 day |
-| Phase 3: UI (Chat Interface) | 4-6 hours | 1-2 days |
-| Phase 4: Documentation & Polish | 1-2 hours | 1 day |
-| **Total** | **9-14 hours** | **3-4 days** |
+| Phase 2: Global VRAM Eviction ⭐ | 2-3 hours | 1 day |
+| Phase 3: Engine Registration & Config | 1-2 hours | 0.5 day |
+| Phase 4: UI (Chat Interface) | 4-6 hours | 1-2 days |
+| Phase 5: Documentation & Polish | 1-2 hours | 0.5 day |
+| **Total** | **10-16 hours** | **3-4 days** |
 
 Model download: ~12.4 GB, ~10-20 minutes on the VM's connection.
+
+**Critical path:** Phase 2 (eviction) must be complete before end-to-end testing. The `/evict`
+endpoint is the linchpin — without it, VRAM collisions will cause OOM crashes.
 
 ---
 
