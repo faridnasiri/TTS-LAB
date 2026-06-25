@@ -307,6 +307,41 @@ async def unload():
     return {"unloaded": True, "current_engine": None}
 
 
+class EvictResponse(BaseModel):
+    evicted: bool
+    engine_was: str | None = None
+    vram_free_mb: int = 0
+    vram_total_mb: int = 0
+
+
+@app.post("/evict", response_model=EvictResponse)
+async def evict():
+    """Evict the currently loaded engine and free GPU memory.
+
+    Called by the orchestrator before loading the Qwen 3.6 LLM, which
+    needs 12-15 GB of clean VRAM. This guarantees zero TTS models
+    resident in GPU memory before the LLM loads.
+    """
+    global _current_engine
+    was = _current_engine
+    _evict_current()
+    try:
+        import torch
+        free, total = torch.cuda.mem_get_info()
+        free_mb = free // 1048576
+        total_mb = total // 1048576
+    except Exception:
+        free_mb, total_mb = 0, 0
+    print(f"[engine-server:{_STACK}] /evict — was={was}  "
+          f"vram_free={free_mb}/{total_mb} MB")
+    return EvictResponse(
+        evicted=was is not None,
+        engine_was=was,
+        vram_free_mb=free_mb,
+        vram_total_mb=total_mb,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=_PORT, log_level="info")

@@ -40,17 +40,29 @@ def _build_remote_urls() -> Dict[str, str]:
         # Only S2-Pro genuinely needs SGLang — special env var name
         if name == "s2pro":
             url = os.environ.get("S2PRO_SGLANG_URL", "")
-        # VibeVoice and Higgs are now local models in engine-mid container
-        # — use standard {NAME}_URL env vars
         else:
             url = os.environ.get(f"{name.upper()}_URL", "")
 
         if url:
             urls[name] = url
 
+    # Build deduplicated set of unique engine container URLs
+    # (multiple engines share the same container URL, e.g. piper + kokoro both
+    # point to http://engine-current:8101 — we only evict ONCE per container.)
+    # Skip SGLang URLs — those containers don't have /evict endpoint.
+    sglang_urls = {os.environ[k] for k in os.environ if k.endswith("_SGLANG_URL")}
+    global _ENGINE_CONTAINER_URLS
+    _ENGINE_CONTAINER_URLS = set()
+    for url in urls.values():
+        stripped = url.rstrip("/")
+        if stripped in sglang_urls:
+            continue
+        _ENGINE_CONTAINER_URLS.add(stripped)
+
     return urls
 
 
+_ENGINE_CONTAINER_URLS: set[str] = set()  # populated by _build_remote_urls
 _REMOTE_ENGINES: Dict[str, str] = _build_remote_urls()
 _REMOTE_MODE = len(_REMOTE_ENGINES) > 0
 
@@ -391,6 +403,9 @@ def _do_synth(name: str, text: str, params: dict) -> dict:
 
     # Remote mode: HTTP POST to engine container
     if name in _REMOTE_ENGINES:
+        # LLM engines (text→text) — evict TTS first, then route to llama.cpp
+        if MODEL_INFO.get(name, {}).get("engine_type") == "llm":
+            return _do_synth_llm(name, text, params)
         return _do_synth_remote(name, text, params)
 
     # Local mode: in-process synthesis
@@ -489,7 +504,94 @@ def _sweep_availability() -> None:
     _sweep_done.set()
 
 
-# ── Heavy engine eviction (local mode only) ─────────────────────
+# ── Global engine eviction (for LLM VRAM clearance) ────────────────
+
+def _evict_all_tts_engines() -> dict:
+    """POST /evict to every known engine container. Returns per-URL results.
+
+    Called before LLM synthesis to guarantee 100% clean VRAM.
+    The LLM (Qwen 3.6 35B-A3B) needs ~12.4 GB — any resident TTS model
+    would cause OOM on the 16 GB RTX 5060 Ti.
+    """
+    import httpx
+    results: dict[str, dict] = {}
+    for base_url in sorted(_ENGINE_CONTAINER_URLS):
+        try:
+            evict_url = f"{base_url}/evict"
+            r = httpx.post(evict_url, timeout=10.0)
+            if r.status_code == 200:
+                results[base_url] = r.json()
+            else:
+                results[base_url] = {"error": f"HTTP {r.status_code}", "detail": r.text[:200]}
+        except Exception as e:
+            results[base_url] = {"error": str(e)}
+    return results
+
+
+def _do_synth_llm(name: str, text: str, params: dict) -> dict:
+    """LLM text-generation dispatch with global TTS eviction.
+
+    1. Evict ALL TTS engines from VRAM across all containers
+    2. Route to llama.cpp OpenAI-compatible API
+    3. Return text response (NOT audio — LLMs generate text)
+    """
+    import httpx
+    import json as _json
+
+    # ── Phase 1: Global eviction ──────────────────────────────────
+    slog("LLM", name, "Evicting all TTS engines before LLM inference ...")
+    evict_results = _evict_all_tts_engines()
+    evicted_count = sum(1 for v in evict_results.values() if v.get("evicted"))
+    errors = {k: v for k, v in evict_results.items() if "error" in v}
+    slog("LLM", name,
+         f"Eviction complete — {evicted_count} evicted, "
+         f"{len(evict_results) - evicted_count - len(errors)} already idle, "
+         f"{len(errors)} errors")
+    if errors:
+        slog("LLM", name, f"Eviction errors (non-fatal): {errors}")
+
+    # ── Phase 2: Route to LLM ────────────────────────────────────
+    llm_url = _REMOTE_ENGINES.get(name, f"http://llm-qwen36:8006")
+    payload = {
+        "messages": [
+            {"role": "system", "content": params.get("system_prompt",
+                "You are a helpful AI assistant specialized in reasoning and programming.")},
+            {"role": "user", "content": text},
+        ],
+        "temperature": float(params.get("temperature", 0.7)),
+        "max_tokens": int(params.get("max_tokens", 2048)),
+        "top_p": float(params.get("top_p", 0.9)),
+    }
+
+    t0 = time.perf_counter()
+    r = httpx.post(
+        f"{llm_url}/v1/chat/completions",
+        json=payload,
+        timeout=600.0,
+    )
+    r.raise_for_status()
+    data = r.json()
+    elapsed = time.perf_counter() - t0
+
+    choice = data.get("choices", [{}])[0]
+    response_text = choice.get("message", {}).get("content", "")
+    usage = data.get("usage", {})
+    total_tokens = usage.get("total_tokens", 0)
+    tok_per_sec = round(total_tokens / elapsed, 1) if elapsed > 0 else 0
+
+    slog("LLM", name,
+         f"✅ {total_tokens} tokens in {elapsed:.1f}s "
+         f"({tok_per_sec} tok/s)  "
+         f"response={response_text[:80]!r}{'…' if len(response_text) > 80 else ''}")
+
+    return {
+        "text": response_text,
+        "tokens": total_tokens,
+        "tokens_per_sec": tok_per_sec,
+        "model": data.get("model", "qwen3.6"),
+        "finish_reason": choice.get("finish_reason", ""),
+        "synth_time_ms": int(elapsed * 1000),
+    }
 def _evict_heavy(keep: str = "") -> None:
     """Evict heavy engines from VRAM, keeping `keep`."""
     from tts_lab_utils import _safe_del

@@ -1975,6 +1975,49 @@ def _synth_s2pro(inst, text, params):
         )
 
 
+# ── 29. Qwen 3.6 LLM (Reasoning & Programming) ────────────────────────────
+# Text→text LLM via llama.cpp. No audio generation — returns text responses.
+# Load/synth are stubs: in orchestrator mode, dispatch routes via
+# _do_synth_llm() which evicts all TTS engines then POSTs to llama-server.
+# In local mode, this engine requires a running llama-server instance.
+
+def _load_qwen36():
+    """Return connection info for the Qwen 3.6 llama.cpp server."""
+    import os as _os
+    url = _os.environ.get("QWEN36_URL", "http://localhost:8006")
+    return {"url": url, "model": "qwen3.6-35b-a3b"}
+
+
+def _synth_qwen36(inst, text, params):
+    """LLM text generation — delegates to _do_synth_llm in dispatch.
+
+    In orchestrator mode, the dispatcher intercepts before this function
+    and routes via _do_synth_llm() which handles global TTS eviction.
+    This function is a fallback for local mode — it POSTs directly to
+    the llama-server OpenAI-compatible API.
+    """
+    import requests as _requests
+    url = inst["url"]
+    payload = {
+        "messages": [
+            {"role": "system", "content": params.get("system_prompt",
+                "You are a helpful AI assistant specialized in reasoning and programming.")},
+            {"role": "user", "content": text},
+        ],
+        "temperature": float(params.get("temperature", 0.7)),
+        "max_tokens": int(params.get("max_tokens", 2048)),
+        "top_p": float(params.get("top_p", 0.9)),
+    }
+    r = _requests.post(f"{url}/v1/chat/completions", json=payload, timeout=300)
+    r.raise_for_status()
+    data = r.json()
+    response_text = data["choices"][0]["message"]["content"]
+    # Return as "audio" — empty WAV so the UI can detect text response
+    # In practice, orchestrator mode uses _do_synth_llm which returns
+    # {"text": ...} directly — this path is only for local/testing.
+    return response_text.encode("utf-8"), 0  # text bytes, sr=0 signals text
+
+
 # ── Dispatch tables ───────────────────────────────────────────────────────────
 LOADERS: dict = {
     "piper":      _load_piper,    "kokoro":    _load_kokoro,
@@ -1992,6 +2035,7 @@ LOADERS: dict = {
     "zonos":      _load_zonos,    "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
     "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
+    "qwen36":     _load_qwen36,
 }
 SYNTHERS: dict = {
     "piper":      _synth_piper,    "kokoro":    _synth_kokoro,
@@ -2010,4 +2054,5 @@ SYNTHERS: dict = {
     "openvoice":  _synth_openvoice,
     "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
     "omnivoice":  _synth_omnivoice,"s2pro":     _synth_s2pro,
+    "qwen36":     _synth_qwen36,
 }

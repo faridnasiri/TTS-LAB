@@ -237,6 +237,7 @@ MODEL_INFO = {
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "omnivoice":  {"label":"OmniVoice",     "size":"~1.2 GB (BF16)",       "rtf_est":"RTF 0.67× ⚡",          "ram_est_mb":2000, "heavy":True, "notes":"0.6B diffusion LM. 600+ languages. Real-time!","arthur_fit":4},
     "s2pro":      {"label":"Fish S2-Pro",   "size":"~10 GB (BF16, 5B)",   "rtf_est":"needs SGLang",          "ram_est_mb":10000,"heavy":True,"notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
+    "qwen36":     {"label":"Qwen3.6-35B-A3B","size":"~13 GB (TQ3_4S GGUF)","rtf_est":"LLM — ~107 tok/s","ram_est_mb":13000,"heavy":True,"notes":"Alibaba Qwen 3.6 MoE. 35B total, 3B active params. Reasoning + coding via llama.cpp. Evicts ALL TTS engines before loading.","arthur_fit":3,"engine_type":"llm"},
 }
 
 MODEL_ORDER = [
@@ -245,6 +246,7 @@ MODEL_ORDER = [
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "neutts","indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro",
+    "qwen36",
 ]
 
 HEAVY = {n for n, i in MODEL_INFO.items() if i["heavy"]}
