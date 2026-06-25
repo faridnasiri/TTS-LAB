@@ -1,6 +1,6 @@
 # Arthur TTS Lab
 
-> 28-engine TTS benchmark + 5-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> 28-engine TTS benchmark + 1 LLM (Qwen 3.6) + 5-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
 > **Deployed to:** `arthur@192.168.0.87:8001` | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
@@ -26,11 +26,13 @@ Base (nvidia/cuda:12.8.2-runtime-ubuntu22.04)
   │   └── Engine:mid        VibeVoice, Higgs (experimental), port 8103
   ├── Stack:legacy     torch 1.13 + transformers 4.46 + CUDA 11.7
   │   └── Engine:legacy     IndexTTS, Parler (blocked), port 8102
+  ├── LLM:qwen36       llama.cpp + CUDA 12.8, port 8006 (Qwen 3.6 reasoning/coding)
   └── Orchestrator     No ML libs — pure HTTP dispatch, port 8001
 
-GPU containers (profiles: gpu, sglang):
+GPU containers (profiles: gpu, sglang, llm):
   ├── Orpheus   vllm + CUDA 12.1, port 8002 (blocked)
-  └── SGLang    Custom pip-built SGLang, port 8005 (for VibeVoice/Higgs/S2-Pro)
+  ├── SGLang    Custom pip-built SGLang, port 8005 (for VibeVoice/Higgs/S2-Pro)
+  └── LLM       llama.cpp + CUDA 12.8 (Qwen 3.6 35B-A3B MoE, ~13 GB VRAM)
 ```
 
 **Orchestrator mode** (`ORCHESTRATOR_MODE=1`): the orchestrator loads zero ML libraries. All engine requests route via HTTP to engine containers using `{ENGINE_NAME}_URL` environment variables. The web UI is served by the orchestrator.
@@ -42,12 +44,12 @@ GPU containers (profiles: gpu, sglang):
 | `tts_lab.py` | 188 | FastAPI app entry-point, lifespan, route wiring |
 | `tts_lab_shims.py` | 590 | **Imported FIRST** — `sys.modules` stubs, transformers compat patches, thread pinning |
 | `tts_lab_shims_legacy.py` | 50 | Minimal shims for legacy container (torch 1.13 / tf 4.46) |
-| `tts_lab_config.py` | 292 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
-| `tts_lab_engines.py` | 1,930 | All 28 `_load_X()` + `_synth_X()` pairs, `LOADERS`/`SYNTHERS` dicts |
-| `tts_lab_dispatch.py` | 513 | Availability probing, `_ensure_loaded()`, `_do_synth()`, local + remote dispatch |
-| `tts_lab_engine_server.py` | 295 | Engine-container FastAPI server with lazy-loading + VRAM eviction |
+| `tts_lab_config.py` | 293 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
+| `tts_lab_engines.py` | 2,100 | All 29 `_load_X()` + `_synth_X()` pairs (28 TTS + 1 LLM), `LOADERS`/`SYNTHERS` dicts |
+| `tts_lab_dispatch.py` | 600 | Availability probing, `_ensure_loaded()`, `_do_synth()`, global TTS eviction, LLM dispatch |
+| `tts_lab_engine_server.py` | 340 | Engine-container FastAPI server with lazy-loading + VRAM eviction + `/evict` endpoint |
 | `tts_lab_orpheus_server.py` | 107 | Orpheus-specific vllm server |
-| `tts_lab_ui.py` | 1,793 | Full HTML/JS web UI inlined as Python strings |
+| `tts_lab_ui.py` | 1,900 | Full HTML/JS web UI inlined as Python strings (TTS + LLM chat) |
 | `tts_lab_utils.py` | 103 | `_to_wav()`, `_wav_dur()`, `_safe_del()`, `_ram_mb()`, `_require_gpu()` |
 | `voice_library.py` | 593 | Persian Voice Library — Common Voice download, speaker embeddings |
 | `image_lab.py` | 188 | Image Lab FastAPI entry-point (port 8002) |
@@ -73,15 +75,19 @@ make build-engine ENGINE=current     # Single engine image
 make deploy-engine ENGINE=current    # Build + run one engine container
 make rebuild                         # Full chain rebuild (all 7 images, ~1-2 hrs)
 make deploy-orchestrator             # Build + run orchestrator
+make build-llm                       # Build Qwen 3.6 LLM image
+make deploy-llm                      # Build + deploy Qwen 3.6 LLM
 make sweep                           # Engine synthesis sweep (bare-metal only)
 make build-engine ENGINE=qwen TORCH_VER=2.12.0.dev20260409+cu128  # Override torch
 ```
 
 ### Docker Compose
 ```bash
-docker compose up -d                         # orchestrator + engine-current + engine-legacy
+docker compose up -d                         # orchestrator + engine-current + engine-qwen
+docker compose --profile mid up -d           # + engine-mid (VibeVoice, Higgs)
 docker compose --profile gpu up -d           # + Orpheus (needs GPU)
 docker compose --profile sglang up -d        # + SGLang engines (vibevoice, higgs, s2pro)
+docker compose --profile llm up -d           # + Qwen 3.6 LLM (~13 GB VRAM — evicts TTS first)
 docker compose down                          # Stop all
 ```
 
@@ -165,6 +171,7 @@ ansible-playbook -i ansible/inventory.yml ansible/site.yml --tags deploy
 | `docs/reference/GPU_QA_REFERENCE.md` | Blackwell sm_120 library compatibility |
 | `docs/reference/GPU_UPGRADE_ANALYSIS.md` | GPU selection analysis |
 | `docs/benchmarks/*.md` | RTF benchmark results by date |
+| `docs/containerization/07-QWEN36-LLM-PLAN.md` | Qwen 3.6 LLM integration plan — model selection, VRAM strategy, eviction protocol |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
 | `docs/issues/*.md` | Bug investigations (VibeVoice, S2-Pro, ChatTTS) |

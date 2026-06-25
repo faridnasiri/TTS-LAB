@@ -309,8 +309,22 @@ engines:
     upstream_watch:
     - https://github.com/sgl-project/sglang/releases
     - https://huggingface.co/fishaudio/s2-pro
+  qwen36:
+    status: planned
+    container: llm-qwen36
+    stack: llm
+    vram_est_mb: 13000
+    engine_type: llm
+    dependencies:
+      llama.cpp: built from source (CUDA sm_120)
+      model: Qwen3.6-35B-A3B TQ3_4S GGUF
+    gated_model: YTan2000/Qwen3.6-35B-A3B-TQ3_4S
+    notes: Text→text LLM — reasoning & programming. llama.cpp OpenAI-compatible API. Evicts all TTS engines before loading (~12.4 GB VRAM). Not a TTS engine — returns text, not audio.
+    coexistence:
+      with_tts: Manual — LLM evicts all TTS via orchestrator /evict protocol
+      vram_strategy: Global cross-container eviction before LLM load
 summary:
-  total: 28
+  total: 29
   supported: 16
   deprecated: 0
   experimental: 8
@@ -352,3 +366,10 @@ summary:
       deprecated: 0
       experimental: 0
       blocked: 1
+    llm-qwen36:
+      total: 1
+      supported: 0
+      deprecated: 0
+      experimental: 0
+      blocked: 0
+      planned: 1
