@@ -561,7 +561,12 @@ def _do_synth_llm(name: str, text: str, params: dict) -> dict:
         "temperature": float(params.get("temperature", 0.7)),
         "max_tokens": int(params.get("max_tokens", 2048)),
         "top_p": float(params.get("top_p", 0.9)),
+        "presence_penalty": float(params.get("presence_penalty", 0.0)),
+        "frequency_penalty": float(params.get("frequency_penalty", 0.0)),
     }
+    seed = int(params.get("seed", -1))
+    if seed >= 0:
+        payload["seed"] = seed
 
     t0 = time.perf_counter()
     r = httpx.post(

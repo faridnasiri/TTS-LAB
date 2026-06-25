@@ -717,16 +717,14 @@ def _build_chat_params() -> str:
         'TTS engines reload lazily on next synthesis.</em>'
         '</div>'
         # ── System prompt ──
-        + '<div class="mt-2 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;'
-        'text-transform:uppercase;letter-spacing:.08em">System Prompt</div>'
+        + '<div class="mt-2 mb-1 llm-section-label">System Prompt</div>'
         + '<textarea class="form-control form-control-sm bg-dark text-light border-secondary mb-2" '
-        'data-param="system_prompt" rows="2" '
+        'data-param="system_prompt" rows="3" '
         'placeholder="You are a helpful AI assistant specialized in reasoning and programming.">'
         'You are a helpful AI assistant specialized in reasoning and programming.'
         '</textarea>'
         # ── Generation params ──
-        + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;'
-        'text-transform:uppercase;letter-spacing:.08em">Generation</div>'
+        + '<div class="mt-3 mb-1 llm-section-label">Generation</div>'
         + _row(
             _grp('Temperature <span class="range-val">0.7</span>',
                  _rng("temperature", "0.1", "2.0", "0.05", "0.7", "lower=deterministic, higher=creative")),
@@ -734,6 +732,14 @@ def _build_chat_params() -> str:
                  _rng("top_p", "0.1", "1.0", "0.05", "0.9", "nucleus sampling cutoff")),
             _grp('Max tokens <span class="range-val">2048</span>',
                  _rng("max_tokens", "256", "8192", "128", "2048", "max response length")),
+        )
+        + _row(
+            _grp('Presence penalty <span class="range-val">0.0</span>',
+                 _rng("presence_penalty", "-2.0", "2.0", "0.1", "0.0", "penalize repeated topics")),
+            _grp('Frequency penalty <span class="range-val">0.0</span>',
+                 _rng("frequency_penalty", "-2.0", "2.0", "0.1", "0.0", "penalize word repetition")),
+            _grp('Seed <span class="range-val">-1</span>',
+                 _rng("seed", "-1", "99999", "1", "-1", "-1 = random, >=0 = deterministic")),
         )
     )
 
@@ -898,23 +904,46 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
 .log-src-server{font-size:.60rem;color:#5a6a3a;margin-left:3px;}
 
 /* ── Chat UI (Qwen 3.6 LLM) ───────────────────────────────────────────────── */
-.chat-area{max-height:500px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;
+.llm-section-label{font-size:.72rem;font-weight:700;color:#7eb8f7;
+                    text-transform:uppercase;letter-spacing:.08em;}
+.chat-area{max-height:500px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;
            margin-bottom:8px;padding-right:4px;}
 .chat-msg{max-width:90%;padding:10px 14px;border-radius:12px;font-size:.82rem;line-height:1.5;
-          white-space:pre-wrap;word-break:break-word;animation:chatIn .2s ease-out;}
+          white-space:pre-wrap;word-break:break-word;animation:chatIn .2s ease-out;position:relative;}
+.chat-msg .msg-header{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:.68rem;}
+.chat-msg .msg-role{font-weight:700;text-transform:uppercase;letter-spacing:.05em;font-size:.65rem;
+                    padding:1px 6px;border-radius:3px;}
+.chat-msg .msg-time{color:#8899aa;font-size:.65rem;}
+.chat-msg .msg-tokens{color:#8899aa;font-size:.65rem;}
+.chat-msg .msg-copy{position:absolute;top:6px;right:8px;background:transparent;border:1px solid #555;
+                    color:#aaa;font-size:.6rem;padding:1px 5px;border-radius:3px;cursor:pointer;
+                    opacity:0;transition:opacity .15s;}
+.chat-msg:hover .msg-copy{opacity:1;}
+.chat-msg .msg-copy:hover{color:#fff;border-color:#aaa;}
 .chat-msg.user{align-self:flex-end;background:#1a3350;color:#d0e0f0;
               border:1px solid #2a5080;border-bottom-right-radius:4px;}
+.chat-msg.user .msg-role{background:#2a5080;color:#7eb8f7;}
 .chat-msg.assistant{align-self:flex-start;background:#1a2230;color:#c8d0e0;
                     border:1px solid #2a3a50;border-bottom-left-radius:4px;}
-.chat-msg.system{align-self:flex-start;background:#1a1010;color:#d0a0a0;
-                border:1px solid #3a2020;font-size:.75rem;font-style:italic;
-                max-width:100%;border-bottom-left-radius:4px;}
+.chat-msg.assistant .msg-role{background:#2a3a50;color:#4caf50;}
+.chat-msg.system{background:#1a1010;color:#d0a0a0;border:1px solid #3a2020;
+                font-size:.75rem;font-style:italic;max-width:100%;border-bottom-left-radius:4px;}
 .chat-msg code{background:#1a1a2e;padding:2px 6px;border-radius:3px;font-size:.78em;
                color:#cc9966;border:1px solid #333;}
 .chat-msg pre{background:#0d0d1a;border:1px solid #2a2a40;border-radius:6px;
-              padding:10px 12px;margin:6px 0;overflow-x:auto;font-size:.76rem;}
+              padding:10px 12px;margin:6px 0;overflow-x:auto;font-size:.76rem;position:relative;}
 .chat-msg pre code{background:transparent;border:none;padding:0;color:#c0d0e0;}
+.chat-loading{display:none;align-self:flex-start;padding:8px 16px;background:#1a2230;
+              border:1px solid #2a3a50;border-radius:12px;font-size:.75rem;color:#8899aa;
+              animation:pulse 1.5s infinite;}
+.chat-loading .dot{animation:blink 1.4s infinite both;}
+.chat-loading .dot:nth-child(2){animation-delay:.2s;}
+.chat-loading .dot:nth-child(3){animation-delay:.4s;}
+@keyframes pulse{0%,100%{opacity:.6}50%{opacity:1}}
+@keyframes blink{0%,100%{opacity:.2}50%{opacity:1}}
 .chat-toolbar{display:flex;gap:6px;margin-top:4px;}
+.chat-stats{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:.68rem;color:#8899aa;}
+.chat-stats span{background:#1a2230;border:1px solid #2a3050;padding:2px 8px;border-radius:4px;}
 @keyframes chatIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 </style>"""
 
@@ -1127,6 +1156,7 @@ async function synth(model) {
 
   const t0 = performance.now();
   try {
+    showChatLoading(model);
     const res = await fetch(`${API}/synthesize/${model}`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({text, params})
@@ -1145,16 +1175,20 @@ async function synth(model) {
       if (card) {
         card.style.display = 'block';
         clearError(model);
-        addChatMessage(model, 'user', text);
-        addChatMessage(model, 'assistant', data.text);
+        hideChatLoading(model);
+        addChatMessage(model, 'user', text, null);
+        addChatMessage(model, 'assistant', data.text, {
+          tokens: data.tokens,
+          tps: data.tokens_per_sec
+        });
         card.querySelector('.m-synth').textContent = data.synth_time_ms + ' ms';
         card.querySelector('.m-tokens').textContent = data.tokens + ' tokens';
         card.querySelector('.m-tps').textContent   = data.tokens_per_sec + ' tok/s';
         card.querySelector('.m-model').textContent  = data.model || 'qwen3.6';
+        card.querySelector('.m-finish').textContent = data.finish_reason || 'stop';
       }
       dbg('RESULT', model,
-        `✅ ${data.tokens} tokens  |  ${data.synth_time_ms} ms  |  ${data.tokens_per_sec} tok/s  |  ${data.model}`);
-    } else {
+        '✅ ' + data.tokens + ' tokens  |  ' + data.synth_time_ms + ' ms  |  ' + data.tokens_per_sec + ' tok/s  |  ' + data.model);} else {
       const blob = new Blob([Uint8Array.from(atob(data.audio_b64), c => c.charCodeAt(0))], {type:'audio/wav'});
       const url  = URL.createObjectURL(blob);
       if (card) {
@@ -1177,19 +1211,42 @@ async function synth(model) {
     dbg('ERROR', model, '⚠ fetch exception: ' + e.toString());
     showError(model, e.toString());
   } finally {
+    hideChatLoading(model);
     if (btn)  btn.disabled = false;
     if (spin) spin.style.display = 'none';
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   CHAT UI — Qwen 3.6 LLM
+   CHAT UI — Qwen 3.6 LLM (enhanced with per-message metadata)
    ═══════════════════════════════════════════════════════════════ */
-function addChatMessage(model, role, content) {
+let _chatTotalTokens = {};
+let _chatMsgCount = {};
+
+function addChatMessage(model, role, content, metadata) {
   const chat = document.getElementById('chat-' + model);
   if (!chat) return;
   const div = document.createElement('div');
   div.className = 'chat-msg ' + role;
+
+  // Build message header with metadata
+  let header = '<div class="msg-header">';
+  const roleLabels = {user:'YOU', assistant:'QWEN 3.6', system:'SYSTEM'};
+  header += '<span class="msg-role">' + (roleLabels[role] || role.toUpperCase()) + '</span>';
+  if (metadata) {
+    const now = new Date();
+    header += '<span class="msg-time">' + now.toLocaleTimeString() + '</span>';
+    if (metadata.tokens) header += '<span class="msg-tokens">' + metadata.tokens + ' tokens</span>';
+    if (metadata.tps) header += '<span class="msg-tokens">' + metadata.tps + ' tok/s</span>';
+  }
+  header += '</div>';
+
+  // Copy button for assistant messages
+  let copyBtn = '';
+  if (role === 'assistant') {
+    copyBtn = '<button class="msg-copy" onclick="copyChatMsg(this)" title="Copy message">📋</button>';
+  }
+
   // Escape HTML but preserve code blocks
   let html = content
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -1204,14 +1261,40 @@ function addChatMessage(model, role, content) {
   // Line breaks
   html = html.replace(/
 /g, '<br>');
-  div.innerHTML = html;
+  div.innerHTML = header + copyBtn + html;
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
+
+  // Track session stats
+  if (!_chatTotalTokens[model]) _chatTotalTokens[model] = 0;
+  if (!_chatMsgCount[model]) _chatMsgCount[model] = 0;
+  if (metadata && metadata.tokens) _chatTotalTokens[model] += metadata.tokens;
+  _chatMsgCount[model]++;
+  updateChatStats(model);
+}
+
+function updateChatStats(model) {
+  const card = document.getElementById('result-' + model);
+  if (!card) return;
+  const totalEl = card.querySelector('.m-total-tok');
+  if (totalEl) totalEl.textContent = (_chatTotalTokens[model]||0) + ' total';
+}
+
+function copyChatMsg(btn) {
+  const msgDiv = btn.closest('.chat-msg');
+  const text = msgDiv ? msgDiv.textContent.replace(/📋/g,'').trim() : '';
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅';
+    setTimeout(() => btn.textContent = '📋', 1500);
+  });
 }
 
 function clearChat(model) {
   const chat = document.getElementById('chat-' + model);
   if (chat) chat.innerHTML = '';
+  _chatTotalTokens[model] = 0;
+  _chatMsgCount[model] = 0;
+  updateChatStats(model);
 }
 
 function copyLastChat(model) {
@@ -1219,10 +1302,21 @@ function copyLastChat(model) {
   if (!chat) return;
   const msgs = chat.querySelectorAll('.chat-msg.assistant');
   if (msgs.length === 0) return;
-  const last = msgs[msgs.length - 1].textContent;
-  navigator.clipboard.writeText(last).then(() => {
+  const last = msgs[msgs.length - 1];
+  const text = last.textContent.replace(/📋/g,'').trim();
+  navigator.clipboard.writeText(text).then(() => {
     showToast('✅ Copied last response to clipboard');
   });
+}
+
+function showChatLoading(model) {
+  const el = document.getElementById('chat-loading-' + model);
+  if (el) el.style.display = 'block';
+}
+
+function hideChatLoading(model) {
+  const el = document.getElementById('chat-loading-' + model);
+  if (el) el.style.display = 'none';
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1282,6 +1376,7 @@ async function preload(model) {
 
   const t0 = performance.now();
   try {
+    showChatLoading(model);
     const res = await fetch(`${API}/models/${model}/load`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({params})
@@ -1680,8 +1775,13 @@ def _result_card(n: str) -> str:
             f'<span class="metric-pill">🪙 <b class="m-tokens">—</b></span>'
             f'<span class="metric-pill">⚡ <b class="m-tps">—</b></span>'
             f'<span class="metric-pill">🧠 <b class="m-model">—</b></span>'
+            f'<span class="metric-pill">🏁 <b class="m-finish">—</b></span>'
+            f'<span class="metric-pill">📊 <b class="m-total-tok">0 total</b></span>'
             f'</div>'
             f'<div class="chat-area" id="chat-{n}">'
+            f'</div>'
+            f'<div class="chat-loading" id="chat-loading-{n}">'
+            f'🧠 Thinking<span class="dot">.</span><span class="dot">.</span><span class="dot">.</span>'
             f'</div>'
             f'<div class="chat-toolbar">'
             f'  <button class="btn-action" onclick="copyLastChat(\'{n}\')">📋 Copy Last</button>'

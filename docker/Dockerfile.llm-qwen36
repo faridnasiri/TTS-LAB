@@ -13,15 +13,9 @@
 # Port: 8006 (OpenAI-compatible API)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+# ── Stage 1: Build llama.cpp with CUDA ────────────────────────────
+FROM nvidia/cuda:12.8.2-devel-ubuntu22.04 AS builder
 
-LABEL org.opencontainers.image.title="TTS Lab — Qwen 3.6 LLM"
-LABEL org.opencontainers.image.description="Qwen 3.6 35B-A3B MoE via llama.cpp — reasoning & coding"
-LABEL tts-lab.tier="3-engine"
-LABEL tts-lab.stack="llm"
-LABEL tts-lab.gpu="required"
-
-# ── Build dependencies ────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -30,9 +24,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# ── Build llama.cpp with CUDA ────────────────────────────────────
-# Pin to a stable commit; bump periodically for optimisations.
-ARG LLAMA_CPP_TAG=b4891
 RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp && \
     cd /opt/llama.cpp && \
     cmake -B build \
@@ -41,18 +32,26 @@ RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp &&
       -DGGML_CUDA_F16=ON \
       -DGGML_CUDA_FA=ON \
       -DCMAKE_BUILD_TYPE=Release && \
-    cmake --build build --config Release -j$(nproc) && \
-    cp build/bin/llama-server /usr/local/bin/ && \
-    cp build/bin/llama-cli /usr/local/bin/
+    cmake --build build --config Release -j$(nproc)
 
-# ── Strip build deps (keep only runtime) ──────────────────────────
-RUN apt-get remove -y build-essential cmake git && \
-    apt-get autoremove -y && \
-    apt-get clean
+# ── Stage 2: Runtime ──────────────────────────────────────────────
+FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
 
-# ── Health-check tool ─────────────────────────────────────────────
+LABEL org.opencontainers.image.title="TTS Lab — Qwen 3.6 LLM"
+LABEL org.opencontainers.image.description="Qwen 3.6 35B-A3B MoE via llama.cpp — reasoning & coding"
+LABEL tts-lab.tier="3-engine"
+LABEL tts-lab.stack="llm"
+LABEL tts-lab.gpu="required"
+
+# Copy llama.cpp binaries and CUDA runtime deps from builder
+COPY --from=builder /opt/llama.cpp/build/bin/llama-server /usr/local/bin/
+COPY --from=builder /opt/llama.cpp/build/bin/llama-cli /usr/local/bin/
+
+# Install only runtime CUDA libraries needed by llama.cpp
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    curl && rm -rf /var/lib/apt/lists/*
+    curl \
+    libcublas-12-5 \
+    && rm -rf /var/lib/apt/lists/*
 
 # ── Model directory (mounted at runtime) ─────────────────────────
 RUN mkdir -p /opt/models/llm
