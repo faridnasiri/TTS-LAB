@@ -4,7 +4,7 @@
 
 .DESCRIPTION
     8-phase idempotent deployment. Run from the Windows dev machine.
-    Mirrors the structure of deploy_lab.ps1 (TTS lab).
+    Mirrors the structure of scripts/deploy/deploy_lab.ps1 (TTS lab).
 
 .PARAMETER VM
     Target VM IP address. Default: 192.168.0.87

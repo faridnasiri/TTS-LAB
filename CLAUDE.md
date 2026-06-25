@@ -12,7 +12,7 @@ Originally built for an Android scam-baiting app ("SpamBlocker") that uses a cha
 ## Architecture — Two Modes
 
 ### Mode 1: Bare-Metal (legacy, PowerShell-deployed)
-All engines load in-process in a single Python process. Single systemd service (`arthur-lab.service`). Files deployed by `deploy_lab.ps1` to `/opt/arthur/`. Simpler to debug, faster iteration.
+All engines load in-process in a single Python process. Single systemd service (`arthur-lab.service`). Files deployed by `scripts/deploy/deploy_lab.ps1` to `/opt/arthur/`. Simpler to debug, faster iteration.
 
 ### Mode 2: Containerized / Orchestrator (current target)
 **Compatibility-domain design** — containers are organized by dependency boundaries (torch + transformers + CUDA versions), not per-engine:
@@ -58,13 +58,13 @@ GPU containers (profiles: gpu, sglang):
 
 ### PowerShell Deploy (primary path for bare-metal)
 ```powershell
-.\deploy_lab.ps1                    # Full fresh deploy (all 8 phases, 30-60 min)
-.\deploy_lab.ps1 -Phase 5           # Code-only redeploy (most common, ~30 sec)
-.\deploy_lab.ps1 -Phase 6           # Re-patch + restart service
-.\deploy_lab.ps1 -Phase 7           # Restart service only
-.\deploy_lab.ps1 -GPU               # Use CUDA PyTorch instead of CPU
-.\deploy_lab.ps1 -SkipPhases "4"    # Skip model downloads
-.\deploy_image_lab.ps1              # Deploy Image Lab (separate script)
+.\scripts\deploy\deploy_lab.ps1                    # Full fresh deploy (all 8 phases, 30-60 min)
+.\scripts\deploy\deploy_lab.ps1 -Phase 5           # Code-only redeploy (most common, ~30 sec)
+.\scripts\deploy\deploy_lab.ps1 -Phase 6           # Re-patch + restart service
+.\scripts\deploy\deploy_lab.ps1 -Phase 7           # Restart service only
+.\scripts\deploy\deploy_lab.ps1 -GPU               # Use CUDA PyTorch instead of CPU
+.\scripts\deploy\deploy_lab.ps1 -SkipPhases "4"    # Skip model downloads
+.\scripts\deploy\deploy_image_lab.ps1              # Deploy Image Lab (separate script)
 ```
 
 ### Makefile (Docker builds on the VM)

@@ -19,8 +19,8 @@ description: 'Navigate the 45+ markdown docs by topic — find the right documen
 | File | What It Covers |
 |---|---|
 | `docs/reference/VM_SETUP_REFERENCE.md` | Proxmox VM 104 setup, data disk expansion, network config |
-| `deploy_lab.ps1` | **The primary deploy script** — 8 phases, idempotent |
-| `deploy_image_lab.ps1` | Image Lab deploy script |
+| `scripts/deploy/deploy_lab.ps1` | **The primary deploy script** — 8 phases, idempotent |
+| `scripts/deploy/deploy_image_lab.ps1` | Image Lab deploy script |
 | `ansible/site.yml` | Ansible IaC (4 roles: docker, disk, deploy, monitoring) |
 | `docker-compose.yml` | Docker Compose — 6 containers + profiles |
 | `Makefile` | Build automation for Docker images (single-source torch versions) |

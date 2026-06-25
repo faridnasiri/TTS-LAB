@@ -236,6 +236,20 @@ async def synthesize(req: SynthRequest):
     # Lazy-load (evicts previous engine, loads this one)
     instance = _load_engine(req.engine)
 
+    def _clear_cuda_cache():
+        """Release CUDA caching allocator retained memory — combats
+        slow VRAM leaks from diffusion models (e.g., OmniVoice #180)."""
+        try:
+            import torch as _t
+            _t.cuda.empty_cache()
+        except Exception:
+            pass
+
+    # Clear VRAM fragments leaked by previous syntheses BEFORE generating.
+    # Without this, successive calls to the same engine accumulate leaked
+    # VRAM and longer texts hit OOM (their attention tensors need more memory).
+    _clear_cuda_cache()
+
     try:
         t0 = time.perf_counter()
         wav, sr = SYNTHERS[req.engine](instance, req.text, req.params)
@@ -245,6 +259,9 @@ async def synthesize(req: SynthRequest):
         slog("SYNTH", req.engine,
              f"synth {synth_ms}ms  dur {dur_ms}ms  "
              f"RTF {round(synth_ms/dur_ms,4) if dur_ms>0 else 0}×  {sr} Hz")
+
+        # Release any VRAM leaked by this synthesis
+        _clear_cuda_cache()
 
         return {
             "audio_b64": base64.b64encode(wav).decode(),

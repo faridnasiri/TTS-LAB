@@ -343,41 +343,30 @@ def _build_params(name: str) -> str:
         )
 
     if name == "qwen3tts":
-        q3_speakers = [("aiden","Aiden"),("dylan","Dylan"),("eric","Eric"),
-                       ("ono_anna","Ono Anna"),("ryan","Ryan"),("serena","Serena"),
-                       ("sohee","Sohee"),("uncle_fu","Uncle Fu"),("vivian","Vivian")]
         q3_langs    = [("english","English"),("chinese","Chinese"),("japanese","Japanese"),
                        ("korean","Korean"),("french","French"),("german","German"),
                        ("spanish","Spanish"),("portuguese","Portuguese")]
         return (
             '<div class="alert alert-info py-2 small mb-3">'
-            '🎙 <strong>Qwen3-TTS 1.7B CustomVoice</strong> — 9 built-in speakers · '
-            'style via <em>Instruct</em> · voice clone via reference WAV</div>'
-            + _row(_grp("Speaker", _sel("voice", q3_speakers, "aiden")),
-                   _grp("Language", _sel("language", q3_langs, "english")))
-            + _row(_grp('Style instruction <span style="font-size:.7rem;color:#aaa">(optional)</span>',
-                        '<input type="text" class="form-control form-control-sm" data-param="instruct" '
-                        'placeholder="e.g. speak like a confused elderly man, slowly and gently">'))
-            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Main talker sampling</div>'
+            '🎙 <strong>Qwen3-TTS 1.7B Base</strong> — voice cloning from 3s reference audio · '
+            '10 languages · <em>x-vector only</em> mode works without transcript</div>'
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice clone <span style="font-weight:400;color:#888">(primary — upload reference WAV)</span></div>'
+            + f'<div class="param-row">{_upload_widget("q3-file", "q3-status", "q3-prompt-id", "Reference WAV — 3–30s of target voice (REQUIRED for voice clone)")}</div>'
+            + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(optional — improves quality)</span>',
+                        '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
+                        'placeholder="Exact words spoken in the reference audio…">'))
+            + '<p class="text-muted small mt-1 mb-2" style="font-size:.68rem">'
+            'With transcript: <strong>ICL mode</strong> — best speaker similarity. '
+            'Without transcript: <strong>x-vector only</strong> — speaker embedding from audio alone (slightly lower quality but works with any clip).</p>'
+            + _row(_grp("Language", _sel("language", q3_langs, "english")))
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Generation</div>'
             + _row(
                 _grp('Temperature <span class="range-val">0.9</span>', _rng("temperature", "0.1", "2.0", "0.05", "0.9", "lower=stable, higher=expressive")),
                 _grp('Top-p <span class="range-val">1.0</span>', _rng("top_p", "0.1", "1.0", "0.05", "1.0", "nucleus cutoff")),
                 _grp('Top-k <span class="range-val">50</span>', _rng("top_k", "1", "200", "1", "50", "vocab cutoff")),
                 _grp('Repetition penalty <span class="range-val">1.05</span>', _rng("repetition_penalty", "1.0", "1.5", "0.01", "1.05")),
             )
-            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Sub-talker sampling <span style="font-weight:400;color:#888">(tokenizer-v2 / 1.7B)</span></div>'
-            + _row(
-                _grp('Sub temperature <span class="range-val">0.9</span>', _rng("subtalker_temperature", "0.1", "2.0", "0.05", "0.9")),
-                _grp('Sub top-p <span class="range-val">1.0</span>', _rng("subtalker_top_p", "0.1", "1.0", "0.05", "1.0")),
-                _grp('Sub top-k <span class="range-val">50</span>', _rng("subtalker_top_k", "1", "200", "1", "50")),
-            )
-            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Generation</div>'
             + _row(_grp('Max tokens <span class="range-val">2048</span>', _rng("max_new_tokens", "256", "4096", "64", "2048", "codec tokens ≈ audio length cap")))
-            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice clone <span style="font-weight:400;color:#888">(overrides speaker)</span></div>'
-            + f'<div class="param-row">{_upload_widget("q3-file", "q3-status", "q3-prompt-id", "Reference WAV — 5–30s of target voice")}</div>'
-            + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(required for voice clone)</span>',
-                        '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
-                        'placeholder="Exact words spoken in the reference audio…">'))
         )
 
     if name == "orpheus":

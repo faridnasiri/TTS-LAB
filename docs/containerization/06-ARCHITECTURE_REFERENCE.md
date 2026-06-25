@@ -706,15 +706,15 @@ curl -X POST http://localhost:8001/synthesize/piper \
 
 ```bash
 # Check engine fingerprints:
-python3 scripts/update_engine_status.py --fingerprint --container tts-lab-engine-current
-python3 scripts/update_engine_status.py --fingerprint --container tts-lab-engine-mid
-python3 scripts/update_engine_status.py --fingerprint --container tts-lab-engine-qwen
+python3 scripts/utils/update_engine_status.py --fingerprint --container tts-lab-engine-current
+python3 scripts/utils/update_engine_status.py --fingerprint --container tts-lab-engine-mid
+python3 scripts/utils/update_engine_status.py --fingerprint --container tts-lab-engine-qwen
 
 # Check promotion eligibility:
-python3 scripts/update_engine_status.py qwen3tts --check
+python3 scripts/utils/update_engine_status.py qwen3tts --check
 
 # Recompute summary:
-python3 scripts/update_engine_status.py --recompute
+python3 scripts/utils/update_engine_status.py --recompute
 ```
 
 ---
@@ -755,7 +755,7 @@ TTS-LAB/
 │       └── deployment-fixes-2026-06-23.md
 ├── scripts/
 │   ├── update_engine_status.py          Validation gate updater
-│   └── elevenlabs_persian_batch.py
+│   └── download/elevenlabs_persian_batch.py
 ├── tts_lab.py                           Orchestrator FastAPI
 ├── tts_lab_engine_server.py             Engine server (lazy-load)
 ├── tts_lab_engines.py                   Loaders + synthesizers (28 engines)

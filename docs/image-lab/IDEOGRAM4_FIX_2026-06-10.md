@@ -50,7 +50,7 @@ These markers were created during failed `local_files_only=True` attempts and wo
 
 ### 3. Fix deploy script (future deploys)
 
-**File:** `deploy_image_lab.ps1` Phase 3
+**File:** `scripts/deploy/deploy_image_lab.ps1` Phase 3
 
 Removed the sed patch that injected `local_files_only=True` into the tokenizer. Kept the two sed patches for transformer weight loading (AutoModel calls). Added a comment explaining why.
 

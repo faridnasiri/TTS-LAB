@@ -22,10 +22,10 @@ A self-hosted, 21-engine Text-to-Speech benchmark and evaluation lab. Compare ev
 
 ```powershell
 # Deploy to existing VM (~30 sec):
-.\deploy_lab.ps1 -Phase 5
+.\scripts\deploy\deploy_lab.ps1 -Phase 5
 
 # Full deploy to fresh VM (~30-60 min):
-.\deploy_lab.ps1
+.\scripts\deploy\deploy_lab.ps1
 
 # Open in browser:
 # http://192.168.0.87:8001
@@ -37,7 +37,7 @@ A self-hosted, 21-engine Text-to-Speech benchmark and evaluation lab. Compare ev
 
 ```
 Windows dev machine  ──SCP──►  Ubuntu VM (192.168.0.87)
-  deploy_lab.ps1                  /opt/arthur/
+  scripts/deploy/deploy_lab.ps1                  /opt/arthur/
   tts_lab*.py    ──────────────►    tts_lab.py           FastAPI entry-point
   patch_*.py                        tts_lab_shims.py     startup compat patches
                                     tts_lab_config.py    model catalogue + state
@@ -151,7 +151,7 @@ The project also includes a separate Image & Video generation lab on port 8002:
 | `DELETE` | `/gallery/{id}` | Delete gallery entry |
 | `POST` | `/generate/ideogram4/caption` | Expand prompt via Ideogram4 caption endpoint |
 
-Image Lab deploys separately: `.\deploy_image_lab.ps1`
+Image Lab deploys separately: `.\scripts\deploy\deploy_image_lab.ps1`
 
 See [`docs/image-lab/`](docs/image-lab/) for detailed documentation.
 
@@ -162,7 +162,7 @@ See [`docs/image-lab/`](docs/image-lab/) for detailed documentation.
 Single PowerShell script, 8 idempotent phases:
 
 ```powershell
-.\deploy_lab.ps1 [-VM <ip>] [-User <user>] [-Phase <1-8>] [-SkipPhases "n,n"] [-GPU]
+.\scripts\deploy\deploy_lab.ps1 [-VM <ip>] [-User <user>] [-Phase <1-8>] [-SkipPhases "n,n"] [-GPU]
 ```
 
 | Phase | What it does |
@@ -177,12 +177,12 @@ Single PowerShell script, 8 idempotent phases:
 | 8 | HTTP 200 check, `/status` table, Piper smoke-test synthesis |
 
 ```powershell
-.\deploy_lab.ps1              # fresh VM: phases 1-8
-.\deploy_lab.ps1 -Phase 5    # redeploy code only (most common)
-.\deploy_lab.ps1 -Phase 6    # re-patch + restart
-.\deploy_lab.ps1 -Phase 7    # restart service only
-.\deploy_lab.ps1 -GPU        # use CUDA PyTorch wheels
-.\deploy_lab.ps1 -SkipPhases "4"   # skip model downloads
+.\scripts\deploy\deploy_lab.ps1              # fresh VM: phases 1-8
+.\scripts\deploy\deploy_lab.ps1 -Phase 5    # redeploy code only (most common)
+.\scripts\deploy\deploy_lab.ps1 -Phase 6    # re-patch + restart
+.\scripts\deploy\deploy_lab.ps1 -Phase 7    # restart service only
+.\scripts\deploy\deploy_lab.ps1 -GPU        # use CUDA PyTorch wheels
+.\scripts\deploy\deploy_lab.ps1 -SkipPhases "4"   # skip model downloads
 ```
 
 ---
@@ -251,7 +251,7 @@ Automated RTF measurement across all engines. Results are in [`docs/benchmarks/`
 3. Add `_load_xxx()` and `_synth_xxx()` in `tts_lab_engines.py`
 4. Register both in `LOADERS` and `SYNTHERS` dicts at bottom of `tts_lab_engines.py`
 5. Add package name to `pkg_map` in `_check_available()` in `tts_lab_dispatch.py`
-6. Deploy: `.\deploy_lab.ps1 -Phase 5`
+6. Deploy: `.\scripts\deploy\deploy_lab.ps1 -Phase 5`
 
 ---
 
@@ -291,7 +291,7 @@ Full session notes are in [`docs/sessions/`](docs/sessions/).
 
 ```powershell
 # Deploy from Windows
-.\deploy_lab.ps1 -Phase 5
+.\scripts\deploy\deploy_lab.ps1 -Phase 5
 
 # SSH to VM
 ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87

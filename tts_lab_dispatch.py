@@ -229,14 +229,14 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         try:
             import urllib.request
             req = urllib.request.Request(
-                "https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice",
+                "https://huggingface.co/api/models/Qwen/Qwen3-TTS-12Hz-1.7B-Base",
                 headers=_hdrs)
             with urllib.request.urlopen(req, timeout=5): pass
         except Exception as _e:
             if "401" in str(_e) or "403" in str(_e):
                 return False, "Qwen3-TTS: run huggingface-cli login"
             if "404" in str(_e):
-                return False, "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice not found on HuggingFace"
+                return False, "Qwen/Qwen3-TTS-12Hz-1.7B-Base not found on HuggingFace"
     elif name == "matcha":
         if not ilu.find_spec("sherpa_onnx"):
             return False, "pip install sherpa-onnx"

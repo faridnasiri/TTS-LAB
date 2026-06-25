@@ -281,7 +281,7 @@ docker/Dockerfile.stack.mid         — stable → nightly, cu128 → cu130
 docker/Dockerfile.engine-current    — numpy pin, python3-dev, torchcodec stub, cu130
 docker/Dockerfile.engine-qwen       — stack-py311 → stack-mid, --no-deps, TransformGetItemToIndex approach
 tts_lab_shims.py                    — TransformGetItemToIndex no-op context manager
-scripts/update_engine_status.py     — Gate updater, container introspection, history, promotion
+scripts/utils/update_engine_status.py     — Gate updater, container introspection, history, promotion
 docs/engine_compatibility.yaml      — Maturity classification, validation gates, fingerprints
 docs/containerization/01-ARCHITECTURE.md          — Architecture design
 docs/containerization/archive/IAC_REWRITE_PLAN.md — Original IaC rewrite plan (superseded)

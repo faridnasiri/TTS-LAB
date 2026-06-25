@@ -46,8 +46,8 @@ docs/
 !reference_voices/*.wav
 
 # ── Deploy scripts (VM-specific) ──
-deploy_lab.ps1
-deploy.ps1
+scripts/deploy/deploy_lab.ps1
+scripts/deploy/deploy.ps1
 _remote_install_new_engines.sh
 
 # ── Tests ──

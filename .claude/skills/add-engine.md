@@ -50,13 +50,13 @@ For container mode, the engine is auto-registered if in `MODEL_ORDER` and `LOADE
 ## Step 7: Update docs
 - Add to `docs/engine_compatibility.yaml` — status, container, stack, vram_est_mb, notes
 - Update `README.md` engine table
-- Update `deploy_lab.ps1` Phase 3 pip install for the new package
+- Update `scripts/deploy/deploy_lab.ps1` Phase 3 pip install for the new package
 
 ## Step 8: Deploy
 ```powershell
-.\deploy_lab.ps1 -Phase 5     # Code only (quick, ~30 sec)
+.\scripts\deploy\deploy_lab.ps1 -Phase 5     # Code only (quick, ~30 sec)
 # or for full install with pip packages:
-.\deploy_lab.ps1              # Full (includes Phase 3 for pip install)
+.\scripts\deploy\deploy_lab.ps1              # Full (includes Phase 3 for pip install)
 ```
 
 ## Step 9: Test

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ═══════════════════════════════════════════════════════════════════
-# TIER 3 — engine-qwen  (1 engine: Qwen3-TTS 1.7B)
+# TIER 3 — engine-qwen  (1 engine: Qwen3-TTS 1.7B Base — voice cloning)
 # ═══════════════════════════════════════════════════════════════════
 #
 # Dedicated container — no dependency drift into engine-current.
@@ -28,9 +28,10 @@
 #   - inputs_embeds signature changed in tf 5.x
 #   Deployed fix: install qwen-tts first, then --force-reinstall tf==4.51.3
 #
-# MODEL: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice  (gated — needs HF_TOKEN)
+# MODEL: Qwen/Qwen3-TTS-12Hz-1.7B-Base  (gated — needs HF_TOKEN)
+# Switched from CustomVoice (no voice clone) to Base (generate_voice_clone + x-vector mode)
 #
-# MATURITY: EXPERIMENTAL — container defined, not yet validated at runtime
+# MATURITY: SUPPORTED — deployed on engine-qwen, voice cloning verified
 #
 # SIZE: ~8 GB (stack-mid ~4.5 + qwen_tts + model weights ~3 GB)
 # ═══════════════════════════════════════════════════════════════════

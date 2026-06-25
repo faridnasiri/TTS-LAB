@@ -964,9 +964,19 @@ def _load_qwen3tts(model_id=QWEN3TTS_MODEL_ID):
     return Qwen3TTSModel.from_pretrained(model_id, device_map=DEVICE, torch_dtype=_dtype)
 
 def _synth_qwen3tts(inst, text, params):
+    """Synthesise with Qwen3-TTS Base model (voice-clone capable).
+
+    Two paths:
+      1. Voice clone — when ref WAV is uploaded. Uses ICL mode (ref_audio + ref_text)
+         for best quality, or x_vector_only_mode when ref_text is missing.
+      2. Default voice — no reference audio. Plain generation with a neutral voice.
+    """
+    import logging as _logging
+    _log = _logging.getLogger("qwen3tts")
+
     ref_id  = params.get("audio_prompt_id", "")
     ref_wav = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists() else None
-    ref_txt = params.get("ref_text", "")
+    ref_txt = params.get("ref_text", "").strip() or None
 
     def _float(key, default):
         try:
@@ -983,25 +993,52 @@ def _synth_qwen3tts(inst, text, params):
             return None
 
     gen_kwargs: dict = {}
-    for k, d in [("temperature", 0.9), ("top_p", 1.0), ("repetition_penalty", 1.05),
-                 ("subtalker_temperature", 0.9), ("subtalker_top_p", 1.0)]:
+    for k, d in [("temperature", 0.9), ("top_p", 1.0), ("repetition_penalty", 1.05)]:
         v = _float(k, d)
         if v is not None:
             gen_kwargs[k] = v
-    for k, d in [("top_k", 50), ("subtalker_top_k", 50), ("max_new_tokens", 2048)]:
+    for k, d in [("top_k", 50), ("max_new_tokens", 2048)]:
         v = _int(k, d)
         if v is not None:
             gen_kwargs[k] = v
 
-    if ref_wav and ref_txt:
-        wavs, sr = inst.generate_voice_clone(
-            text=text, language=params.get("language", "english"),
-            ref_audio=ref_wav, ref_text=ref_txt, **gen_kwargs)
+    language = params.get("language", "english")
+
+    if not ref_wav:
+        # ── No reference WAV provided — auto-select first available ──
+        # Base model requires ref_audio or voice_clone_prompt; it has no
+        # "default voice" mode like CustomVoice. Auto-pick a reference WAV
+        # so the engine always produces output.
+        _defaults = sorted(UPLOAD_DIR.glob("*.wav"))
+        if _defaults:
+            ref_wav = str(_defaults[0])
+            ref_id  = _defaults[0].stem
+            slog("SYNTH", "qwen3tts",
+                 f"Auto-selected reference: {ref_id}  (no audio_prompt_id provided)")
+        else:
+            raise RuntimeError(
+                "Qwen3-TTS Base requires a reference WAV for voice cloning. "
+                "Upload a 3-30s WAV file first, or place reference files in "
+                f"{UPLOAD_DIR}/. No .wav files found."
+            )
+
+    # ── Voice cloning path ──
+    clone_kw = dict(
+        text=text,
+        language=language,
+        ref_audio=ref_wav,
+        **gen_kwargs,
+    )
+    if ref_txt:
+        # ICL mode: reference audio + transcript — best speaker similarity
+        clone_kw["ref_text"] = ref_txt
+        clone_kw["x_vector_only_mode"] = False
+        slog("SYNTH", "qwen3tts", f"Voice clone (ICL) — ref={ref_id}  ref_text={ref_txt[:60]!r}")
     else:
-        instruct = params.get("instruct", "").strip() or None
-        wavs, sr = inst.generate_custom_voice(
-            text=text, language=params.get("language", "english"),
-            speaker=params.get("voice", "aiden"), instruct=instruct, **gen_kwargs)
+        # X-vector only: speaker embedding from audio, no transcript needed
+        clone_kw["x_vector_only_mode"] = True
+        slog("SYNTH", "qwen3tts", f"Voice clone (x-vector-only) — ref={ref_id}  (no transcript)")
+    wavs, sr = inst.generate_voice_clone(**clone_kw)
     return _to_wav(np.array(wavs[0], dtype=np.float32), sr), sr
 
 
@@ -1852,13 +1889,37 @@ def _synth_omnivoice(inst, text, params):
         except (ValueError, TypeError):
             pass
 
+    # Diffusion steps — fewer steps = faster + less VRAM (default ≈32, 16 for speed)
+    num_step_str = params.get("num_step", "").strip()
+    if num_step_str:
+        try:
+            gen_kw["num_step"] = int(num_step_str)
+        except (ValueError, TypeError):
+            pass
+
+    # Clear CUDA cache before generation to mitigate VRAM leaks (OmniVoice #180).
+    # Without this, successive syntheses accumulate leaked VRAM and longer
+    # texts hit OOM because their attention tensors need more memory.
+    import torch as _torch
+    if DEVICE == "cuda":
+        _torch.cuda.empty_cache()
+
     audio = inst.generate(text=text, **gen_kw)
     # audio is list of np.ndarray with shape (T,) at 24 kHz
     if isinstance(audio, list):
         arr = audio[0]
     else:
         arr = audio
+
+    # Move to CPU if still on GPU (torch tensor), then convert to numpy
+    if hasattr(arr, "cpu"):
+        arr = arr.cpu()
     arr = np.array(arr, dtype=np.float32).flatten()
+
+    # Release VRAM after generation
+    if DEVICE == "cuda":
+        _torch.cuda.empty_cache()
+
     return _to_wav(arr, 24000), 24000
 
 

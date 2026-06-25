@@ -327,7 +327,7 @@ The dispatch layer in `tts_lab_dispatch.py` already supports per-engine loading 
 | `tts_lab_dispatch.py` | pkg_map entries for 5 new engines |
 | `tts_lab_ui.py` | Parameter widgets for all 5 new engines (language dropdown for omnivoice, full controls for chatterboxturbo, control token docs for vibevoice/higgs/s2pro), OMNIVOICE_LANGUAGES import |
 | `tts_lab.py` | `/refs` endpoint now scans permanent `/opt/arthur/reference_voices/` dir (survives reboots), Path import |
-| `deploy_lab.ps1` | `omnivoice` pip install line |
+| `scripts/deploy/deploy_lab.ps1` | `omnivoice` pip install line |
 | `patches/patch_parler_tts.py` | Added `tie_weights` **kwargs fix |
 | `docs/reference/english/` | 2 new reference voices: `alex_wright.wav`, `ryan_reviewer.wav` (converted from MP3) |
 | `scripts/test/test_new_engines.py` | Structural integration test (158 checks) |

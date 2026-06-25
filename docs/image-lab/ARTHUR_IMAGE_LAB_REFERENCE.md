@@ -55,7 +55,7 @@ Think of it as a private version of services like Midjourney or Runway — runni
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  Windows Dev Machine (192.168.x.x)                              │
-│  VS Code + deploy_image_lab.ps1                                  │
+│  VS Code + scripts/deploy/deploy_image_lab.ps1                                  │
 └────────────────────────────┬────────────────────────────────────┘
                              │ SSH / SCP (id_arthur_vm key)
                              ▼
@@ -242,7 +242,7 @@ A single Python string constant `UI_HTML` containing the entire frontend — HTM
 
 ---
 
-### `deploy_image_lab.ps1` — Deployment Automation
+### `scripts/deploy/deploy_image_lab.ps1` — Deployment Automation
 
 A PowerShell script that runs from the **Windows dev machine**. Connects to the VM over SSH using `~/.ssh/id_arthur_vm`. All 8 phases are idempotent (safe to re-run).
 
@@ -261,19 +261,19 @@ A PowerShell script that runs from the **Windows dev machine**. Connects to the 
 
 ```powershell
 # First-time full deploy
-.\deploy_image_lab.ps1
+.\scripts/deploy/deploy_image_lab.ps1
 
 # Re-deploy code only (fastest iteration cycle)
-.\deploy_image_lab.ps1 -Phase 5; .\deploy_image_lab.ps1 -Phase 6
+.\scripts/deploy/deploy_image_lab.ps1 -Phase 5; .\scripts/deploy/deploy_image_lab.ps1 -Phase 6
 
 # Skip model download on a machine with existing cache
-.\deploy_image_lab.ps1 -SkipPhases "4"
+.\scripts/deploy/deploy_image_lab.ps1 -SkipPhases "4"
 
 # Override target VM
-.\deploy_image_lab.ps1 -VM 192.168.0.99
+.\scripts/deploy/deploy_image_lab.ps1 -VM 192.168.0.99
 
 # Provide HF token explicitly
-.\deploy_image_lab.ps1 -HFToken hf_xxxxxxxxxxxxxxxx
+.\scripts/deploy/deploy_image_lab.ps1 -HFToken hf_xxxxxxxxxxxxxxxx
 ```
 
 ---
@@ -783,7 +783,7 @@ PyTorch could not see the GPU (`torch.cuda.is_available()` returned `False`).
 
 ### Problem 3: PowerShell Variable `$VMHost` Undefined
 
-**File:** `deploy_image_lab.ps1` Phase 4  
+**File:** `scripts/deploy/deploy_image_lab.ps1` Phase 4  
 **Symptom:** SSH commands in Phase 4 failed silently or used an empty string for the VM host.  
 **Root cause:** The script used `$VMHost` in the SSH helper function but the parameter was named `$VM`. PowerShell's strict mode raised an error.  
 **Fix:** Changed all references to `$VMHost` → `$VM`.  
@@ -1265,8 +1265,8 @@ The service binds to `0.0.0.0:8002` — accessible from any machine on the local
 
 ```powershell
 # Edit files locally on dev machine, then:
-.\deploy_image_lab.ps1 -Phase 5   # SCP code
-.\deploy_image_lab.ps1 -Phase 6   # Restart service
+.\scripts/deploy/deploy_image_lab.ps1 -Phase 5   # SCP code
+.\scripts/deploy/deploy_image_lab.ps1 -Phase 6   # Restart service
 ```
 
 ### Checking Service Health

@@ -43,7 +43,7 @@ ls /opt/models/huggingface/ | grep -i <model_name>
 
 ### "not available" — model file missing
 - Check model path at `/opt/models/huggingface/` or `/opt/models/<engine>/`
-- Run model download phase: `.\deploy_lab.ps1 -Phase 4`
+- Run model download phase: `.\scripts\deploy\deploy_lab.ps1 -Phase 4`
 
 ### OOM / CUDA out of memory
 - Check VRAM: `nvidia-smi` — other engines may be loaded
@@ -52,7 +52,7 @@ ls /opt/models/huggingface/ | grep -i <model_name>
 
 ### ChatTTS narrow() errors
 - PyTorch 2.10 strict validation. Patches already applied in VM's gpt.py.
-- If re-occurring after pip upgrade: re-run `.\deploy_lab.ps1 -Phase 6`
+- If re-occurring after pip upgrade: re-run `.\scripts\deploy\deploy_lab.ps1 -Phase 6`
 
 ### transformers version mismatch
 - Engine-current: transformers 5.12.1 (latest, sm_120)

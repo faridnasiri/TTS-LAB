@@ -184,7 +184,9 @@ OUTETTS_DEFAULT_GGUF      = "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gg
 OUTETTS_DEFAULT_TOKENIZER = "OuteAI/OuteTTS-1.0-0.6B"
 
 # ── Qwen3-TTS model ID ────────────────────────────────────────────────────────
-QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice"
+# Base variant supports generate_voice_clone() — 3s voice cloning + x-vector mode.
+# CustomVoice variant (built-in speakers + instruct) does NOT support voice cloning.
+QWEN3TTS_MODEL_ID = "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
 
 # ── Arthur text presets ───────────────────────────────────────────────────────
 ARTHUR_PRESETS = [
@@ -221,7 +223,7 @@ MODEL_INFO = {
     "chatterbox": {"label":"Chatterbox",    "size":"3.0 GB",             "rtf_est":"RTF 2.42×",            "ram_est_mb":1800, "heavy":True, "notes":"Persian T3 (30-layer, 2454 tokens). Voice cloning. Auto-chunks long text.","arthur_fit":5},
     "fishspeech": {"label":"Fish Speech",   "size":"~1.1 GB",            "rtf_est":"RTF 3.48×",            "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning. Persian via LM tokenizer.","arthur_fit":4},
     "csm":        {"label":"Sesame CSM 1B", "size":"~2 GB",              "rtf_est":"blocked (Meta)",        "ram_est_mb":2000, "heavy":True, "notes":"⚠ All deps ready. Blocked: meta-llama/Llama-3.2-1B gated.","arthur_fit":4},
-    "qwen3tts":   {"label":"Qwen3-TTS",     "size":"~3 GB",              "rtf_est":"skipped",               "ram_est_mb":2000, "heavy":True, "notes":"⚠ SKIPPED: tf 5.x ROPE KeyError. Needs mid stack.","arthur_fit":3},
+    "qwen3tts":   {"label":"Qwen3-TTS 1.7B", "size":"~3 GB",           "rtf_est":"RTF ~3-6×",         "ram_est_mb":6000, "heavy":True, "notes":"Voice cloning 1.7B Base. 3s ref audio. x-vector-only mode. 10 languages.","arthur_fit":5},
     "orpheus":    {"label":"Orpheus 3B",    "size":"~3 GB",              "rtf_est":"needs container",       "ram_est_mb":3000, "heavy":True, "notes":"⚠ Installed but vllm vs torch nightly. Needs Dockerfile.orpheus.","arthur_fit":5},
     "neutts":     {"label":"NeuTTS Air",    "size":"TBD",                "rtf_est":"not configured",        "ram_est_mb":1000, "heavy":True, "notes":"⚠ Not yet configured — edit _load_neutts() in engines.","arthur_fit":3},
     "indextts":   {"label":"IndexTTS-2",    "size":"~1.5 GB",            "rtf_est":"skipped",               "ram_est_mb":2000, "heavy":True, "notes":"⚠ SKIPPED: needs legacy stack.","arthur_fit":4},

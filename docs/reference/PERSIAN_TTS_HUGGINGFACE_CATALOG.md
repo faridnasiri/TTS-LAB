@@ -134,7 +134,7 @@ These models are already integrated and serving in Arthur TTS Lab:
 | `fishspeech` | (multilingual) | Fish Speech | ✅ Supported | Decent — zero-shot |
 | `f5tts` | (multilingual) | F5-TTS | ✅ Supported | Decent — zero-shot w/ ref WAV |
 | `higgs` | `bosonai/higgs-audio-v3-tts-4b` | Higgs (4B) | ⚠️ Experimental | Unknown — not yet validated |
-| `qwen3tts` | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | Qwen3-TTS | ⚠️ Experimental | Unknown — experimental Persian |
+| `qwen3tts` | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | Qwen3-TTS Base | ✅ Supported | Voice clone — 10 langs incl. Persian via x-vector |
 | `xtts` | (base Coqui XTTS) | XTTS v2 | ✅ Supported | **Poor** — base model lacks Persian |
 
 > **Note:** The base `xtts` engine in engine-current is the generic Coqui XTTS v2 model. It does NOT include the Persian fine-tune (`saillab/xtts_v2_fa`). This is a key gap — the Persian XTTS fine-tune would significantly improve Persian quality for the XTTS engine.

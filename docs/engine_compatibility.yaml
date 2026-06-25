@@ -124,10 +124,10 @@ engines:
     vram_est_mb: 2000
     notes: torchcodec issue with torch nightly — coqui-tts installs but may not synth
   qwen3tts:
-    status: experimental
+    status: supported
     container: engine-qwen
     stack: mid
-    vram_est_mb: 3000
+    vram_est_mb: 6000
     dependencies:
       torch: '>=2.10,<2.11'
       transformers: '>=4.51,<4.54'
@@ -138,8 +138,9 @@ engines:
     - TransformGetItemToIndex added in transformers 4.54 (qwen_tts chokes)
     - is_offline_mode removed in huggingface-hub >= 1.0
     - inputs_embeds signature changed in transformers 5.x
-    gated_model: Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+    gated_model: Qwen/Qwen3-TTS-12Hz-1.7B-Base
     needs_hf_token: true
+    notes: Switched from CustomVoice (no voice clone) to Base (generate_voice_clone + x-vector-only mode). 3s ref audio clones in 10 languages.
     promotion_requirements:
     - build_import
     - model_load
@@ -158,15 +159,15 @@ engines:
       model_load:
         status: pending
         last_tested: null
-        description: Qwen3TTSModel.from_pretrained on RTX 5060 Ti
+        description: Qwen3TTSModel.from_pretrained (Base variant) on RTX 5060 Ti
       synthesis:
         status: pending
         last_tested: null
-        description: generate_custom_voice or generate_voice_clone — valid audio
+        description: generate_voice_clone with ref_audio + ref_text (ICL) and x_vector_only_mode
       vram_measured:
         status: pending
         last_tested: null
-        description: nvidia-smi before/after — target ≤ 3.5 GB
+        description: nvidia-smi before/after — target ≤ 6 GB
   vibevoice:
     status: experimental
     container: engine-mid

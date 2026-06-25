@@ -7,12 +7,12 @@ description: 'Deploy Image Lab (FLUX.2, SD 3.5, Ideogram4, Wan2.2) to the VM'
 
 ## Quick Deploy
 ```powershell
-.\deploy_image_lab.ps1
+.\scripts\deploy\deploy_image_lab.ps1
 ```
 
 ## Partial Deploy
 ```powershell
-.\deploy_image_lab.ps1 -Phase 3   # Code + restart only
+.\scripts\deploy\deploy_image_lab.ps1 -Phase 3   # Code + restart only
 ```
 
 ## Image Lab Details

@@ -7,7 +7,7 @@ description: 'Deploy TTS Lab to the Ubuntu VM — PowerShell phases, make deploy
 
 ## Quick Deploy (Code Only — Most Common)
 ```powershell
-.\deploy_lab.ps1 -Phase 5
+.\scripts\deploy\deploy_lab.ps1 -Phase 5
 ```
 This SCPs `tts_lab_*.py` and patches to `/opt/arthur/`, then restarts the service. ~30 seconds.
 
@@ -26,12 +26,12 @@ This SCPs `tts_lab_*.py` and patches to `/opt/arthur/`, then restarts the servic
 
 ### Partial Deploy Examples
 ```powershell
-.\deploy_lab.ps1 -Phase 5                     # Code only (fastest)
-.\deploy_lab.ps1 -Phase 6                     # Re-patch + restart
-.\deploy_lab.ps1 -Phase 7                     # Restart service only
-.\deploy_lab.ps1 -Phase 5 -SkipPhases "4"     # Code only, skip model download
-.\deploy_lab.ps1 -GPU                         # Use CUDA PyTorch instead of CPU
-.\deploy_lab.ps1 -Phase 1                     # Start from scratch
+.\scripts\deploy\deploy_lab.ps1 -Phase 5                     # Code only (fastest)
+.\scripts\deploy\deploy_lab.ps1 -Phase 6                     # Re-patch + restart
+.\scripts\deploy\deploy_lab.ps1 -Phase 7                     # Restart service only
+.\scripts\deploy\deploy_lab.ps1 -Phase 5 -SkipPhases "4"     # Code only, skip model download
+.\scripts\deploy\deploy_lab.ps1 -GPU                         # Use CUDA PyTorch instead of CPU
+.\scripts\deploy\deploy_lab.ps1 -Phase 1                     # Start from scratch
 ```
 
 ## Docker Deploy (on VM)

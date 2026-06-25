@@ -46,7 +46,7 @@ We were already using the smallest official quant (NF4). The issue was not model
 | `image_lab_engines.py` | Added `_load_ideogram4()`, `_generate_ideogram4()`, `_probe_ideogram4()`, dispatch tables, unload entry |
 | `image_lab_ui.py` | Added engine tab, gallery filter, checkbox param rendering, magic prompt show/hide JS |
 | `ideogram4_lab_engine.py` | Full engine wrapper: load, generate, probe, DeepSeek/OpenRouter magic prompt |
-| `deploy_image_lab.ps1` | ideogram4 pip install, file copy, OPENROUTER_API_KEY in .env |
+| `scripts/deploy/deploy_image_lab.ps1` | ideogram4 pip install, file copy, OPENROUTER_API_KEY in .env |
 | `secrets.env` | Added OPENROUTER_API_KEY placeholder |
 
 ### Pre-existing bugs fixed
@@ -279,4 +279,4 @@ Tests 4 resolutions (256/384/512/768) sequentially with timing per gen.
 | Engine | `/opt/arthur-img/ideogram4_lab_engine.py` | Post-load offload, DeepSeek magic prompt |
 | Pipeline patches | `/opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py` | 8 patches (lines 320, 572, 612-657) |
 | Web UI | `image_lab_ui.py` | ideogram4 tab, gallery filter, magic prompt UX |
-| Deploy script | `deploy_image_lab.ps1` | Installs ideogram4, copies files, sets env |
+| Deploy script | `scripts/deploy/deploy_image_lab.ps1` | Installs ideogram4, copies files, sets env |

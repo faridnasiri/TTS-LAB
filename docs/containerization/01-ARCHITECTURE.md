@@ -313,33 +313,33 @@ BLOCKED       → build: no,  smoke-test: no,  required: skip
 
 ### 7.1 Script
 
-[scripts/update_engine_status.py](../../scripts/update_engine_status.py) — updates the compatibility matrix from test results.
+[scripts/utils/update_engine_status.py](../../scripts/utils/update_engine_status.py) — updates the compatibility matrix from test results.
 
 ### 7.2 CLI Surface
 
 ```bash
 # Record a passed gate (with metrics):
-python scripts/update_engine_status.py vibevoice model_load passed \
+python scripts/utils/update_engine_status.py vibevoice model_load passed \
   --duration 41 --vram-mb 6420 --container engine-mid
 
 # Record a failed gate (with error):
-python scripts/update_engine_status.py qwen3tts build_import failed \
+python scripts/utils/update_engine_status.py qwen3tts build_import failed \
   --error "ROPE_INIT_FUNCTIONS missing default key"
 
 # Check promotion eligibility:
-python scripts/update_engine_status.py vibevoice --check
+python scripts/utils/update_engine_status.py vibevoice --check
 
 # Promote when all gates pass:
-python scripts/update_engine_status.py vibevoice --promote
+python scripts/utils/update_engine_status.py vibevoice --promote
 
 # Fix summary drift without changing gates:
-python scripts/update_engine_status.py --recompute
+python scripts/utils/update_engine_status.py --recompute
 
 # Print environment fingerprint:
-python scripts/update_engine_status.py --fingerprint --container engine-mid
+python scripts/utils/update_engine_status.py --fingerprint --container engine-mid
 
 # Print current VRAM:
-python scripts/update_engine_status.py --vram-now
+python scripts/utils/update_engine_status.py --vram-now
 ```
 
 ### 7.3 Auto-Populated Fields
@@ -483,11 +483,11 @@ Only ONE engine-mid engine can be loaded at a time. Only ONE engine across all c
 | Gate | Test | Success Criteria |
 |------|------|-----------------|
 | `build_import` | `import qwen_tts` + ROPE check (build-time) | Already passes in Dockerfile |
-| `model_load` | `Qwen3TTSModel.from_pretrained('Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice')` | Model loads, no OOM, VRAM ≤ 3.5 GB |
-| `synthesis` | `generate_custom_voice` or `generate_voice_clone` | Valid audio output |
-| `vram_measured` | `nvidia-smi` before/after | Peak ≤ 3.5 GB |
+| `model_load` | `Qwen3TTSModel.from_pretrained('Qwen/Qwen3-TTS-12Hz-1.7B-Base')` | Model loads, no OOM, VRAM ≤ 6 GB |
+| `synthesis` | `generate_voice_clone` (ICL + x-vector-only modes) | Valid audio output |
+| `vram_measured` | `nvidia-smi` before/after | Peak ≤ 6 GB |
 
-**Gated model:** Requires HF_TOKEN for `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`
+**Gated model:** Requires HF_TOKEN for `Qwen/Qwen3-TTS-12Hz-1.7B-Base` (switched from CustomVoice — Base supports voice cloning)
 
 ---
 
@@ -527,7 +527,7 @@ docker compose --profile mid --profile gpu --profile sglang up -d
 
 | Engine | Model | HF_TOKEN Required |
 |--------|-------|:-----------------:|
-| qwen3tts | `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` | ✅ Yes |
+| qwen3tts | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | ✅ Yes |
 | orpheus | `canopylabs/orpheus-3b-0.1-ft` | ✅ Yes |
 | csm | `sesame/csm-1b` | ✅ Yes (Meta license) |
 
