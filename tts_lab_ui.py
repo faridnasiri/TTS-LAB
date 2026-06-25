@@ -697,7 +697,45 @@ def _build_params(name: str) -> str:
             'Dual-AR: Slow AR (4B) predicts primary semantic tokens; Fast AR (400M) generates residual codebooks.</p>'
         )
 
+    if name == "qwen36":
+        return _build_chat_params()
+
     return ""
+
+
+def _build_chat_params() -> str:
+    """Build the chat UI parameter panel for Qwen 3.6 LLM (text→text).
+
+    Unlike TTS engines, this has no audio controls — just a chat
+    interface with system prompt, temperature, and generation params.
+    """
+    return (
+        '<div class="alert alert-info py-2 small mb-3">'
+        '🧠 <strong>Qwen 3.6 35B-A3B MoE</strong> — reasoning &amp; programming assistant · '
+        '3B active params per token · ~107 tok/s · 262K context<br>'
+        '<em>⚠ Loading this model evicts ALL TTS engines from VRAM (needs ~12.4 GB). '
+        'TTS engines reload lazily on next synthesis.</em>'
+        '</div>'
+        # ── System prompt ──
+        + '<div class="mt-2 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;'
+        'text-transform:uppercase;letter-spacing:.08em">System Prompt</div>'
+        + '<textarea class="form-control form-control-sm bg-dark text-light border-secondary mb-2" '
+        'data-param="system_prompt" rows="2" '
+        'placeholder="You are a helpful AI assistant specialized in reasoning and programming.">'
+        'You are a helpful AI assistant specialized in reasoning and programming.'
+        '</textarea>'
+        # ── Generation params ──
+        + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;'
+        'text-transform:uppercase;letter-spacing:.08em">Generation</div>'
+        + _row(
+            _grp('Temperature <span class="range-val">0.7</span>',
+                 _rng("temperature", "0.1", "2.0", "0.05", "0.7", "lower=deterministic, higher=creative")),
+            _grp('Top-p <span class="range-val">0.9</span>',
+                 _rng("top_p", "0.1", "1.0", "0.05", "0.9", "nucleus sampling cutoff")),
+            _grp('Max tokens <span class="range-val">2048</span>',
+                 _rng("max_tokens", "256", "8192", "128", "2048", "max response length")),
+        )
+    )
 
 
 # ── Page builder ──────────────────────────────────────────────────────────────
@@ -858,6 +896,26 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
 .cat-PARAMS  .log-cat{color:#ff7043;}   .cat-PARAMS  .log-msg{color:#ffab91;}
 .cat-SERVER  .log-cat{color:#cddc39;}   .cat-SERVER  .log-msg{color:#e6ee9c;}
 .log-src-server{font-size:.60rem;color:#5a6a3a;margin-left:3px;}
+
+/* ── Chat UI (Qwen 3.6 LLM) ───────────────────────────────────────────────── */
+.chat-area{max-height:500px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;
+           margin-bottom:8px;padding-right:4px;}
+.chat-msg{max-width:90%;padding:10px 14px;border-radius:12px;font-size:.82rem;line-height:1.5;
+          white-space:pre-wrap;word-break:break-word;animation:chatIn .2s ease-out;}
+.chat-msg.user{align-self:flex-end;background:#1a3350;color:#d0e0f0;
+              border:1px solid #2a5080;border-bottom-right-radius:4px;}
+.chat-msg.assistant{align-self:flex-start;background:#1a2230;color:#c8d0e0;
+                    border:1px solid #2a3a50;border-bottom-left-radius:4px;}
+.chat-msg.system{align-self:flex-start;background:#1a1010;color:#d0a0a0;
+                border:1px solid #3a2020;font-size:.75rem;font-style:italic;
+                max-width:100%;border-bottom-left-radius:4px;}
+.chat-msg code{background:#1a1a2e;padding:2px 6px;border-radius:3px;font-size:.78em;
+               color:#cc9966;border:1px solid #333;}
+.chat-msg pre{background:#0d0d1a;border:1px solid #2a2a40;border-radius:6px;
+              padding:10px 12px;margin:6px 0;overflow-x:auto;font-size:.76rem;}
+.chat-msg pre code{background:transparent;border:none;padding:0;color:#c0d0e0;}
+.chat-toolbar{display:flex;gap:6px;margin-top:4px;}
+@keyframes chatIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 </style>"""
 
 _JS = r"""
@@ -1082,23 +1140,39 @@ async function synth(model) {
       showError(model, data.error + (data.trace ? '\n\n' + data.trace : ''));
       return;
     }
-    const blob = new Blob([Uint8Array.from(atob(data.audio_b64), c => c.charCodeAt(0))], {type:'audio/wav'});
-    const url  = URL.createObjectURL(blob);
-    if (card) {
-      card.style.display = 'block';
-      clearError(model);
-      card.querySelector('.audio-player').src = url;
-      card.querySelector('.audio-player').load();
-      card.querySelector('.m-synth').textContent = data.synth_time_ms + ' ms';
-      card.querySelector('.m-dur').textContent   = data.audio_dur_ms  + ' ms';
-      card.querySelector('.m-rtf').textContent   = data.rtf + '×';
-      card.querySelector('.m-load').textContent  = data.load_time_s   + ' s';
-      card.querySelector('.m-sr').textContent    = data.sample_rate   + ' Hz';
-      const rtf = parseFloat(data.rtf);
-      card.querySelector('.m-rtf').style.color = rtf <= 1 ? '#4caf50' : rtf <= 5 ? '#ff9800' : '#f44336';
+    // LLM engines return text -- render as chat messages
+    if (data.text !== undefined) {
+      if (card) {
+        card.style.display = 'block';
+        clearError(model);
+        addChatMessage(model, 'user', text);
+        addChatMessage(model, 'assistant', data.text);
+        card.querySelector('.m-synth').textContent = data.synth_time_ms + ' ms';
+        card.querySelector('.m-tokens').textContent = data.tokens + ' tokens';
+        card.querySelector('.m-tps').textContent   = data.tokens_per_sec + ' tok/s';
+        card.querySelector('.m-model').textContent  = data.model || 'qwen3.6';
+      }
+      dbg('RESULT', model,
+        `✅ ${data.tokens} tokens  |  ${data.synth_time_ms} ms  |  ${data.tokens_per_sec} tok/s  |  ${data.model}`);
+    } else {
+      const blob = new Blob([Uint8Array.from(atob(data.audio_b64), c => c.charCodeAt(0))], {type:'audio/wav'});
+      const url  = URL.createObjectURL(blob);
+      if (card) {
+        card.style.display = 'block';
+        clearError(model);
+        card.querySelector('.audio-player').src = url;
+        card.querySelector('.audio-player').load();
+        card.querySelector('.m-synth').textContent = data.synth_time_ms + ' ms';
+        card.querySelector('.m-dur').textContent   = data.audio_dur_ms  + ' ms';
+        card.querySelector('.m-rtf').textContent   = data.rtf + '×';
+        card.querySelector('.m-load').textContent  = data.load_time_s   + ' s';
+        card.querySelector('.m-sr').textContent    = data.sample_rate   + ' Hz';
+        const rtf = parseFloat(data.rtf);
+        card.querySelector('.m-rtf').style.color = rtf <= 1 ? '#4caf50' : rtf <= 5 ? '#ff9800' : '#f44336';
+      }
+      dbg('RESULT', model,
+        `✅ synth ${data.synth_time_ms} ms  |  dur ${data.audio_dur_ms} ms  |  RTF ${data.rtf}×  |  ${data.sample_rate} Hz  |  model load ${data.load_time_s} s`);
     }
-    dbg('RESULT', model,
-      `✅ synth ${data.synth_time_ms} ms  |  dur ${data.audio_dur_ms} ms  |  RTF ${data.rtf}×  |  ${data.sample_rate} Hz  |  model load ${data.load_time_s} s`);
   } catch(e) {
     dbg('ERROR', model, '⚠ fetch exception: ' + e.toString());
     showError(model, e.toString());
@@ -1106,6 +1180,49 @@ async function synth(model) {
     if (btn)  btn.disabled = false;
     if (spin) spin.style.display = 'none';
   }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   CHAT UI — Qwen 3.6 LLM
+   ═══════════════════════════════════════════════════════════════ */
+function addChatMessage(model, role, content) {
+  const chat = document.getElementById('chat-' + model);
+  if (!chat) return;
+  const div = document.createElement('div');
+  div.className = 'chat-msg ' + role;
+  // Escape HTML but preserve code blocks
+  let html = content
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  // Convert markdown code blocks to HTML
+  html = html.replace(/```(\w*)
+?([\s\S]*?)```/g,
+    '<pre><code>$2</code></pre>');
+  // Convert inline code
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  // Convert bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  // Line breaks
+  html = html.replace(/
+/g, '<br>');
+  div.innerHTML = html;
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+function clearChat(model) {
+  const chat = document.getElementById('chat-' + model);
+  if (chat) chat.innerHTML = '';
+}
+
+function copyLastChat(model) {
+  const chat = document.getElementById('chat-' + model);
+  if (!chat) return;
+  const msgs = chat.querySelectorAll('.chat-msg.assistant');
+  if (msgs.length === 0) return;
+  const last = msgs[msgs.length - 1].textContent;
+  navigator.clipboard.writeText(last).then(() => {
+    showToast('✅ Copied last response to clipboard');
+  });
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1554,6 +1671,36 @@ window.addEventListener('load', () => {
 
 
 def _result_card(n: str) -> str:
+    # LLM engines get a chat message area instead of audio player
+    if MODEL_INFO.get(n, {}).get("engine_type") == "llm":
+        return (
+            f'<div class="result-card" id="result-{n}">'
+            f'<div class="metric-row">'
+            f'<span class="metric-pill">⏱ <b class="m-synth">—</b></span>'
+            f'<span class="metric-pill">🪙 <b class="m-tokens">—</b></span>'
+            f'<span class="metric-pill">⚡ <b class="m-tps">—</b></span>'
+            f'<span class="metric-pill">🧠 <b class="m-model">—</b></span>'
+            f'</div>'
+            f'<div class="chat-area" id="chat-{n}">'
+            f'</div>'
+            f'<div class="chat-toolbar">'
+            f'  <button class="btn-action" onclick="copyLastChat(\'{n}\')">📋 Copy Last</button>'
+            f'  <button class="btn-action" onclick="clearChat(\'{n}\')">🗑 Clear</button>'
+            f'</div>'
+            f'<div class="error-panel" id="errpanel-{n}">'
+            f'  <div class="error-panel-header" onclick="toggleErrBody(\'{n}\')">'
+            f'    <span class="error-title" id="errtitle-{n}"></span>'
+            f'    <div class="error-actions">'
+            f'      <button class="err-copy-btn" onclick="copyErr(\'{n}\', event)">📋 Copy</button>'
+            f'      <button class="err-toggle" id="errtoggle-{n}">▼ show</button>'
+            f'    </div>'
+            f'  </div>'
+            f'  <div class="error-panel-body" id="errbody-{n}" style="display:none">'
+            f'    <pre class="error-msg" id="errmsg-{n}"></pre>'
+            f'  </div>'
+            f'</div>'
+            f'</div>'
+        )
     return (
         f'<div class="result-card" id="result-{n}">'
         f'<div class="metric-row">'

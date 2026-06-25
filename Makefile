@@ -24,7 +24,7 @@ PORT   ?= 8101
 TORCH_VER      ?= 2.12.0.dev20260408+cu128
 TORCHAUDIO_VER ?= 2.11.0.dev20260407+cu128
 
-.PHONY: build-engine deploy-engine clean-cache pull rebuild sweep deploy-orchestrator
+.PHONY: build-engine deploy-engine clean-cache pull rebuild sweep deploy-orchestrator build-llm deploy-llm
 
 # ── Help ──────────────────────────────────────────────────────────────
 help:
@@ -35,6 +35,8 @@ help:
 	@echo "  make rebuild                        Full chain rebuild (7 images)"
 	@echo "  make sweep                          Run engine synthesis sweep"
 	@echo "  make deploy-orchestrator            Build + deploy orchestrator"
+	@echo "  make build-llm                      Build Qwen 3.6 LLM image"
+	@echo "  make deploy-llm                     Build + deploy Qwen 3.6 LLM"
 	@echo ""
 	@echo "  ENGINE values: current | mid | qwen | legacy | orpheus"
 
@@ -112,6 +114,7 @@ deploy-orchestrator: build-orchestrator
 		-e QWEN3TTS_URL=http://localhost:8104 \
 		-e VIBEVOICE_URL=http://localhost:8103 \
 		-e HIGGS_URL=http://localhost:8103 \
+		-e QWEN36_URL=http://localhost:8006 \
 		--restart unless-stopped \
 		tts-lab-orchestrator:latest \
 		uvicorn tts_lab:app --host 0.0.0.0 --port 8009 --workers 1
@@ -143,3 +146,20 @@ rebuild: clean-cache
 # ── Test ──────────────────────────────────────────────────────────────
 sweep:
 	python3 sweep.py
+
+# ── LLM (Qwen 3.6) ─────────────────────────────────────────────────
+build-llm: pull clean-cache
+	@echo "Building tts-lab-llm-qwen36..."
+	docker build \
+		-f docker/Dockerfile.llm-qwen36 \
+		-t tts-lab-llm-qwen36:latest .
+
+deploy-llm: build-llm
+	-docker stop tts-lab-llm-qwen36 2>/dev/null || true
+	-docker rm tts-lab-llm-qwen36 2>/dev/null || true
+	docker run -d --name tts-lab-llm-qwen36 --gpus all --network host \
+		-v /opt/models:/opt/models \
+		-e MODEL_PATH=/opt/models/llm/qwen3.6-35b-a3b-tq3_4s.gguf \
+		-e CTX_SIZE=4096 \
+		--restart unless-stopped \
+		tts-lab-llm-qwen36:latest
