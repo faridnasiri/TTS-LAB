@@ -1954,7 +1954,7 @@ def build_page() -> str:
     </div>
   </div>
   {gpu_badge}
-  <button id="btn-refresh" class="btn-action" onclick="evictAllVRAM()" style="white-space:nowrap" title="Evict all TTS engines from VRAM">Evict VRAM</button>
+  <button id="btn-evict" class="btn-action" onclick="evictAllVRAM()" style="white-space:nowrap" title="Evict all TTS engines from VRAM">Evict VRAM</button>
 	  <button id="btn-refresh" class="btn-action" onclick="refreshAvailability()" style="white-space:nowrap">🔄 Refresh</button>
 </div>
 
