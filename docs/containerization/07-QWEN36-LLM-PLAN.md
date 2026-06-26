@@ -1,8 +1,8 @@
 # Qwen 3.6 LLM Integration Plan — Reasoning & Programming Engine
 
-> **Status:** DRAFT — pending review
-> **Date:** 2026-06-25
-> **Author:** Claude (research + planning)
+> **Status:** DEPLOYED — 2026-06-26
+> **Date:** 2026-06-25 (plan) / 2026-06-26 (deployment)
+> **Author:** Claude (research + planning + implementation)
 > **Target:** Add Qwen 3.6 as a reasoning/programming LLM to the TTS Lab
 
 ---
@@ -911,6 +911,121 @@ curl http://localhost:8006/v1/chat/completions \
     "temperature": 0.7,
     "max_tokens": 500
   }'
+
+
+---
+---
+
+## 16. ACTUAL DEPLOYMENT — What Shipped (2026-06-26)
+
+### Model Delivered
+
+| Field | Planned | Actual | Why Changed |
+|-------|---------|--------|-------------|
+| Model | Qwen3.6-35B-A3B (MoE) | **Qwen3.6-27B (Dense)** | TQ3_4S quantization (ggml type 46) not supported by pre-built llama.cpp |
+| Quant | TQ3_4S | **Q3_K_M** | Standard quantization, works with pre-built images |
+| Source | YTan2000/Qwen3.6-35B-A3B-TQ3_4S | **batiai/Qwen3.6-27B-GGUF** | Public repo, no auth needed |
+| File | ~12.4 GB | **~13 GB** | Similar size |
+| Speed | ~107 tok/s (planned) | **~23 tok/s** | Dense 27B is slower than MoE 35B-A3B |
+| SWE-bench | 73.4 (35B-A3B) | **77.2 (27B)** | 27B actually BETTER at coding |
+| Context | 4096 (planned) | **32768** | 32K fits with q4_0 KV cache |
+| Thinking | Not planned | **Enabled** | Qwen 3.6 has native thinking tokens (`<think>` tags) |
+
+### Container
+
+| Field | Planned | Actual | Why |
+|-------|---------|--------|-----|
+| Base image | Custom Dockerfile building llama.cpp from source | **Pre-built `ghcr.io/ggml-org/llama.cpp:server-cuda`** | Source build failed on CUDA linker error (`undefined reference to cuGetErrorString`) — pre-built image works immediately |
+| Port | 8006 | **8006** | As planned |
+| Network | Docker bridge | **Host network** (`--network host`) | Matches existing TTS container pattern (Makefile deploy) |
+| GPU | `--gpus all` | **`--gpus all`** | As planned |
+
+### Exact Deployment Command
+
+```bash
+docker run -d \
+  --name tts-lab-llm-qwen36 \
+  --gpus all \
+  --network host \
+  -v /opt/models:/opt/models \
+  --restart unless-stopped \
+  ghcr.io/ggml-org/llama.cpp:server-cuda \
+  --model /opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf \
+  --host 0.0.0.0 \
+  --port 8006 \
+  --n-gpu-layers 99 \
+  --ctx-size 32768 \
+  --parallel 1 \
+  --cache-type-k q4_0 \
+  --cache-type-v q4_0 \
+  --flash-attn on \
+  --jinja \
+  --threads 4 \
+  --threads-batch 8
+```
+
+### VRAM Budget (Actual)
+
+```
+RTX 5060 Ti — 16 GB (16311 MiB)
+
+LLM model:        ~13 GB  (Q3_K_M, all 99 layers on GPU)
+KV cache (32K):   ~1.5 GB (q4_0 quantized, 32768 tokens)
+llama.cpp overhead: ~0.5 GB
+─────────────────────────────────
+LLM idle:         ~13.6 GB used, ~2.4 GB free
+
+LLM + kokoro:     ~13.8 GB used, ~2.1 GB free  ✅ fits
+LLM + chattts:    ~15.6 GB used, ~0.4 GB free  ⚠️ very tight
+LLM + bark:       ~25.6 GB needed               ❌ OOM
+```
+
+### Port Map (Actual)
+
+```
+Host: arthur@192.168.0.87
+
+8009 — TTS Lab Orchestrator (Web UI + HTTP dispatch)
+8006 — Qwen 3.6 LLM (llama.cpp OpenAI-compatible API)
+8101 — Engine-Current (21 TTS engines)
+8104 — Engine-Qwen (Qwen3TTS)
+8103 — Engine-Mid (VibeVoice, Higgs)
+```
+
+### Source Build Attempts (Failed)
+
+Five Docker build attempts were made before switching to the pre-built image:
+
+| Attempt | Issue | Fix Tried | Result |
+|---------|-------|-----------|--------|
+| 1 | 9 GPU architectures → 3+ hour build time | — | Cancelled (too slow) |
+| 2 | `CMAKE_CUDA_ARCHITECTURES="120a-real"` invalid for CMake 3.22 | Single arch flag | Failed |
+| 3 | Build reached 66% then `make: Error 2` (unnecessary targets) | `--target llama-server` | Failed |
+| 4 | `undefined reference to cuGetErrorString` (linker) | Symlink stubs | Failed |
+| 5 | Same linker error — stubs not in CUDA 12.8 devel image | — | Failed |
+
+**Root cause:** NVIDIA removed `libcuda.so` stubs from CUDA 12.x devel images. llama.cpp HEAD requires CUDA Driver API symbols at link time. Pre-built images from ghcr.io are compiled in a CI environment that has the driver.
+
+### End-to-End Test (Verified)
+
+```
+1. TTS synthesis (kokoro):         ✅ 200 OK, audio returned
+2. LLM request (qwen36):           ✅ Global eviction fires → LLM responds
+3. Reasoning visible:               ✅ thinking process in reasoning_content
+4. TTS after LLM:                   ✅ kokoro reloads lazily, works alongside LLM
+5. VRAM coexistence (LLM + kokoro): ✅ 13.8 GB used, both work
+6. 32K context:                     ✅ Model loads with ctx-size 32768
+```
+
+### What's NOT Yet Done
+
+| Item | Status | Notes |
+|------|--------|-------|
+| TQ3_4S MoE model support | ❌ Blocked | Requires llama.cpp built from source with CUDA driver stubs |
+| Faster inference (107 tok/s) | ❌ Blocked | Blocked on MoE model above |
+| Dockerfile.llm-qwen36 | ⚠️ Not used | Running pre-built image directly; Dockerfile kept as reference |
+| SGLang/Orpheus coexistence | ⚠️ Manual | Must stop SGLang containers before LLM (no /evict endpoint on SGLang) |
+| Chat history persistence | ❌ Not implemented | Conversations lost on page refresh |
 
 # Test health
 curl http://localhost:8006/health

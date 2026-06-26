@@ -1,7 +1,7 @@
 # Arthur TTS Lab
 
-> 28-engine TTS benchmark + 1 LLM (Qwen 3.6) + 5-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
-> **Deployed to:** `arthur@192.168.0.87:8001` | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
+> 28-engine TTS benchmark + 1 LLM (Qwen 3.6 27B) + 5-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> **Deployed to:** `arthur@192.168.0.87:8009` (TTS) / `:8006` (LLM) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
 
@@ -26,13 +26,35 @@ Base (nvidia/cuda:12.8.2-runtime-ubuntu22.04)
   │   └── Engine:mid        VibeVoice, Higgs (experimental), port 8103
   ├── Stack:legacy     torch 1.13 + transformers 4.46 + CUDA 11.7
   │   └── Engine:legacy     IndexTTS, Parler (blocked), port 8102
-  ├── LLM:qwen36       llama.cpp + CUDA 12.8, port 8006 (Qwen 3.6 reasoning/coding)
-  └── Orchestrator     No ML libs — pure HTTP dispatch, port 8001
+  ├── LLM:qwen36       Pre-built llama.cpp server-cuda, port 8006 (Qwen 3.6 27B reasoning/coding)
+  └── Orchestrator     No ML libs — pure HTTP dispatch, port 8009
 
 GPU containers (profiles: gpu, sglang, llm):
   ├── Orpheus   vllm + CUDA 12.1, port 8002 (blocked)
   ├── SGLang    Custom pip-built SGLang, port 8005 (for VibeVoice/Higgs/S2-Pro)
-  └── LLM       llama.cpp + CUDA 12.8 (Qwen 3.6 35B-A3B MoE, ~13 GB VRAM)
+  └── LLM       Pre-built ghcr.io/ggml-org/llama.cpp:server-cuda (Qwen 3.6 27B Q3_K_M, ~14 GB VRAM)
+```
+
+### LLM Deployment (Actual)
+
+```
+Container:  tts-lab-llm-qwen36
+Image:      ghcr.io/ggml-org/llama.cpp:server-cuda (pre-built, NO source compilation)
+Model:      batiai/Qwen3.6-27B-GGUF → Qwen-Qwen3.6-27B-Q3_K_M.gguf (~13 GB)
+VRAM:       ~13.6 GB (model + 32K KV cache on GPU)
+Speed:      ~23 tok/s (all 99 layers on GPU)
+Context:    32768 tokens (q4_0 KV cache, ~1.5 GB)
+Thinking:   Enabled (<think> tags — reasoning_content in API response)
+API:        OpenAI-compatible POST /v1/chat/completions on port 8006
+
+Deploy command (on VM):
+  docker run -d --name tts-lab-llm-qwen36 --gpus all --network host \
+    -v /opt/models:/opt/models --restart unless-stopped \
+    ghcr.io/ggml-org/llama.cpp:server-cuda \
+    --model /opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf \
+    --host 0.0.0.0 --port 8006 --n-gpu-layers 99 --ctx-size 32768 \
+    --parallel 1 --cache-type-k q4_0 --cache-type-v q4_0 \
+    --flash-attn on --jinja --threads 4 --threads-batch 8
 ```
 
 **Orchestrator mode** (`ORCHESTRATOR_MODE=1`): the orchestrator loads zero ML libraries. All engine requests route via HTTP to engine containers using `{ENGINE_NAME}_URL` environment variables. The web UI is served by the orchestrator.
@@ -103,12 +125,24 @@ python scripts/benchmark/bench_all.py         # Batch benchmark against server
 ### VM Management
 ```bash
 ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87
-sudo journalctl -u arthur-lab -f              # Follow TTS Lab logs
-sudo journalctl -u arthur-imglab.service -n 50 --no-pager  # Image Lab logs
-sudo systemctl restart arthur-lab             # Restart bare-metal service
-curl -s http://192.168.0.87:8001/status       # Engine status JSON
-curl -s http://192.168.0.87:8002/status       # Image Lab status
-nvidia-smi                                    # GPU status (on VM)
+
+# Container status
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+
+# TTS Lab
+curl -s http://192.168.0.87:8009/status       # Engine status JSON
+curl -s http://localhost:8009/                # Web UI
+
+# LLM (Qwen 3.6)
+curl -s http://localhost:8006/health           # LLM health
+curl -s http://localhost:8006/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"messages":[{"role":"user","content":"hello"}],"max_tokens":50}'  # Direct LLM test
+
+# VRAM
+docker exec tts-lab-llm-qwen36 nvidia-smi      # Or: nvidia-smi on host
+docker logs tts-lab-llm-qwen36                 # LLM container logs
+docker logs tts-lab-orchestrator               # Orchestrator logs
 ```
 
 ### Ansible
@@ -119,16 +153,49 @@ ansible-playbook -i ansible/inventory.yml ansible/site.yml --tags deploy
 
 ## API Endpoints
 
+### Orchestrator (port 8009)
+
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Web UI |
+| `GET` | `/` | Web UI (TTS + LLM chat) |
 | `GET` | `/status` | JSON: all engines, availability, RAM estimates |
-| `POST` | `/synthesize/{engine}` | Synthesize audio — returns WAV binary |
+| `POST` | `/synthesize/{engine}` | Synthesize audio (TTS) or generate text (LLM) |
 | `POST` | `/synthesize/{engine}` (multipart) | With reference WAV upload for voice cloning |
-| `GET` | `/logs` | Last 200 server-side log entries (ring buffer) |
+| `GET` | `/logs` | Last 400 server-side log entries (ring buffer) |
 | `POST` | `/refresh` | Re-probe all engine availability without restart |
 | `GET` | `/models/{engine}` | Engine metadata |
 | `POST` | `/models/{engine}/load` | Force-load an engine into memory |
+
+### LLM Container (port 8006) — OpenAI-compatible
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/v1/chat/completions` | Chat completion (OpenAI-compatible) |
+| `GET` | `/health` | Health check (returns 200 OK) |
+| `GET` | `/v1/models` | Model list |
+| `GET` | `/slots` | Slot/VRAM status |
+
+### Engine Containers (ports 8101-8104)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/health` | Engine availability + GPU VRAM info |
+| `POST` | `/synthesize` | Synthesize audio (returns base64 WAV) |
+| `POST` | `/evict` | **Evict current engine from VRAM** — called by orchestrator before LLM loads |
+| `POST` | `/unload` | Manually unload current engine (debug) |
+
+### LLM Synthesis Flow (qwen36)
+
+```
+POST /synthesize/qwen36 → orchestrator → Phase 1: POST /evict to ALL TTS containers
+                                       → Phase 2: Verify VRAM clean
+                                       → Phase 3: POST /v1/chat/completions → llama.cpp
+                                       → Response: {text, reasoning, tokens, tokens_per_sec, model, finish_reason}
+
+Response differs from TTS engines:
+  TTS:  {audio_b64, sample_rate, synth_time_ms, rtf}
+  LLM:  {text, reasoning, tokens, tokens_per_sec, model, finish_reason, synth_time_ms}
+```
 
 ## Code Conventions
 
