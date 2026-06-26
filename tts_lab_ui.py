@@ -1535,6 +1535,37 @@ async function refreshAvailability() {
   } finally {
     if (btn) btn.disabled = false;
   }
+async function evictAllVRAM() {
+  const btn = document.getElementById('btn-evict');
+  if (!btn) return;
+  if (!confirm('Evict ALL TTS engines from VRAM across all containers?
+
+This unloads every loaded TTS model. Engines will reload lazily on next synthesis.')) return;
+  btn.disabled = true;
+  btn.textContent = 'Evicting...';
+  dbg('VRAM','-','Evicting all TTS engines from VRAM...');
+  dbg('REQUEST','-','POST /evict-all');
+  try {
+    const r = await fetch(API + '/evict-all', {method:'POST'});
+    const data = await r.json();
+    dbg('REQUEST','-','HTTP ' + r.status);
+    dbg('VRAM','-','Evicted: ' + data.evicted_count + ' engines across ' + data.containers_checked + ' containers');
+    if (Object.keys(data.errors).length > 0) {
+      dbg('VRAM','-','Errors: ' + JSON.stringify(data.errors));
+    }
+    await refreshStatus();
+    showToast('Evicted ' + data.evicted_count + ' engine(s) from VRAM');
+    btn.textContent = 'Done';
+    setTimeout(function() { btn.textContent = 'Evict VRAM'; }, 2000);
+  } catch(e) {
+    dbg('ERROR','-','Eviction failed: ' + e);
+    showToast('Eviction failed: ' + e);
+    btn.textContent = 'Evict VRAM';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1923,7 +1954,8 @@ def build_page() -> str:
     </div>
   </div>
   {gpu_badge}
-  <button id="btn-refresh" class="btn-action" onclick="refreshAvailability()" style="white-space:nowrap">🔄 Refresh</button>
+  <button id="btn-refresh" class="btn-action" onclick="evictAllVRAM()" style="white-space:nowrap" title="Evict all TTS engines from VRAM">Evict VRAM</button>
+	  <button id="btn-refresh" class="btn-action" onclick="refreshAvailability()" style="white-space:nowrap">🔄 Refresh</button>
 </div>
 
 <div class="main-wrap">

@@ -250,6 +250,25 @@ async def refresh_availability():
     })
 
 
+@app.post("/evict-all")
+async def evict_all_tts():
+    """Evict all TTS engines from VRAM across all engine containers.
+
+    Called by the UI 'Evict VRAM' button. Useful before loading the LLM
+    or when VRAM needs to be cleared for any reason.
+    """
+    from tts_lab_dispatch import _evict_all_tts_engines
+    results = _evict_all_tts_engines()
+    evicted = sum(1 for v in results.values() if v.get("evicted"))
+    errors = {k: v for k, v in results.items() if "error" in v}
+    return JSONResponse({
+        "evicted_count": evicted,
+        "containers_checked": len(results),
+        "errors": errors,
+        "details": {k: v for k, v in results.items() if "error" not in v},
+    })
+
+
 @app.post("/upload")
 async def upload_audio(file: UploadFile = File(...)):
     uid  = str(uuid.uuid4())[:8]
