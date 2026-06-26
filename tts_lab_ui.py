@@ -1251,16 +1251,13 @@ function addChatMessage(model, role, content, metadata) {
   let html = content
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   // Convert markdown code blocks to HTML
-  html = html.replace(/```(\w*)
-?([\s\S]*?)```/g,
-    '<pre><code>$2</code></pre>');
+  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
   // Convert inline code
   html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
   // Convert bold
   html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   // Line breaks
-  html = html.replace(/
-/g, '<br>');
+  html = html.replace(/\n/g, '<br>');
   div.innerHTML = header + copyBtn + html;
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
