@@ -494,38 +494,6 @@ def _build_params(name: str) -> str:
             )
             + '<p class="text-muted small mt-1">Upload a 3-10s WAV of a Persian speaker. '
             'Long text is auto-split into shorter segments.</p>'
-            + '<script>'
-            # Populate dropdown from /refs endpoint
-            'fetch("/refs").then(r=>r.json()).then(data=>{'
-            '  const sel=document.getElementById("manatts-ref-select");'
-            '  let hasSample=false;'
-            '  data.refs.forEach(r=>{'
-            '    const o=document.createElement("option");'
-            '    o.value=r.id; o.textContent=r.name+" ("+(r.size/1024).toFixed(0)+" KB)";'
-            '    sel.appendChild(o);'
-            '    if(r.id==="sample") hasSample=true;'
-            '  });'
-            '  if(hasSample) sel.value="sample";'
-            '  document.getElementById("manatts-ref-info").textContent=data.refs.length+" file(s) available";'
-            '}).catch(()=>{});'
-            # Upload function that refreshes dropdown
-            'async function uploadManattsRef(){'
-            '  const input=document.getElementById("man-file");'
-            '  const status=document.getElementById("man-status");'
-            '  if(!input.files.length) return;'
-            '  const fd=new FormData(); fd.append("file",input.files[0]);'
-            '  status.textContent="Uploading...";'
-            '  try{'
-            '    const r=await fetch("/upload",{method:"POST",body:fd});'
-            '    const d=await r.json();'
-            '    status.textContent="OK: "+d.id;'
-            '    const sel=document.getElementById("manatts-ref-select");'
-            '    const o=document.createElement("option");'
-            '    o.value=d.id; o.textContent=d.filename+" (just uploaded)";'
-            '    sel.appendChild(o); sel.value=d.id;'
-            '  }catch(e){status.textContent="Upload failed: "+e;}'
-            '}'
-            '</script>'
         )
 
     if name == "chatterboxturbo":
