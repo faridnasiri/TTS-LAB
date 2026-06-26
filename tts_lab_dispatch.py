@@ -589,8 +589,10 @@ def _do_synth_llm(name: str, text: str, params: dict) -> dict:
          f"({tok_per_sec} tok/s)  "
          f"response={response_text[:80]!r}{'…' if len(response_text) > 80 else ''}")
 
+    reasoning = choice.get("message", {}).get("reasoning_content", "")
     return {
         "text": response_text,
+        "reasoning": reasoning,
         "tokens": total_tokens,
         "tokens_per_sec": tok_per_sec,
         "model": data.get("model", "qwen3.6"),
