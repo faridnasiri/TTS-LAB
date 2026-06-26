@@ -239,6 +239,7 @@ Response differs from TTS engines:
 | `docs/reference/GPU_UPGRADE_ANALYSIS.md` | GPU selection analysis |
 | `docs/benchmarks/*.md` | RTF benchmark results by date |
 | `docs/containerization/07-QWEN36-LLM-PLAN.md` | Qwen 3.6 LLM integration plan — model selection, VRAM strategy, eviction protocol |
+| `docs/containerization/08-QWEN36-DEPLOYMENT.md` | **Qwen 3.6 LLM deployment reference** — full deploy guide, API, VRAM budget, troubleshooting |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
 | `docs/issues/*.md` | Bug investigations (VibeVoice, S2-Pro, ChatTTS) |
