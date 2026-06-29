@@ -588,3 +588,17 @@ try:
         _sig.kaiser = _kaiser
 except Exception:
     pass
+
+# ── torchcodec dummy stub conflict (v99.0.0 stub → transformers ASR crash) ───
+# engine-current installs a dummy torchcodec-99.0.0 (just class AudioDecoder: pass)
+# to satisfy f5-tts. But transformers 5.12.1's automatic_speech_recognition pipeline
+# calls is_torchcodec_available() → True, then isinstance(inputs,
+# torchcodec.decoders.AudioDecoder) which hits a spurious AttributeError:
+# "module 'torchcodec' has no attribute 'decoders'" at runtime even though
+# the attribute exists when checked directly. Force is_torchcodec_available
+# to return False so the ASR pipeline uses its default (non-torchcodec) path.
+try:
+    import transformers.pipelines.automatic_speech_recognition as _asr_pipe
+    _asr_pipe.is_torchcodec_available = lambda: False
+except Exception:
+    pass

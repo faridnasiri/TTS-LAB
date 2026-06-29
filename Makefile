@@ -89,6 +89,7 @@ deploy-orchestrator: build-orchestrator
 		-v /opt/models:/opt/models \
 		-v /tmp/tts_uploads:/tmp/tts_uploads \
 		-v /opt/arthur/reference_voices:/opt/arthur/reference_voices \
+		-v /var/run/docker.sock:/var/run/docker.sock \
 		-e ORCHESTRATOR_MODE=1 \
 		-e HF_HOME=/opt/models/huggingface \
 		-e XDG_CACHE_HOME=/opt/models/cache \
@@ -111,9 +112,18 @@ deploy-orchestrator: build-orchestrator
 		-e OMNIVOICE_URL=http://localhost:8101 \
 		-e ZONOS_URL=http://localhost:8101 \
 		-e CSM_URL=http://localhost:8101 \
+		-e XTTS_URL=http://localhost:8101 \
+		-e COSYVOICE_URL=http://localhost:8101 \
+		-e OPENVOICE_URL=http://localhost:8101 \
+		-e MANATTS_URL=http://localhost:8101 \
+		-e MMSFAS_URL=http://localhost:8101 \
 		-e QWEN3TTS_URL=http://localhost:8104 \
 		-e VIBEVOICE_URL=http://localhost:8103 \
 		-e HIGGS_URL=http://localhost:8103 \
+		-e INDEXTTS_URL=http://localhost:8102 \
+		-e PARLER_URL=http://localhost:8102 \
+		-e ORPHEUS_URL=http://localhost:8002 \
+		-e S2PRO_SGLANG_URL=http://localhost:8005/v1/audio/speech \
 		-e QWEN36_URL=http://localhost:8006 \
 		--restart unless-stopped \
 		tts-lab-orchestrator:latest \

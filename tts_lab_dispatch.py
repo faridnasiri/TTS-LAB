@@ -22,6 +22,73 @@ from tts_lab_config import (
 )
 from tts_lab_utils import _wav_dur
 
+# ── LLM Container Management (Docker socket) ─────────────────────
+# The LLM (Qwen 3.6) uses ~13 GB VRAM. Heavy TTS engines need that VRAM,
+# so we stop the LLM container before heavy TTS synthesis, and restart it
+# when the LLM is called. Requires /var/run/docker.sock mounted in the
+# orchestrator container.
+_LLM_CONTAINER_NAME = "tts-lab-llm-qwen36"
+_DOCKER_SOCK = "/var/run/docker.sock"
+_HAS_DOCKER_SOCK = os.path.exists(_DOCKER_SOCK)
+
+
+def _docker_api(method: str, path: str, timeout: float = 10.0) -> tuple[int, str]:
+    """Call Docker Engine API via Unix socket. Returns (status_code, body)."""
+    import httpx
+    transport = httpx.HTTPTransport(uds=_DOCKER_SOCK)
+    with httpx.Client(transport=transport, timeout=timeout) as client:
+        r = client.request(method, f"http://localhost{path}")
+        return r.status_code, r.text
+
+
+def _llm_container_running() -> bool:
+    """Check if the LLM container is currently running."""
+    if not _HAS_DOCKER_SOCK:
+        return False
+    try:
+        code, body = _docker_api("GET", "/v1.49/containers/tts-lab-llm-qwen36/json")
+        if code == 200:
+            import json as _j
+            state = _j.loads(body).get("State", {})
+            return state.get("Running", False)
+    except Exception:
+        pass
+    return False
+
+
+def _stop_llm_container() -> bool:
+    """Stop the LLM container to free VRAM for heavy TTS engines."""
+    if not _HAS_DOCKER_SOCK:
+        slog("LLM", "evict", "No Docker socket — cannot stop LLM container")
+        return False
+    try:
+        if not _llm_container_running():
+            slog("LLM", "evict", "LLM container already stopped")
+            return True
+        code, _ = _docker_api("POST", f"/v1.49/containers/{_LLM_CONTAINER_NAME}/stop")
+        ok = code in (204, 304)
+        slog("LLM", "evict", f"Stop LLM container → HTTP {code} {'✓' if ok else '✗'}")
+        return ok
+    except Exception as e:
+        slog("LLM", "evict", f"Failed to stop LLM container: {e}")
+        return False
+
+
+def _start_llm_container() -> bool:
+    """Start the LLM container (called before LLM inference)."""
+    if not _HAS_DOCKER_SOCK:
+        return False
+    try:
+        if _llm_container_running():
+            return True
+        code, _ = _docker_api("POST", f"/v1.49/containers/{_LLM_CONTAINER_NAME}/start")
+        ok = code in (204, 304)
+        slog("LLM", "start", f"Start LLM container → HTTP {code} {'✓' if ok else '✗'}")
+        return ok
+    except Exception as e:
+        slog("LLM", "start", f"Failed to start LLM container: {e}")
+        return False
+
 # ── Remote engine URL resolution ─────────────────────────────────
 # Engine containers expose HTTP APIs. URLs are set via env vars.
 # Format: PIPER_URL=http://engine-current:8101
@@ -437,6 +504,10 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
     if name in ("vibevoice", "higgs", "s2pro"):
         return _do_synth_sglang(name, text, params, url)
 
+    # Heavy engines need significant VRAM — evict LLM first if it's running
+    if name in HEAVY and _HAS_DOCKER_SOCK:
+        _stop_llm_container()
+
     # Standard engine server API
     t0 = time.perf_counter()
     r = httpx.post(
@@ -537,6 +608,10 @@ def _do_synth_llm(name: str, text: str, params: dict) -> dict:
     """
     import httpx
     import json as _json
+
+    # ── Phase 0: Ensure LLM container is running ──────────────────
+    if _HAS_DOCKER_SOCK:
+        _start_llm_container()
 
     # ── Phase 1: Global eviction ──────────────────────────────────
     slog("LLM", name, "Evicting all TTS engines before LLM inference ...")

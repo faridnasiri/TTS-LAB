@@ -62,7 +62,11 @@ services:
     container_name: tts-lab-orchestrator
     ports:
       - "8001:8001"
-    <<: *model-volume
+    volumes:
+      - /opt/models:/opt/models
+      - /tmp/tts_uploads:/tmp/tts_uploads
+      - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env
       ORCHESTRATOR_MODE: "1"
