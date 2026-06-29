@@ -110,7 +110,7 @@ engines:
     container: engine-current
     stack: current
     vram_est_mb: 2000
-    notes: 600+ languages. Real-time (0.67× RTF).
+    notes: 600+ languages. Real-time (0.67× RTF). Voice cloning needs is_torchcodec_available=False shim (torchcodec v99.0.0 stub conflicts with ASR pipeline). LLM must be evicted before loading — Docker socket auto-eviction added 2026-06-29.
   zonos:
     status: supported
     container: engine-current

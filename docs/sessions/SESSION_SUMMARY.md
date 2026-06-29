@@ -1,6 +1,51 @@
 # Arthur Server — Session Summary
-> Chat session: 2026-03-23 → 2026-04-20  
+> Chat sessions: 2026-03-23 → 2026-06-29
 > Branch: `main`
+
+---
+
+## Session 2026-06-27/29 — Remote Engine Routing, OmniVoice Fix, LLM VRAM Coordination
+
+### What Was Fixed
+
+Three bugs were preventing remote TTS engines (particularly OmniVoice) from working through the orchestrator.
+
+#### Bug 1: Missing Engine URL Env Vars
+- **Symptom:** `POST /synthesize/omnivoice` → `"Not available: pip install omnivoice needed"`
+- **Root cause:** Only 7 of 28 `{ENGINE}_URL` env vars were set in the orchestrator container. Missing engines fell through to local dispatch (no ML libs).
+- **Fix:** Added 21 missing `-e {ENGINE}_URL=...` lines to Makefile `deploy-orchestrator`. Recreated container with all 28 URLs.
+- **Files:** `Makefile`, `docker-compose.yml`
+
+#### Bug 2: OmniVoice Voice Cloning — torchcodec Stub Conflict
+- **Symptom:** `audio_prompt_id` → 500 error: `AttributeError: module 'torchcodec' has no attribute 'decoders'`
+- **Root cause:** `torchcodec` v99.0.0 dummy stub installed for f5-tts compatibility. When ASR pipeline actually uses it (not just imports), `torchcodec.decoders` is inaccessible at runtime.
+- **Fix:** Monkey-patched `is_torchcodec_available` → `False` in `tts_lab_shims.py`.
+- **Files:** `tts_lab_shims.py`
+- **Note:** Monkey patch. Proper fix requires container isolation (f5-tts vs omnivoice) or real torchcodec.
+
+#### Bug 3: LLM VRAM Blocking Heavy TTS
+- **Symptom:** CUDA OOM when loading heavy TTS engines (LLM using ~13.2 GB VRAM)
+- **Root cause:** LLM→TTS eviction existed, but TTS→LLM eviction was missing.
+- **Fix:** Mounted Docker socket in orchestrator. Added `_stop_llm_container()` / `_start_llm_container()` in dispatch. Heavy TTS stops LLM; LLM inference restarts it.
+- **Files:** `tts_lab_dispatch.py`, `Makefile`, `docker-compose.yml`
+
+### Verification
+
+- 13 of 15 tested engines working (piper, kokoro, melo, chattts, f5tts, bark, outetts, chatterbox, fishspeech, zonos, qwen3tts, omnivoice, omnivoice+clone)
+- 2 pre-existing failures: dia, styletts2 (hang >180s, not caused by these changes)
+- 11 unavailable (expected — optional containers not running or blocked engines)
+
+### Commit
+
+`eb48b67` — fix: remote engine routing, omnivoice voice cloning, LLM VRAM eviction (4 files)
+
+### Documentation Updated
+
+- `docs/containerization/04-ADHOC-LOG.md` — Section 11: full incident report
+- `docs/containerization/06-STATE-2026-06-29.md` — New state snapshot
+- `docs/reference/KNOWN_ISSUES.md` — Rewritten with all fixed + open issues
+- `docs/engine_compatibility.yaml` — Updated omnivoice notes
+- `docs/sessions/SESSION_SUMMARY.md` — This entry
 
 ---
 

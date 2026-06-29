@@ -956,3 +956,82 @@ scp arthur@192.168.0.87:/opt/tts-lab-docker/docker/Dockerfile.\* docker/
 ---
 
 > **Next:** IaC rewrite using Ansible + Docker Compose + GitHub Actions. Every lesson from this ad-hoc deployment becomes a requirement. Every error encountered becomes a test case. The goal: `git clone && docker compose up -d` works on ANY Ubuntu 22.04 VM with an NVIDIA GPU.
+
+---
+
+## 11. Session 2026-06-27/29 — Remote Engine Routing + OmniVoice Fix
+
+### Context
+
+The orchestrator container had been deployed with only 7 of 28 `{ENGINE}_URL` environment variables. Any engine whose `_URL` env var was missing fell through to **local dispatch** — `_ensure_loaded()` tried to `pip install` the engine's Python package, which fails because the orchestrator container has no ML libraries or GPU access.
+
+Specific symptom: `POST /synthesize/omnivoice` returned `"Not available: pip install omnivoice needed"`.
+
+Three distinct bugs were found and fixed.
+
+### Bug 1: Missing Engine URL Env Vars
+
+**Root cause:** The `Makefile`'s `deploy-orchestrator` target only passed 7 `_URL` env vars (`PIPER_URL`, `KOKORO_URL`, `MELO_URL`, `CHATTTS_URL`, `BARK_URL`, `QWEN3TTS_URL`, `QWEN36_URL`). The other 21 engines (including `OMNIVOICE_URL`) were missing. The `docker-compose.yml` had all 28 URLs defined, but the Makefile (used for actual deployment) did not.
+
+**Fix:** Added 21 missing `-e {ENGINE}_URL=...` lines to Makefile `deploy-orchestrator` target. Recreated orchestrator container with all URLs.
+
+**Files changed:** `Makefile` (lines 98-126), `docker-compose.yml` (volumes consistency)
+
+**Lesson:** The Makefile and docker-compose.yml must stay in sync. Every engine added to `MODEL_ORDER` must get a `_URL` in both files.
+
+### Bug 2: OmniVoice Voice Cloning — torchcodec Stub Conflict
+
+**Root cause:** `torchcodec` v99.0.0 is a **dummy stub** installed to satisfy `f5-tts`'s pip dependency. The stub consists of:
+```python
+# __init__.py
+from .decoders import AudioDecoder
+
+# decoders.py
+class AudioDecoder:
+    pass
+```
+
+When OmniVoice transcribes reference audio for voice cloning (`audio_prompt_id`), it calls `inst.transcribe()` → HuggingFace ASR pipeline → `is_torchcodec_available()` returns `True` (because the package exists) → `isinstance(inputs, torchcodec.decoders.AudioDecoder)` → **AttributeError: module 'torchcodec' has no attribute 'decoders'**.
+
+The attribute exists when checked directly (`hasattr(torchcodec, 'decoders')` → True), but fails at runtime inside the transformers pipeline context. Cause: likely a Python module-loading race when torchcodec is partially loaded or garbage-collected during the engine eviction/reload cycle.
+
+**Fix:** Monkey-patched `is_torchcodec_available` to return `False` in `tts_lab_shims.py`. This forces the ASR pipeline to use its default (non-torchcodec) preprocessing path, which works correctly.
+
+**Files changed:** `tts_lab_shims.py` (lines 597-610)
+
+**Lesson:** Dummy pip packages with stub implementations are dangerous — they satisfy `import` checks but break when libraries actually try to USE the objects. A proper fix would isolate f5-tts and omnivoice into separate containers so the torchcodec dummy isn't needed.
+
+### Bug 3: LLM VRAM Blocking Heavy TTS Engines
+
+**Root cause:** The LLM (Qwen 3.6 via llama.cpp server) occupies ~13.2 GB VRAM. Heavy TTS engines (OmniVoice ~1.2 GB + transformers warmup ~3 GB) need ≥4 GB peak. With the LLM loaded, only ~700 MB free — not enough.
+
+The existing architecture already had LLM→TTS eviction (`_evict_all_tts_engines()` called before LLM inference). But the **reverse** was missing — nothing evicted the LLM when a heavy TTS engine needed VRAM.
+
+**Fix — Two-part solution:**
+
+1. **Orchestrator container now has Docker socket access** (`-v /var/run/docker.sock:/var/run/docker.sock`). This allows the orchestrator to start/stop the LLM container via the Docker Engine API.
+
+2. **Added `_stop_llm_container()` / `_start_llm_container()` in dispatch:**
+   - `_do_synth_remote()` for heavy engines → calls `_stop_llm_container()` before synthesis
+   - `_do_synth_llm()` → calls `_start_llm_container()` before inference
+   - Uses `httpx.HTTPTransport(uds="/var/run/docker.sock")` to call Docker API directly (no `docker` CLI needed)
+
+**Files changed:** `tts_lab_dispatch.py` (lines 28-90, 490-500, 546-549)
+
+**Architecture note:** This extends the existing eviction protocol symmetrically. Before: only LLM→TTS. After: TTS←→LLM bidirectional.
+
+### Engine Test Results (2026-06-29)
+
+Confirmed working (13 of 15 tested):
+- ✅ piper, kokoro, melo, chattts, f5tts, bark, outetts, chatterbox, fishspeech, zonos, qwen3tts, omnivoice, omnivoice+voice_clone
+
+Failed (pre-existing, not caused by these changes):
+- ❌ dia — hangs >180s (pre-existing engine issue)
+- ❌ styletts2 — hangs >180s (pre-existing engine issue)
+
+Unavailable (expected — optional containers not running):
+- cosyvoice, higgs, indextts, manatts, neutts, openvoice, orpheus, parler, qwen36, s2pro, vibevoice
+
+### Commit
+
+`eb48b67` — 4 files: `tts_lab_dispatch.py`, `tts_lab_shims.py`, `Makefile`, `docker-compose.yml`
