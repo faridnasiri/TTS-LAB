@@ -1035,3 +1035,68 @@ Unavailable (expected — optional containers not running):
 ### Commit
 
 `eb48b67` — 4 files: `tts_lab_dispatch.py`, `tts_lab_shims.py`, `Makefile`, `docker-compose.yml`
+
+---
+
+## 12. Session 2026-06-29/07-01 — Engine-Current Rebuild + Missing Dependencies
+
+### The Rebuild Problem
+
+The engine-current Docker image needed rebuilding to bake in the `tts_lab_shims.py` fix (torchcodec patch). The Docker build infrastructure on the VM repeatedly failed:
+
+| Attempt | Method | Result |
+|---|---|---|
+| 1 | BuildKit (`docker build`) | Hung at "exporting layers" — 138 GB build cache |
+| 2 | Clear cache + BuildKit | Produced corrupted 24 GB image (missing layers) |
+| 3 | Legacy builder (`DOCKER_BUILDKIT=0`) | Hung at pip install step (pipe buffering) |
+| 4 | Legacy builder (output to file) | Hung at step 14/41 — `docker commit` lock |
+
+**Root cause:** The Docker build kept stalling at different stages. Clearing the 138 GB BuildKit cache helped (freed ~80 GB disk), but the legacy builder also hung. The `docker commit` approach worked — but the intermediate image (step 14/41) was missing later pip installs from the full Dockerfile.
+
+### Manual Rebuild — What Was Missing
+
+Starting from intermediate image `a8fd03a5e364` (step 14 of 41 in `Dockerfile.engine-current`), the following were installed manually:
+
+| Category | Packages | Why Missing |
+|---|---|---|
+| **Engine packages** | `omnivoice`, `ChatTTS`, `bark`, `outetts`, `chatterbox-tts`, `fish-speech`, `zonos`, `coqui-tts`, `TTS` | Steps 15-22 of Dockerfile |
+| **Chatterbox deps** | `resemble-perth` (not `perth`!), `s3tokenizer`, `conformer`, `diffusers`, `pyloudnorm`, `spacy-pkuseg` | chatterbox-tts 0.1.7 requires `resemble-perth` not `perth` |
+| **Transformers** | `transformers` from git main (5.13.0.dev0) | `HiggsAudioV2TokenizerModel` only in git, not PyPI 5.12.1 |
+| **OmniVoice dep** | `soxr` | Needed by transformers 5.13 for `higgs_audio_v2_tokenizer` |
+| **Build tools** | `python3-dev`, `gcc` | Triton JIT compiler needs gcc to build CUDA stubs |
+| **Patches** | `patch_transformers_stubs.py`, `fix_transformers_shims.py` | Stack-image patches add `SequenceSummary` stub + fix `auto_docstring` |
+
+### Critical Discovery: `perth` vs `resemble-perth`
+
+The chatterbox engine code imports `perth` and checks `perth.PerthImplicitWatermarker`. But:
+- `perth` 1.0.0 (PyPI) — does **not** have `PerthImplicitWatermarker`
+- `resemble-perth` 1.0.1 (PyPI) — **does** have `PerthImplicitWatermarker`
+
+chatterbox-tts 0.1.7's `setup.py` lists `resemble-perth` as a dependency, but the engine code does `import perth`. These two packages share the same namespace — installing `resemble-perth` makes `import perth` work with the full API. Without it, only the stub `perth` package is available.
+
+**Lesson:** When reinstalling packages with `--no-deps`, transitive namespace packages like `resemble-perth`/`perth` must be tracked explicitly.
+
+### Final Engine Test Results (2026-07-01)
+
+| Engine | Status | Sample Rate | RTF | Notes |
+|---|---|---|---|---|
+| omnivoice | ✅ OK | 24000 | 7.9× | Voice cloning (`audio_prompt_id`) |
+| omnivoice | ✅ OK | 24000 | 4.9× | Basic TTS (no ref audio) |
+| chatterbox | ✅ OK | 24000 | 37.7× | Persian model |
+| chatterboxturbo | ✅ OK | 24000 | 13.9× | One-step distilled |
+| piper | ✅ OK | 22050 | ~1.1× | CPU ONNX |
+
+### Commit + Image State
+
+- **`4dbda55`** — 5 doc files from 2026-06-29 session
+- **Orchestrator image:** Properly rebuilt from repo via `make deploy-orchestrator`
+- **Engine-current image:** Committed from running container (`docker commit`). All fixes + deps baked in. Image ID: committed 2026-07-01.
+- **Not pushed to GHCR** — the committed image exists only on the VM
+
+### Docker Infrastructure Issues (Ongoing)
+
+The VM's Docker daemon exhibits several problems worth investigating:
+1. **`docker build` hangs** — both BuildKit and legacy builder stall unpredictably
+2. **`docker commit` hangs** — took 15+ minutes before being killed
+3. **Container name reservations persist after deletion** — Docker reports name conflicts for non-existent containers
+4. **Workaround that works:** `docker run` from committed images, `docker cp`, `docker exec`, pip install in running containers

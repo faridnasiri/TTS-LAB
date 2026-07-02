@@ -4,6 +4,40 @@
 
 ---
 
+## Session 2026-07-01 — Engine-Current Rebuild, Missing Deps, Final Verification
+
+### Engine-Current Image Rebuild
+
+Docker build on VM repeatedly hung (BuildKit, legacy builder). See ADHOC-LOG §12 for full details. Ended up building from intermediate image + manual pip installs + `docker commit`.
+
+### Missing Dependencies Discovered
+
+The intermediate image (step 14/41) was missing these packages that the full Dockerfile would have installed:
+
+- **`resemble-perth`** (not `perth`!) — chatterbox needs `PerthImplicitWatermarker`
+- **`s3tokenizer`**, `conformer`, `diffusers`, `pyloudnorm` — chatterbox deps
+- **`transformers` from git main** — `HiggsAudioV2TokenizerModel` not in PyPI 5.12.1
+- **`soxr`** — needed by transformers git for audio resampling
+- **`python3-dev`, `gcc`** — triton JIT needs gcc to compile CUDA stubs
+
+### Final Verified Engines (2026-07-01)
+
+| Engine | Status |
+|---|---|
+| omnivoice + voice clone | ✅ sr=24000, rtf=7.9× |
+| omnivoice basic | ✅ sr=24000, rtf=4.9× |
+| chatterbox (persian) | ✅ sr=24000, rtf=37.7× |
+| chatterboxturbo | ✅ sr=24000, rtf=13.9× |
+| piper | ✅ sr=22050, rtf=1.1× |
+
+### Documentation Updated
+
+- `04-ADHOC-LOG.md` — §12: rebuild saga + missing deps table
+- `06-STATE` — Updated to 2026-07-01 with test results + deps table
+- `SESSION_SUMMARY.md` — This entry
+
+---
+
 ## Session 2026-06-27/29 — Remote Engine Routing, OmniVoice Fix, LLM VRAM Coordination
 
 ### What Was Fixed
