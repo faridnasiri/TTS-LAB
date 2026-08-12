@@ -123,7 +123,35 @@ with open("output.wav", "wb") as f:
 
 Upload a reference WAV file for voice cloning. Returns an ID that you pass as `audio_prompt_id` in synthesis params.
 
-**Request:** `multipart/form-data` with field `file` (WAV file)
+**Request:** `multipart/form-data`:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `file` | ✅ | The WAV file. **The multipart `filename` of this part becomes the display name** shown in the UI dropdown — set it to the voice name you want (it does NOT have to match the local file path). |
+| `lang` | optional | Language tag: `fa` / `en` / `other`. Shown in the dropdown as `فارسی (FA)` / `English (EN)` / `Other`. Omit or empty for unknown. |
+
+A sidecar `{id}.json` is stored next to the WAV preserving the display name + language, so they survive restarts.
+
+**Examples — curl (name = the `;filename=` part):**
+```bash
+# Upload "arash_fa.wav" from disk, display name "arash_fa.wav", Farsi
+curl -X POST http://192.168.0.87:8009/upload \
+  -F "file=@/path/to/arash_fa.wav;filename=arash_fa.wav" \
+  -F "lang=fa"
+
+# Same file, but display name "Arash (Farsi)" and no language tag
+curl -X POST http://192.168.0.87:8009/upload \
+  -F "file=@/path/to/arash_fa.wav;filename=Arash (Farsi).wav"
+```
+
+**Example — Python (`requests`):**
+```python
+import requests
+r = requests.post("http://192.168.0.87:8009/upload",
+    files={"file": ("Arash (Farsi).wav", open("arash_fa.wav", "rb"), "audio/wav")},
+    data={"lang": "fa"})
+uid = r.json()["id"]   # → "a1b2c3d4"
+```
 
 **Response:**
 ```json
@@ -134,22 +162,104 @@ Upload a reference WAV file for voice cloning. Returns an ID that you pass as `a
 }
 ```
 
-**⚠️ Container mode limitation:** Reference audio is uploaded to the orchestrator but file paths are not synced to engine containers. Voice cloning with `audio_prompt_id` only works in bare-metal (local) mode. See [Voice Cloning](#voice-cloning) for workarounds.
+Then pass `audio_prompt_id: "a1b2c3d4"` in the synthesis params of `/synthesize/{engine}`.
+
+**Container mode:** works — both `/opt/arthur/reference_voices/` and `/tmp/tts_uploads/` are bind-mounted into every engine container, and engines resolve reference IDs from both directories (shared `_ref_wav_path()` resolver in `tts_lab_engines.py`). The orchestrator forwards `audio_prompt_id` unchanged.
 
 ---
 
 ### `GET /refs`
 
-List all available reference WAV files (pre-shipped + uploaded).
+List all available reference WAV files (pre-shipped + uploaded), with original filename + language metadata from sidecar files.
 
 **Response:**
 ```json
 {
   "refs": [
-    { "id": "arthur_ref", "name": "arthur_ref.wav", "size": 144012 },
-    { "id": "a1b2c3d4",  "name": "my_voice.wav  (uploaded)", "size": 48044 }
+    {
+      "id": "arthur_ref",
+      "name": "arthur_ref.wav",
+      "original_name": "",
+      "lang": "",
+      "lang_label": "",
+      "size": 144012,
+      "source": "reference"
+    },
+    {
+      "id": "a1b2c3d4",
+      "name": "my_voice.wav",
+      "original_name": "my_voice.wav",
+      "lang": "fa",
+      "lang_label": "فارسی (FA)",
+      "size": 48044,
+      "source": "uploaded"
+    }
   ]
 }
+```
+
+---
+
+### `GET /refs/{id}/audio`
+
+Serve a reference voice WAV by id (used by the ▶ preview button in the UI dropdown). Resolved via the refs scan — no path traversal.
+
+**Response:** `audio/wav` body; `404` if id not found.
+
+---
+
+## Reference voice storage & naming
+
+`/refs` scans exactly two directories (both host bind-mounted into the orchestrator **and every engine container** — engines resolve `audio_prompt_id` from either one via `_ref_wav_path()`):
+
+| Directory | `source` | Purpose |
+|---|---|---|
+| `/opt/arthur/reference_voices/` | `reference` | **Permanent curated voices** — survive redeploys, shipped with the container |
+| `/tmp/tts_uploads/` | `uploaded` | Voices uploaded via UI or `POST /upload` (host `/tmp` — cleared by tmpfiles after ~10 days) |
+
+**Curated voice naming convention** (applies to `/opt/arthur/reference_voices/`): `<lang>-<short-name>.wav` — e.g. `fa-ryan.wav`, `fa-john.wav`, `en-leo.wav`, `en-leo2.wav`. The filename is the display name in the dropdown; keep it short. Current deployed set (2026-08-12): **15 Farsi + 6 English** = 21 voices (ElevenLabs samples).
+
+**Voice names — pass any of these directly as `audio_prompt_id` in synthesis params:**
+
+| Farsi voices (`lang: fa`) | English voices (`lang: en`) |
+|---|---|
+| `fa-adam` · `fa-adams-replica` · `fa-alex` · `fa-ash` · `fa-brian` · `fa-charles` · `fa-david` · `fa-george` · `fa-grant` · `fa-hale` · `fa-john` · `fa-liam` · `fa-max` · `fa-mike` · `fa-ryan` | `en-brian` · `en-chris` · `en-kebin` · `en-leo` · `en-leo2` · `en-william` |
+
+Example — synthesize with the `en-leo2` voice on Chatterbox-Turbo:
+
+```bash
+curl -X POST http://192.168.0.87:8009/synthesize/chatterboxturbo \
+  -H 'Content-Type: application/json' \
+  -d '{"text":"Hello Leo, this is a cloned voice.","params":{"audio_prompt_id":"en-leo2"}}'
+```
+
+```python
+r = requests.post("http://192.168.0.87:8009/synthesize/chatterboxturbo",
+    json={"text": "Hello Leo, this is a cloned voice.",
+          "params": {"audio_prompt_id": "en-leo2"}})
+data = r.json()   # {audio_b64, sample_rate, synth_time_ms, rtf}
+```
+
+**Audio format:** mono 16-bit PCM, 22050 Hz (all engines require mono reference audio for voice cloning; 16–22.05 kHz accepted, engines resample internally).
+
+**Sidecar metadata:** an optional `{stem}.json` next to each WAV adds language + provenance:
+
+```json
+{
+  "original_name": "fa-ryan.wav",
+  "lang": "fa",
+  "source": "elevenlabs-farsi",
+  "uploaded": "2026-08-12T19:10:00Z"
+}
+```
+
+`lang` values: `fa` / `en` / `other` (anything else renders no label). `original_name` is the long/original filename — stored for traceability, **not** shown in the dropdown (the short `.wav` filename wins when `original_name` is absent). Old UI uploads are archived at `/opt/arthur/ref_archive_2026-08-12/` on the VM.
+
+**Adding a curated voice** (appears in the dropdown instantly — no restart, no code change):
+
+```bash
+scp -i ~/.ssh/id_arthur_vm my_voice.wav arthur@192.168.0.87:/home/arthur/refs-incoming/
+ssh arthur@192.168.0.87 "sudo mv /home/arthur/refs-incoming/my_voice.wav /opt/arthur/reference_voices/fa-my_voice.wav"
 ```
 
 ---
@@ -348,7 +458,7 @@ Last 200 server-side log entries (ring buffer).
 | **Size** | ~700 MB |
 | **RTF** | ~1.11× (near real-time) |
 | **VRAM** | ~1.5 GB |
-| **Languages** | 23 languages |
+| **Languages** | English (350M distilled one-step) |
 | **Voice Cloning** | ✅ Zero-shot (reference WAV) |
 | **Container** | engine-current |
 
@@ -356,16 +466,24 @@ Last 200 server-side log entries (ring buffer).
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `audio_prompt_id` | string | `""` | Reference WAV ID for voice cloning |
-| `exaggeration` | float | `0.5` | Emotion exaggeration |
-| `cfg_weight` | float | `0.5` | CFG weight |
+| `exaggeration` | float | `0.5` | ⚠ Ignored by the Turbo library (not supported in the one-step model) |
+| `cfg_weight` | float | `0.5` | ⚠ Ignored by the Turbo library (not supported in the one-step model) |
 | `temperature` | float | — | Sampling temperature |
 | `top_p` | float | — | Nucleus sampling |
 | `top_k` | int | — | Top-k sampling |
 | `repetition_penalty` | float | — | Repetition penalty |
-| `min_p` | float | — | Min probability |
+| `min_p` | float | — | ⚠ Ignored by the Turbo library (not supported in the one-step model) |
 | `norm_loudness` | bool | `true` | Normalize output loudness |
-| `seed` | string | `"0"` | Random seed |
+| `seed` | string | `"0"` | `0` = random; any non-zero value pins the RNG (deterministic) |
 | `use_g2p` | string | `"none"` | Persian G2P provider |
+| `chunk_silence_ms` | float | `350` | Silence gap between auto-chunks in ms. `0` = chunks abut directly |
+
+**Long-form behavior (auto-chunking):**
+- Text is split at sentence boundaries, then at commas; any remaining chunk > 187 chars is force-split at **150 chars** — mirroring the base Chatterbox English chunking. Each chunk is synthesized separately and stitched with a 350 ms gap.
+- Chunking is **required** for the Turbo model: past ~1,200 chars the decoder's logits degenerate into token soup (audible as broadband noise; generation is stochastic because the turbo path has no EOS forcing). Never send > ~3,500 chars in one request — the tokenizer silently truncates at 1,024 tokens.
+- Failed chunks are logged and skipped; survivors are stitched. Raises an error only if ALL chunks fail.
+- Per-call output is capped at ~40 s (1,000 speech tokens hardcoded in the library at the 25 Hz S3 token rate) — long text must be split across calls.
+- No word-level timestamps: the engine returns audio only; use OmniVoice or an external aligner for `.words.json`.
 
 ---
 
@@ -901,11 +1019,12 @@ persian_wav = base64.b64decode(r.json()["audio_b64"])
 with open("persian_output.wav", "wb") as f:
     f.write(persian_wav)
 
-# 4. Voice cloning (bare-metal mode only)
+# 4. Voice cloning
 # First upload reference audio
 with open("my_voice.wav", "rb") as f:
-    r = requests.post(f"{BASE}/upload", files={"file": f})
+    r = requests.post(f"{BASE}/upload", files={"file": f}, data={"lang": "en"})
 ref_id = r.json()["id"]
+# (or use a curated voice directly: params {"audio_prompt_id": "fa-ryan"} — no upload needed)
 
 # Then synthesize with it
 r = requests.post(f"{BASE}/synthesize/f5tts", json={

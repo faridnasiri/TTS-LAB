@@ -14,11 +14,25 @@ from pathlib import Path
 
 from tts_lab_shims  import _N_CORES, DEVICE
 from tts_lab_config import (
-    MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, INDEXTTS_DIR, OPENVOICE_MODELS_DIR,
+    MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, REFERENCE_VOICES_DIR, INDEXTTS_DIR,
+    OPENVOICE_MODELS_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
     slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
+
+
+def _ref_wav_path(ref_id: str):
+    """Resolve a reference WAV by id — checks the permanent curated dir
+    (/opt/arthur/reference_voices) AND the uploads dir, so curated voices
+    work exactly like UI uploads. Returns None when not found."""
+    if not ref_id:
+        return None
+    for d in (REFERENCE_VOICES_DIR, UPLOAD_DIR):
+        p = d / f"{ref_id}.wav"
+        if p.exists():
+            return p
+    return None
 
 
 # ── 1. Piper ──────────────────────────────────────────────────────────────────
@@ -151,8 +165,8 @@ def _synth_chattts(inst, text, params):
     spk_emb = getattr(inst, "_arthur_spk", None)
     prompt_id = params.get("audio_prompt_id", "")
     if prompt_id:
-        prompt_path = UPLOAD_DIR / f"{prompt_id}.wav"
-        if prompt_path.exists():
+        prompt_path = _ref_wav_path(prompt_id)
+        if prompt_path:
             prompt_wav, _ = _read_wav_mono_f32(prompt_path)
             # ChatTTS has a library bug: encode_prompt() format [shape|LZMA]
             # is incompatible with speaker._decode() format [LZMA-only].
@@ -258,8 +272,8 @@ def _synth_outetts(inst, text, params):
     speaker = None
     prompt_id = params.get("audio_prompt_id", "")
     if prompt_id:
-        prompt_path = UPLOAD_DIR / f"{prompt_id}.wav"
-        if prompt_path.exists():
+        prompt_path = _ref_wav_path(prompt_id)
+        if prompt_path:
             speaker = inst.create_speaker(str(prompt_path),
                                           transcript=params.get("transcript", "") or None)
     if speaker is None:
@@ -334,9 +348,7 @@ def _load_styletts2():
 
 def _synth_styletts2(inst, text, params):
     ref_id   = params.get("audio_prompt_id", "")
-    ref_path = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id else None
-    if ref_path and not Path(ref_path).exists():
-        ref_path = None
+    ref_path = str(_ref_wav_path(ref_id)) if ref_id else None
     out = inst.inference(
         text=text,
         target_voice_path=ref_path,
@@ -355,14 +367,14 @@ def _load_f5tts():
 
 def _synth_f5tts(inst, text, params):
     ref_id   = params.get("audio_prompt_id", "")
-    ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
-    if not ref_path or not ref_path.exists():
-        # Default to first available reference WAV — we have 17 pre-loaded
-        _defaults = sorted(UPLOAD_DIR.glob("*.wav"))
+    ref_path = _ref_wav_path(ref_id)
+    if not ref_path:
+        # Default to first available reference WAV (curated dir first)
+        _defaults = sorted(REFERENCE_VOICES_DIR.glob("*.wav")) or sorted(UPLOAD_DIR.glob("*.wav"))
         if _defaults:
             ref_path = _defaults[0]
             ref_id   = ref_path.stem
-    if not ref_path or not ref_path.exists():
+    if not ref_path:
         raise RuntimeError("F5-TTS requires a reference audio clip. Upload a 5-15s WAV first.")
     ref_text = params.get("ref_text", "")
     speed    = float(params.get("speed", 1.0))
@@ -441,7 +453,7 @@ def _synth_dia(inst, text, params):
     if "[S1]" not in text and "[S2]" not in text:
         text = f"[S1] {text}"
     ref_id   = params.get("audio_prompt_id", "")
-    ref_path = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id else None
+    ref_path = str(_ref_wav_path(ref_id)) if ref_id else None
     auto_tokens = max(len(text) * 10, 3072)
     ui_val = int(float(params.get("max_tokens", 0)))
     kw = dict(
@@ -451,7 +463,7 @@ def _synth_dia(inst, text, params):
         top_p=float(params.get("top_p", 0.95)),
         use_torch_compile=False,
     )
-    if ref_path and Path(ref_path).exists():
+    if ref_path:
         kw["audio_prompt_path"] = ref_path
     output = inst.generate(text, **kw)
     sr  = 44100
@@ -509,9 +521,9 @@ def _synth_cosyvoice(inst, text, params):
         return data  # numpy float32 mono
 
     prompt_id   = params.get("audio_prompt_id", "")
-    prompt_path = UPLOAD_DIR / f"{prompt_id}.wav" if prompt_id else None
+    prompt_path = _ref_wav_path(prompt_id)
 
-    if prompt_path and prompt_path.exists():
+    if prompt_path:
         ref_numpy = _read_wav_16k(prompt_path)
         ref_text  = params.get("transcript", "") or ""
     else:
@@ -703,8 +715,8 @@ def _synth_chatterbox(inst, text, params):
         _torch.backends.cudnn.benchmark = False
     pid = params.get("audio_prompt_id")
     if pid:
-        p = UPLOAD_DIR / f"{pid}.wav"
-        if p.exists():
+        p = _ref_wav_path(pid)
+        if p:
             kw["audio_prompt_path"] = str(p)
 
     # ── Text preprocessing (applied once, before splitting) ──
@@ -975,7 +987,7 @@ def _synth_qwen3tts(inst, text, params):
     _log = _logging.getLogger("qwen3tts")
 
     ref_id  = params.get("audio_prompt_id", "")
-    ref_wav = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists() else None
+    ref_wav = str(_ref_wav_path(ref_id)) if ref_id else None
     ref_txt = params.get("ref_text", "").strip() or None
 
     def _float(key, default):
@@ -1009,7 +1021,7 @@ def _synth_qwen3tts(inst, text, params):
         # Base model requires ref_audio or voice_clone_prompt; it has no
         # "default voice" mode like CustomVoice. Auto-pick a reference WAV
         # so the engine always produces output.
-        _defaults = sorted(UPLOAD_DIR.glob("*.wav"))
+        _defaults = sorted(REFERENCE_VOICES_DIR.glob("*.wav")) or sorted(UPLOAD_DIR.glob("*.wav"))
         if _defaults:
             ref_wav = str(_defaults[0])
             ref_id  = _defaults[0].stem
@@ -1019,7 +1031,7 @@ def _synth_qwen3tts(inst, text, params):
             raise RuntimeError(
                 "Qwen3-TTS Base requires a reference WAV for voice cloning. "
                 "Upload a 3-30s WAV file first, or place reference files in "
-                f"{UPLOAD_DIR}/. No .wav files found."
+                f"{REFERENCE_VOICES_DIR}/ (curated) or {UPLOAD_DIR}/. No .wav files found."
             )
 
     # ── Voice cloning path ──
@@ -1120,8 +1132,8 @@ def _load_indextts(model_dir=None):
 
 def _synth_indextts(inst, text, params):
     ref_id   = params.get("audio_prompt_id", "")
-    ref_path = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id else None
-    if not ref_path or not Path(ref_path).exists():
+    ref_path = str(_ref_wav_path(ref_id)) if ref_id else None
+    if not ref_path:
         raise RuntimeError(
             "IndexTTS-2 requires a reference WAV. Upload a 5-30s clip first."
         )
@@ -1148,8 +1160,8 @@ def _synth_zonos(inst, text, params):
     speaker = None
     ref_id  = params.get("audio_prompt_id", "")
     if ref_id:
-        ref_path = UPLOAD_DIR / f"{ref_id}.wav"
-        if ref_path.exists():
+        ref_path = _ref_wav_path(ref_id)
+        if ref_path:
             try:
                 import torchaudio
                 wav_t, sr_r = torchaudio.load(str(ref_path))
@@ -1267,9 +1279,9 @@ def _synth_openvoice(inst, text, params):
         se_key = spk_key.lower().replace("-", "_")
         src_se = base_se.get(se_key) or base_se.get("en_us") or (list(base_se.values())[0] if base_se else None)
         ref_id   = params.get("audio_prompt_id", "")
-        ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
+        ref_path = _ref_wav_path(ref_id)
         target_se = src_se
-        if ref_path and ref_path.exists():
+        if ref_path:
             try:
                 from openvoice import se_extractor
                 _se, _ = se_extractor.get_se(str(ref_path), converter, vad=True)
@@ -1544,7 +1556,7 @@ def _load_manatts():
 
 def _synth_manatts(inst, text, params):
     import torch
-    from tts_lab_config import UPLOAD_DIR, MANATTS_MAX_CHARS
+    from tts_lab_config import MANATTS_MAX_CHARS
     from synthesizer.inference import Synthesizer
 
     # 1. Text processing: G2P diacritics or normalization (hazm/parsivar)
@@ -1552,8 +1564,8 @@ def _synth_manatts(inst, text, params):
 
     # 2. Validate reference audio
     ref_id   = params.get("audio_prompt_id", "")
-    ref_path = UPLOAD_DIR / f"{ref_id}.wav" if ref_id else None
-    if not ref_path or not ref_path.exists():
+    ref_path = _ref_wav_path(ref_id)
+    if not ref_path:
         raise RuntimeError(
             "ManaTTS requires a reference WAV for speaker embedding.\n"
             "Upload a 3-10s WAV of the target speaker first."
@@ -1695,8 +1707,8 @@ def _synth_chatterboxturbo(inst, text, params):
     # Voice cloning reference WAV
     pid = params.get("audio_prompt_id")
     if pid:
-        p = UPLOAD_DIR / f"{pid}.wav"
-        if p.exists():
+        p = _ref_wav_path(pid)
+        if p:
             # Chatterbox-Turbo asserts the reference is > 5 s — extend short
             # clips so any reasonable reference works (see helper below).
             kw["audio_prompt_path"] = str(_chatterbox_ref_path(p))
@@ -1712,9 +1724,92 @@ def _synth_chatterboxturbo(inst, text, params):
     provider = params.get("use_g2p", "none")
     text = _process_persian_text(text, provider)
 
-    wav = inst.generate(text, **kw)
-    arr = wav.squeeze().cpu().numpy().astype(np.float32)
-    return _to_wav(arr, inst.sr), inst.sr
+    # ── Chunk long text at sentence boundaries ──
+    # Turbo is a distilled one-step model trained on short utterances, and
+    # its generation loop (inference_turbo) has NO EOS forcing — unlike the
+    # base model's alignment-stream analyzer.  Past ~1200 chars of text the
+    # decoder's logits stop being speech-like and it samples token soup,
+    # which S3Gen decodes as broadband noise; only a chance EOS hit or the
+    # 1000-token cap stops it.  Mirror the base chatterbox chunking: 150
+    # chars per chunk keeps text+cond (~38+375 tokens) well inside the
+    # training distribution, so each chunk ends with a clean EOS.
+    _CHUNK_CHARS = 150  # English-only model (matches base chatterbox)
+    chunks = _split_for_tts(text, max_chars=_CHUNK_CHARS)
+    # Safety net: force-split any chunk that still exceeds 1.25× the limit.
+    # Catches comma-split sub-parts that are still too long, and texts with
+    # no sentence breaks.
+    _max_chunk = int(_CHUNK_CHARS * 1.25)  # 187
+    _clean: list[str] = []
+    for _ch in chunks:
+        if len(_ch) > _max_chunk:
+            for _j in range(0, len(_ch), _CHUNK_CHARS):
+                _clean.append(_ch[_j:_j + _CHUNK_CHARS])
+        else:
+            _clean.append(_ch)
+    if len(_clean) != len(chunks):
+        slog("CHUNK", "chatterboxturbo",
+             f"Force-split: {len(chunks)} → {len(_clean)} chunks "
+             f"(sizes: {[len(c) for c in _clean]})")
+    chunks = _clean
+    silence_ms = float(params.get("chunk_silence_ms", 350))
+    if silence_ms < 0:
+        silence_ms = 0
+
+    # ── Single chunk — fast path ──
+    if len(chunks) <= 1:
+        wav = inst.generate(chunks[0] if chunks else text, **kw)
+        arr = wav.squeeze().cpu().numpy().astype(np.float32)
+        return _to_wav(arr, inst.sr), inst.sr
+
+    # ── Multi-chunk — synthesise and stitch ──
+    slog("CHUNK", "chatterboxturbo",
+         f"Splitting {len(text)} chars → {len(chunks)} chunks "
+         f"(avg {sum(len(c) for c in chunks)//len(chunks)} chars, {silence_ms}ms gap)")
+    all_audio = []
+    sr = inst.sr
+    _t_start = time.perf_counter()
+    _failures = 0
+    _first_error = None
+    for i, chunk in enumerate(chunks):
+        if _seed != 0:
+            torch.manual_seed(_seed + i)
+            torch.cuda.manual_seed_all(_seed + i)
+            np.random.seed(_seed + i)
+        _t0 = time.perf_counter()
+        try:
+            wav = inst.generate(chunk, **kw)
+        except Exception:
+            import traceback as _tb
+            _failures += 1
+            if _first_error is None:
+                _first_error = _tb.format_exc()
+            slog("CHUNK", "chatterboxturbo",
+                 f"  [{i+1}/{len(chunks)}] FAILED — {_tb.format_exc()[-150:]}")
+            continue
+        arr = wav.squeeze().cpu().numpy().astype(np.float32)
+        _t1 = time.perf_counter()
+        all_audio.append(arr)
+        # Silence gap between chunks (except after the last)
+        if i < len(chunks) - 1 and silence_ms > 0:
+            gap = np.zeros(int(sr * silence_ms / 1000), dtype=np.float32)
+            all_audio.append(gap)
+        _chunk_dur = max(len(arr) / sr, 1e-6)
+        slog("CHUNK", "chatterboxturbo",
+             f"  [{i+1}/{len(chunks)}] {_t1-_t0:.1f}s gen → {_chunk_dur:.1f}s audio  "
+             f"RTF {(_t1-_t0)/_chunk_dur:.2f}×  "
+             f"elapsed {_t1-_t_start:.0f}s")
+    if not all_audio:
+        raise RuntimeError(
+            f"All {_failures}/{len(chunks)} chunks failed.\n"
+            f"First error:\n{_first_error}")
+    if _failures:
+        slog("CHUNK", "chatterboxturbo",
+             f"  ⚠ {_failures}/{len(chunks)} chunks failed — kept {len(all_audio)//2+1} survivors")
+    combined = np.concatenate(all_audio)
+    total_dur = len(combined) / sr
+    slog("CHUNK", "chatterboxturbo",
+         f"  Stitched {len(chunks)} chunks → {total_dur:.1f}s ({len(combined)} samples)")
+    return _to_wav(combined, sr), sr
 
 
 def _chatterbox_ref_path(p: Path) -> Path:
@@ -1848,8 +1943,9 @@ def _synth_higgs(inst, text, params):
     }
     # Optional voice cloning references
     ref_id = params.get("audio_prompt_id", "")
-    if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists():
-        ref_obj = {"audio_path": str(UPLOAD_DIR / f"{ref_id}.wav")}
+    _refp = _ref_wav_path(ref_id)
+    if _refp:
+        ref_obj = {"audio_path": str(_refp)}
         ref_txt = params.get("ref_text", "").strip()
         if ref_txt:
             ref_obj["text"] = ref_txt
@@ -1901,7 +1997,7 @@ def _synth_omnivoice(inst, text, params):
 
     # Voice cloning: reference audio + optional transcript
     ref_id = params.get("audio_prompt_id", "")
-    ref_wav = str(UPLOAD_DIR / f"{ref_id}.wav") if ref_id and (UPLOAD_DIR / f"{ref_id}.wav").exists() else None
+    ref_wav = str(_ref_wav_path(ref_id)) if ref_id else None
     ref_txt = params.get("ref_text", "").strip() or None
 
     if ref_wav:
