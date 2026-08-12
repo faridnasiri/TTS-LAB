@@ -1100,3 +1100,48 @@ The VM's Docker daemon exhibits several problems worth investigating:
 2. **`docker commit` hangs** — took 15+ minutes before being killed
 3. **Container name reservations persist after deletion** — Docker reports name conflicts for non-existent containers
 4. **Workaround that works:** `docker run` from committed images, `docker cp`, `docker exec`, pip install in running containers
+
+---
+
+## 13. Session 2026-08-12 — Chatterbox-Turbo Short-Ref Fix + Deployment Alignment
+
+### Bug: Chatterbox-Turbo 500 on Short Reference WAV (<5s)
+
+**Root cause:** `chatterbox-tts`'s `tts_turbo.py` asserts the voice-cloning reference must be longer than 5 seconds. Any shorter upload made the engine server return 500 after a pointless 30s evict+reload+retry cycle, and the orchestrator only surfaced a generic HTTP wrapper message ("Server error 500 for url ...").
+
+**Fix — two parts:**
+1. `tts_lab_engines.py` — `_synth_chatterboxturbo` now loop-extends references ≤5s past the floor via `_chatterbox_ref_path()` before calling `generate()`. The library truncates the ref to its own conditioning window anyway, so padding only fills that window. Other engines untouched.
+2. `tts_lab_dispatch.py` — `_do_synth_remote` now forwards the engine's real error detail (FastAPI `detail`/`error` field) to the UI instead of the opaque HTTP wrapper. Message-only change.
+
+**Verified live:** 3.0s reference now synthesizes (was 500), piper regression passes, short refs logged as loop-extended. Commit `6c3457f`.
+
+### Deployment Alignment (this session)
+
+| Issue | Root Cause | Fix |
+|---|---|---|
+| Orchestrator container permanently **"unhealthy"** | `Dockerfile.orchestrator` baked in port 8001 (bare-metal legacy). Makefile overrides CMD to 8009 at run time, but the image-baked healthcheck kept curling dead 8001 | EXPOSE/HEALTHCHECK/CMD → 8009 in `Dockerfile.orchestrator` + compose ports/healthcheck |
+| `Dockerfile.llm-qwen36` compiled llama.cpp from source (~30 min, easy to break) | Repo drift — actual deployment uses pre-built `ghcr.io/ggml-org/llama.cpp:server-cuda` | Rewritten as thin wrapper: `FROM server-cuda`, `/app/llama-server` binary, defaults aligned to deployed 27B Q3_K_M + 32K ctx (were superseded 35B-A3B TQ3_4S + 4K) |
+| Deployed LLM container "unhealthy" since 2026-06-27 (FailingStreak 2804) | **Upstream** `server-cuda` image bakes in a healthcheck against port **8080** (llama.cpp server default); our server runs on 8006 | Our Dockerfile's explicit HEALTHCHECK on 8006 overrides the upstream probe |
+| `git pull` fails in `/opt/arthur-tts-lab` | Repo owned by root (clone/permission drift) | `sudo chown -R arthur:arthur /opt/arthur-tts-lab` |
+
+**Discovery on the VM:** `server-cuda` image = Ubuntu 24.04, binary at **`/app/llama-server`** (not on PATH), has `curl` + `python3` + `bash`.
+
+**Commits:** `69d9009` (orchestrator 8001→8009), `a29699f` (llm image rewrite), `5afba5b` (binary path + healthcheck override).
+
+### VM Deployment Steps (for reference)
+
+```bash
+ssh -i ~/.ssh/id_arthur_vm arthur@192.168.0.87
+cd /opt/arthur-tts-lab
+make deploy-orchestrator      # git pull + prune cache + build + redeploy
+```
+
+### Engine-Current Redeploy (this session, completed)
+
+The fix originally lived only in the container's writable layer via `docker cp` (lost on recreate). To make the deployment durable:
+
+1. `docker commit -p=false tts-lab-engine-current tts-lab-engine-current:latest` → image `b37cd1f328c5` (21.5 GB). Verified `_chatterbox_ref_path` + `loop-extend` markers present **inside the image** (`docker run --rm --entrypoint sh ... grep -c` → 2/2).
+2. Recreated the container from the committed image with the identical run config (`--network host --gpus all`, volumes, envs — mirrors `Makefile deploy-engine`). Container ID `6453777f...`.
+3. **Verified live on the redeployed container:** 3.0 s reference WAV → `POST /synthesize/chatterboxturbo` with `audio_prompt_id` → 200, 24 kHz audio (was 500). Piper regression passes. Loop-extension marker goes to the engine's ring buffer (`slog`), not stdout — visible in the engine server's in-memory log only.
+
+Note: the orchestrator was rebuilt from repo at the same time (it carries the `_do_synth_remote` error-surfacing half of the fix) — healthy on 8009 after the healthcheck port fix above. (VM `docker commit` known-flaky — see session 12; this one completed in ~2 min.)
