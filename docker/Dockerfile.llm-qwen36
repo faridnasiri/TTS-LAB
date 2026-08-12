@@ -23,6 +23,9 @@ RUN mkdir -p /opt/models/llm
 
 EXPOSE 8006
 
+# Overrides the upstream image's baked-in healthcheck, which probes port
+# 8080 (llama.cpp server default) — the deployed server runs on 8006, so
+# without this override the container reports "unhealthy" forever.
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=60s \
     CMD curl -f http://localhost:8006/health || exit 1
 
@@ -32,7 +35,7 @@ ENV MODEL_PATH=/opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf
 ENV CTX_SIZE=32768
 
 ENTRYPOINT ["/bin/sh", "-c"]
-CMD ["exec llama-server \
+CMD ["exec /app/llama-server \
     --model ${MODEL_PATH:-/opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf} \
     --host 0.0.0.0 \
     --port 8006 \
