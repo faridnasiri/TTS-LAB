@@ -3,7 +3,7 @@
 # ORCHESTRATOR — Thin container, no ML libraries
 # ═══════════════════════════════════════════════════════════════════
 #
-# The orchestrator serves the web UI at port 8001 and routes all
+# The orchestrator serves the web UI at port 8009 and routes all
 # engine synthesis requests to engine containers via HTTP.
 #
 # Inherits directly from tts-lab-base (no ML stack).
@@ -32,8 +32,8 @@ COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_ui.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/
 
-EXPOSE 8001
+EXPOSE 8009
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s \
-    CMD curl -f http://localhost:8001/status || exit 1
+    CMD curl -f http://localhost:8009/status || exit 1
 
-CMD ["uvicorn", "tts_lab:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+CMD ["uvicorn", "tts_lab:app", "--host", "0.0.0.0", "--port", "8009", "--workers", "1"]
