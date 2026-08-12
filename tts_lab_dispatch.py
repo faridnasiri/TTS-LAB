@@ -515,7 +515,20 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
         json={"engine": name, "text": text, "params": params},
         timeout=300.0,
     )
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        # Forward the engine's real error detail (FastAPI "detail" or our
+        # own "error" field) so the UI shows why synthesis failed instead
+        # of a generic HTTP wrapper message.
+        detail = ""
+        try:
+            body = r.json()
+            detail = body.get("detail") or body.get("error") or ""
+        except Exception:
+            pass
+        raise RuntimeError(f"{name} failed (HTTP {r.status_code})"
+                           + (f": {detail}" if detail else "")) from e
     result = r.json()
     synth_s = time.perf_counter() - t0
     dur_ms = result.get("audio_dur_ms", 0)

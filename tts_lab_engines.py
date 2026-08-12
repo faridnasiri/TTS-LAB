@@ -1697,7 +1697,9 @@ def _synth_chatterboxturbo(inst, text, params):
     if pid:
         p = UPLOAD_DIR / f"{pid}.wav"
         if p.exists():
-            kw["audio_prompt_path"] = str(p)
+            # Chatterbox-Turbo asserts the reference is > 5 s — extend short
+            # clips so any reasonable reference works (see helper below).
+            kw["audio_prompt_path"] = str(_chatterbox_ref_path(p))
 
     # Seed (via torch global state — not a generate() parameter)
     _seed = int(float(params.get("seed", "0") or "0"))
@@ -1713,6 +1715,48 @@ def _synth_chatterboxturbo(inst, text, params):
     wav = inst.generate(text, **kw)
     arr = wav.squeeze().cpu().numpy().astype(np.float32)
     return _to_wav(arr, inst.sr), inst.sr
+
+
+def _chatterbox_ref_path(p: Path) -> Path:
+    """Return a reference WAV path Chatterbox-Turbo will accept.
+
+    chatterbox/tts_turbo.py asserts the reference prompt is longer than
+    5 s (``len(s3gen_ref_wav) / _sr > 5.0``). Short clips are loop-extended
+    just past that floor; the library truncates the reference to its own
+    conditioning window afterwards, so the padding only fills that window.
+    Used exclusively by chatterboxturbo — other engines keep their own
+    reference handling.
+    """
+    import wave
+
+    try:
+        with wave.open(str(p), "rb") as wf:
+            n_frames, sr, n_ch = wf.getnframes(), wf.getframerate(), wf.getnchannels()
+        if n_frames / sr > 5.05:
+            return p  # already long enough
+
+        with wave.open(str(p), "rb") as wf:
+            audio = np.frombuffer(wf.readframes(n_frames), dtype=np.int16)
+        if n_ch > 1:
+            audio = audio.reshape(-1, n_ch).mean(axis=1).astype(np.int16)
+
+        target = int(5.2 * sr)
+        reps = int(np.ceil(target / len(audio)))
+        padded = np.tile(audio, reps)[:target]
+
+        ext = p.with_name(p.stem + "-ext.wav")
+        with wave.open(str(ext), "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(padded.tobytes())
+        slog("SYNTH", "chatterboxturbo",
+             f"reference {n_frames/sr:.1f}s < 5s — loop-extended to {len(padded)/sr:.1f}s")
+        return ext
+    except Exception:
+        # Can't decode/rewrite — fall back to the original; the library's
+        # own assertion will surface the real problem if it persists.
+        return p
 
 
 # ── 25. Microsoft VibeVoice-1.5B ───────────────────────────────────────────────
