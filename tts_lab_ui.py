@@ -1503,9 +1503,7 @@ async function refreshAvailability() {
 async function evictAllVRAM() {
   const btn = document.getElementById('btn-evict');
   if (!btn) return;
-  if (!confirm('Evict ALL TTS engines from VRAM across all containers?
-
-This unloads every loaded TTS model. Engines will reload lazily on next synthesis.')) return;
+  if (!confirm('Evict ALL TTS engines from VRAM across all containers?\n\nThis unloads every loaded TTS model. Engines will reload lazily on next synthesis.')) return;
   btn.disabled = true;
   btn.textContent = 'Evicting...';
   dbg('VRAM','-','Evicting all TTS engines from VRAM...');
