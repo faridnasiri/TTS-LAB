@@ -169,7 +169,7 @@ deploy-llm: build-llm
 	-docker rm tts-lab-llm-qwen36 2>/dev/null || true
 	docker run -d --name tts-lab-llm-qwen36 --gpus all --network host \
 		-v /opt/models:/opt/models \
-		-e MODEL_PATH=/opt/models/llm/qwen3.6-35b-a3b-tq3_4s.gguf \
-		-e CTX_SIZE=4096 \
+		-e MODEL_PATH=/opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf \
+		-e CTX_SIZE=32768 \
 		--restart unless-stopped \
 		tts-lab-llm-qwen36:latest
