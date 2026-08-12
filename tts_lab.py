@@ -40,15 +40,15 @@ else:
     import tts_lab_shims  # noqa: F401
     from tts_lab_shims import DEVICE, DEVICE_NAME, VRAM_TOTAL_MB
 
-import asyncio, shutil, threading, traceback, uuid
+import asyncio, json, shutil, threading, time, traceback, uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 from tts_lab_config import (
-    MODEL_ORDER, MODEL_INFO, _state, UPLOAD_DIR,
+    MODEL_ORDER, MODEL_INFO, _state, UPLOAD_DIR, REFERENCE_VOICES_DIR,
     SYNTH_TIMEOUT, DEFAULT_SYNTH_TIMEOUT,
     ALL_KOKORO_VOICES, ALL_XTTS_SPEAKERS, BARK_PRESETS, OUTETTS_SPEAKERS,
     MATCHA_VOICES,
@@ -270,16 +270,56 @@ async def evict_all_tts():
 
 
 @app.post("/upload")
-async def upload_audio(file: UploadFile = File(...)):
+async def upload_audio(file: UploadFile = File(...), lang: str = Form("")):
     uid  = str(uuid.uuid4())[:8]
     dest = UPLOAD_DIR / f"{uid}.wav"
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
+    # Sidecar metadata: preserve original filename + language so the UI dropdown
+    # can show a meaningful name instead of the random uid.
+    try:
+        (UPLOAD_DIR / f"{uid}.json").write_text(json.dumps({
+            "original_name": file.filename or "",
+            "lang": lang or "",
+            "uploaded": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }, ensure_ascii=False))
+    except Exception:
+        pass
     return JSONResponse({"id": uid, "filename": file.filename, "size": dest.stat().st_size})
 
 
-# Permanent reference voices directory (survives reboots, shipped with deploy)
-REFERENCE_VOICES_DIR = Path("/opt/arthur/reference_voices")
+# Permanent reference voices directory — defined in tts_lab_config.py (shared
+# with the engine containers, host bind-mounted everywhere).
+
+# Display labels for reference voice languages (subset of OMNIVOICE_LANGUAGES)
+_LANG_LABELS = {"fa": "فارسی (FA)", "en": "English (EN)", "other": "Other"}
+
+
+def _scan_refs():
+    """Scan reference + uploaded WAVs with sidecar metadata (original_name/lang).
+
+    Sidecars are `{stem}.json` files written next to each WAV by /upload.
+    """
+    refs = []
+    for d, source in ((REFERENCE_VOICES_DIR, "reference"), (UPLOAD_DIR, "uploaded")):
+        if not d.exists():
+            continue
+        for p in sorted(d.glob("*.wav"), key=lambda x: x.stat().st_mtime, reverse=True):
+            meta = {}
+            sc = p.with_suffix(".json")
+            if sc.exists():
+                try:
+                    meta = json.loads(sc.read_text())
+                except Exception:
+                    meta = {}
+            refs.append({
+                "id": p.stem,
+                "path": p,
+                "original_name": str(meta.get("original_name", "") or ""),
+                "lang": str(meta.get("lang", "") or ""),
+                "source": source,
+            })
+    return refs
 
 
 @app.get("/refs")
@@ -287,14 +327,30 @@ async def list_refs():
     """List available reference WAV files for dropdown selection."""
     refs = []
     seen = set()
-    if REFERENCE_VOICES_DIR.exists():
-        for p in sorted(REFERENCE_VOICES_DIR.glob("*.wav"), key=lambda x: x.stat().st_mtime, reverse=True):
-            seen.add(p.stem)
-            refs.append({"id": p.stem, "name": p.name, "size": p.stat().st_size})
-    for p in sorted(UPLOAD_DIR.glob("*.wav"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if p.stem not in seen:
-            refs.append({"id": p.stem, "name": f"{p.name}  (uploaded)", "size": p.stat().st_size})
+    for r in _scan_refs():
+        if r["id"] in seen:
+            continue
+        seen.add(r["id"])
+        refs.append({
+            "id": r["id"],
+            "name": r["original_name"] or r["path"].name,
+            "original_name": r["original_name"],
+            "lang": r["lang"],
+            "lang_label": _LANG_LABELS.get(r["lang"], ""),
+            "size": r["path"].stat().st_size,
+            "source": r["source"],
+        })
     return JSONResponse({"refs": refs})
+
+
+@app.get("/refs/{ref_id}/audio")
+async def ref_audio(ref_id: str):
+    """Serve a reference voice WAV by id (dropdown ▶ preview)."""
+    from fastapi.responses import Response
+    for r in _scan_refs():
+        if r["id"] == ref_id:
+            return Response(content=r["path"].read_bytes(), media_type="audio/wav")
+    raise HTTPException(404, f"Reference voice not found: {ref_id}")
 
 
 @app.get("/preview-text")

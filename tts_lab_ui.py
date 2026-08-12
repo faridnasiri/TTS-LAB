@@ -66,6 +66,13 @@ def _upload_widget(prompt_file_id, prompt_status_id, prompt_hidden_id,
         f'title="Play selected reference voice">▶</button>'
         f'</div>'
         f'<div class="d-flex gap-2 align-items-center">'
+        f'<select class="form-select form-select-sm bg-dark text-light border-secondary" '
+        f'id="{prompt_hidden_id}-lang" title="Language of this voice sample" style="max-width:150px">'
+        f'<option value="">— language —</option>'
+        f'<option value="fa">فارسی (FA)</option>'
+        f'<option value="en">English (EN)</option>'
+        f'<option value="other">Other</option>'
+        f'</select>'
         f'<input type="file" id="{prompt_file_id}" '
         f'class="form-control form-control-sm bg-dark text-light border-secondary" '
         f'accept="audio/wav,audio/*" style="max-width:280px">'
@@ -1400,6 +1407,8 @@ async function uploadPrompt(fileId, statusId, hiddenId) {
   dbg('UPLOAD', '—', `Uploading "${fname}" (${(input.files[0].size/1024).toFixed(0)} KB)`);
   dbg('REQUEST','—', `POST /upload`);
   const fd = new FormData(); fd.append('file', input.files[0]);
+  const langSel = document.getElementById(hiddenId + '-lang');
+  if (langSel) fd.append('lang', langSel.value);
   try {
     const r = await fetch(`${API}/upload`, {method:'POST', body:fd});
     dbg('REQUEST','—', `← HTTP ${r.status}`);
@@ -1423,7 +1432,7 @@ function playRefPreview(selectId) {
   const sel = document.getElementById(selectId);
   if (!sel || !sel.value) { showToast('⚠️ Select a reference voice first'); return; }
   const voiceId = sel.value;
-  const url = `/voice-library/${voiceId}/audio`;
+  const url = `/refs/${voiceId}/audio`;
   if (_refPreviewAudio) { _refPreviewAudio.pause(); _refPreviewAudio = null; }
   const audio = new Audio(url);
   audio.preload = 'auto';
@@ -1659,7 +1668,11 @@ async function refreshRefDropdowns(selectId) {
       refs.forEach(ref => {
         const opt = document.createElement('option');
         opt.value = ref.id;
-        opt.textContent = ref.name + ' (' + (ref.size/1024).toFixed(0) + 'KB)';
+        // e.g. "arash_fa.wav — فارسی (FA) (124KB)" — lang_label omitted when unknown
+        opt.textContent = ref.name
+          + (ref.lang_label ? ' — ' + ref.lang_label : '')
+          + ' (' + (ref.size/1024).toFixed(0) + 'KB)';
+        opt.title = ref.original_name ? (ref.original_name + (ref.lang ? ' · lang=' + ref.lang : '')) : ref.id;
         sel.appendChild(opt);
       });
       // Restore previous selection if still present

@@ -22,6 +22,8 @@ except (ImportError, ModuleNotFoundError):
 MODELS_DIR    = Path(__file__).parent / "models"
 COSYVOICE_DIR = Path("/opt/CosyVoice")
 UPLOAD_DIR    = Path("/tmp/tts_uploads")
+# Permanent curated reference voices (host bind-mounted into ALL containers)
+REFERENCE_VOICES_DIR = Path("/opt/arthur/reference_voices")
 INDEXTTS_DIR  = Path("/opt/models/indextts")
 OPENVOICE_MODELS_DIR = Path("/opt/models/openvoice_v2")
 MODELS_DIR.mkdir(exist_ok=True)
