@@ -37,7 +37,10 @@ RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
 RUN pip install --no-cache-dir setuptools
 RUN pip install --no-cache-dir openai-whisper || true
 RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
-RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
+# PINNED to 0.1.7 (upstream audit 2026-08-13): resemble-ai/chatterbox master has
+# only multilingual-v3/Nano commits since 0.1.7 — no fixes for the turbo issues we
+# work around (no EOS forcing, 1024-token truncation, 40s cap). Unpin only with intent.
+RUN pip install --no-cache-dir chatterbox-tts==0.1.7 perth>=1.0.0
 
 # XTTS — coqui-tts installs but won't synthesize with torch nightly (torchcodec issue)
 RUN pip install --no-cache-dir coqui-tts || true

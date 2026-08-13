@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir "langchain<0.3.0" einops-exts munch f5-tts>=0.3.4
 
 RUN pip install --no-cache-dir openai-whisper || true
 RUN pip install --no-cache-dir ChatTTS>=0.2.1 bark>=1.0.0 outetts>=0.3.0
-RUN pip install --no-cache-dir chatterbox-tts>=0.1.0 perth>=1.0.0
+RUN pip install --no-cache-dir chatterbox-tts==0.1.7 perth>=1.0.0  # pinned — see Dockerfile.engine-current
 
 RUN pip install --no-cache-dir coqui-tts || true
 

@@ -493,6 +493,7 @@ Last 400 server-side log entries (ring buffer).
 - Per-call output is capped at ~40 s (1,000 speech tokens hardcoded in the library at the 25 Hz S3 token rate) — long text must be split across calls.
 - No word-level timestamps: the engine returns audio only; use OmniVoice or an external aligner for `.words.json`.
 - **Chunk offsets (stopgap for timestamps):** every response includes a `chunks` array — `[{"index", "start_ms", "dur_ms", "chars"}...]` with each chunk's offset in the stitched audio (gaps between chunks are `chunk_silence_ms`). `sum(chunks[].chars)` equals the source text length — use it as a truncation canary. Each chunk starts at a sentence/comma boundary, so Whisper-segmenting per chunk yields aligned words with no mid-sentence seams.
+- **Upstream audit 2026-08-13:** `chatterbox-tts` pinned to `==0.1.7`. resemble-ai/chatterbox `master` has only multilingual-v3 checkpoint + ChatterboxNano commits since 0.1.7 (2026-03-26) — the turbo generation loop still has no EOS forcing/analyzer and unchanged token limits. The limits and workarounds above remain current; unpin only with intent.
 
 ---
 

@@ -50,7 +50,7 @@ parler-tts>=1.0.0
 transformers==4.46.1
 
 # 13. Chatterbox
-chatterbox-tts>=0.1.0
+chatterbox-tts==0.1.7  # pinned — upstream audit 2026-08-13: no relevant fixes on master
 perth>=1.0.0
 
 # 14. Fish Speech
