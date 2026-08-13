@@ -24,12 +24,6 @@ GGUF_ROOT = "/opt/arthur-img-models/gguf"
 # Download list  (repo_id, filename_in_repo, local_dir)
 # ---------------------------------------------------------------------------
 DOWNLOADS = [
-    # ── FLUX.2 [dev] ─────────────────────────────────────────────────────────
-    ("city96/FLUX.2-dev-gguf", "flux2-dev-Q3_K_M.gguf", f"{GGUF_ROOT}/flux2"),
-    ("city96/FLUX.2-dev-gguf", "flux2-dev-Q4_K_M.gguf", f"{GGUF_ROOT}/flux2"),
-    ("city96/FLUX.2-dev-gguf", "flux2-dev-Q5_K_M.gguf", f"{GGUF_ROOT}/flux2"),
-    ("city96/FLUX.2-dev-gguf", "flux2-dev-Q8_0.gguf",   f"{GGUF_ROOT}/flux2"),
-
     # ── SD 3.5 Large ─────────────────────────────────────────────────────────
     ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q4_0.gguf", f"{GGUF_ROOT}/sd35"),
     ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q5_0.gguf", f"{GGUF_ROOT}/sd35"),

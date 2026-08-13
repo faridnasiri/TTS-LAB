@@ -51,11 +51,11 @@ Returns live service state: all engine availability, which engine is loaded, VRA
 {
   "engines": [
     {
-      "key":         "flux2",
-      "label":       "FLUX.2 [dev]",
-      "description": "32B rectified flow transformer...",
+      "key":         "flux2klein",
+      "label":       "FLUX.2 Klein 4B",
+      "description": "FLUX.2 Klein 4B — compact 4B flow transformer...",
       "output_type": "image",
-      "vram_gb":     16.0,
+      "vram_gb":     10.0,
       "available":   true,
       "loaded":      false,
       "error":       "",
@@ -116,10 +116,14 @@ Runs image or video generation. **Synchronous — the connection is held open un
 
 | Engine | Quant | Resolution | Steps | Expected time |
 |---|---|---|---|---|
-| `flux2klein` | BF16 | 1024×1024 | 4 | 10–30 s |
+| `flux2klein` | BF16/NF4 | 1024×1024 | 4 | 50 s |
+| `flux2klein9b` | Q4_K_M | 1024×1024 | 4 | 40 s |
 | `sd35` | Q4_0 | 1024×1024 | 28 | 60–90 s |
-| `flux2` | Q3_K_M | 1024×1024 | 28 | 8–12 min |
 | `wan` | Q4_K_M | 720p, 49 frames | — | 5–10 min |
+| `ideogram4` | NF4 (API) | 1024×1024 | 20 | 30–60 s |
+
+> `flux2` (FLUX.2 [dev] 32B) was REMOVED 2026-08-13 — see
+> `ARTHUR_IMAGE_LAB_REFERENCE.md` §4.1 for the full history.
 
 ### Content-Type
 
@@ -129,14 +133,14 @@ Runs image or video generation. **Synchronous — the connection is held open un
 
 | Parameter | Description |
 |---|---|
-| `engine` | `flux2` \| `flux2klein` \| `sd35` \| `wan` |
+| `engine` | `flux2klein` \| `flux2klein9b` \| `sd35` \| `wan` \| `ideogram4` |
 
 ### Common Form Fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `prompt` | string | **required** | Text description of the image or video to generate |
-| `negative_prompt` | string | `""` | What NOT to include. Supported by `sd35` and `wan`. Ignored by `flux2` and `flux2klein`. |
+| `negative_prompt` | string | `""` | What NOT to include. Supported by `sd35` and `wan`. Ignored by the FLUX.2 Klein engines. |
 | `width` | int | `1024` | Output width in pixels. Must be a multiple of 64. |
 | `height` | int | `1024` | Output height in pixels. Must be a multiple of 64. |
 | `num_inference_steps` | int | engine default | Denoising steps. More = better quality, slower. |
@@ -208,16 +212,9 @@ Returns static engine metadata (no live state — for available/loaded, use `/st
 
 ```json
 {
-  "flux2": {
-    "label":       "FLUX.2 [dev]",
-    "description": "32B rectified flow transformer...",
-    "output_type": "image",
-    "vram_gb":     16.0,
-    "hf_repo":     "diffusers/FLUX.2-dev-bnb-4bit",
-    "params":      [ ... ]
-  },
-  "sd35":      { ... },
   "flux2klein": { ... },
+  "flux2klein9b": { ... },
+  "sd35":      { ... },
   "wan":       { ... }
 }
 ```
@@ -338,28 +335,15 @@ Deletes a gallery entry and its associated file from disk.
 
 ## 10. Engine Parameters Reference
 
-### `flux2` — FLUX.2 [dev]
+### `flux2` — FLUX.2 [dev] — 🗑️ REMOVED
 
-| Parameter | Type | Default | Range | Notes |
-|---|---|---|---|---|
-| `prompt` | string | required | — | |
-| `reference_image` | file | null | — | Enables image editing (I2I) mode |
-| `width` | int | `1024` | 256–2048, step 64 | |
-| `height` | int | `1024` | 256–2048, step 64 | |
-| `num_inference_steps` | int | `28` | 1–50 | |
-| `guidance_scale` | float | `3.5` | 1.0–20.0 | 3.5–4.0 typical |
-| `seed` | int | `-1` | -1 to 2³¹-1 | |
-| `quant` | string | `Q4_K_M` | see below | |
-
-**`quant` options:**
-
-| Value | Transformer size | Notes |
-|---|---|---|
-| `Q3_K_M` | ~16 GB | Smallest; good for machines with limited CPU RAM |
-| `Q4_K_M` | ~20 GB | ✓ Recommended — best quality/size tradeoff |
-| `Q5_K_M` | ~24 GB | Higher quality, needs ~38 GB CPU RAM total |
-| `Q8_0` | ~35 GB | Near-lossless; needs ~50 GB CPU RAM total |
-| `nvfp4` | ~8 GB | Blackwell native FP4 — run `nvfp4_save.py` first |
+> Removed 2026-08-13. The 32B dev model (~27 GB VRAM needed) cannot run on the
+> 15.5 GiB card without CPU offloading, which is against the GPU-only policy.
+> Engine entry, loaders, UI tab, and all model files (~51 GB) deleted. See
+> `ARTHUR_IMAGE_LAB_REFERENCE.md` §4.1 for the full history. Former params:
+> prompt / reference_image / width-height 256-2048 / steps 28 / guidance 3.5 /
+> seed / quant (Q3_K_M 16 GB · Q4_K_M 20 GB · Q5_K_M 24 GB · Q8_0 35 GB ·
+> nvfp4 8 GB).
 
 ---
 
@@ -438,7 +422,7 @@ Deletes a gallery entry and its associated file from disk.
 ```typescript
 {
   id:         string;        // UUID — use this for gallery DELETE
-  engine:     string;        // "flux2" | "flux2klein" | "sd35" | "wan"
+  engine:     string;        // "flux2klein" | "flux2klein9b" | "sd35" | "wan" | "ideogram4"
   filename:   string;        // e.g. "flux2klein_3f2a1b9c-....png"
   url:        string;        // Relative URL — prepend base URL to fetch
   base64:     string | null; // PNG as base64 string; null for videos
@@ -488,7 +472,7 @@ All errors follow FastAPI's default shape:
 CUDA out of memory. Tried to allocate X GiB.
   → Switch to a smaller quant (e.g. Q3_K_M instead of Q4_K_M)
 
-NVFP4 transformer not found at /opt/arthur-img-models/nvfp4/flux2/transformer.
+NVFP4 transformer not found at /opt/arthur-img-models/nvfp4/sd35/transformer.
   → Run nvfp4_save.py on the VM first
 
 SD 3.5 shared pipeline components not found at: .../quantized/sd35/shared
@@ -531,25 +515,22 @@ curl -X POST http://192.168.0.87:8002/generate/sd35 \
   -F "seed=100"
 ```
 
-### State-of-the-art quality — FLUX.2 full 32B
+### Fast high-quality — FLUX.2 Klein 4B (distilled)
 
 ```bash
-curl -X POST http://192.168.0.87:8002/generate/flux2 \
+curl -X POST http://192.168.0.87:8002/generate/flux2klein \
   -F "prompt=a photorealistic mountain lake at dawn, misty, reflections" \
-  -F "num_inference_steps=28" \
-  -F "guidance_scale=3.5" \
-  -F "quant=Q3_K_M" \
+  -F "num_inference_steps=4" \
   -F "width=1024" \
   -F "height=1024"
 ```
 
-### Image editing — FLUX.2 with reference image
+### Image editing — FLUX.2 Klein with reference image
 
 ```bash
-curl -X POST http://192.168.0.87:8002/generate/flux2 \
+curl -X POST http://192.168.0.87:8002/generate/flux2klein \
   -F "prompt=same scene but at night, moonlight, stars" \
-  -F "reference_image=@/path/to/input.png" \
-  -F "quant=Q3_K_M"
+  -F "reference_image=@/path/to/input.png"
 ```
 
 ### Text-to-video — Wan2.2
@@ -672,10 +653,9 @@ def generate_i2i(engine: str, prompt: str, image_path: str, **kwargs) -> list[di
     resp.raise_for_status()
     return resp.json()["results"]
 
-results = generate_i2i("flux2",
+results = generate_i2i("flux2klein",
     prompt="same scene but in winter with snow",
     image_path="input.png",
-    quant="Q3_K_M",
 )
 ```
 

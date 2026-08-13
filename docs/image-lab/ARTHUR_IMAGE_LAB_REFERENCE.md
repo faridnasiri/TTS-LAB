@@ -91,11 +91,11 @@ Think of it as a private version of services like Midjourney or Runway — runni
 
 ### Request Lifecycle
 
-1. Browser sends `POST /generate/flux2` (multipart form, optional image upload)
+1. Browser sends `POST /generate/flux2klein` (multipart form, optional image upload)
 2. `image_lab_dispatch.py` validates the engine key, reads form fields
-3. `engines.generate("flux2", params)` is called — this is synchronous (blocks)
-4. `_ensure_engine("flux2")` evicts any loaded model, loads FLUX.2 into VRAM
-5. `_generate_flux2(params)` runs the diffusion pipeline; PyTorch uses CUDA
+3. `engines.generate("flux2klein", params)` is called — this is synchronous (blocks)
+4. `_ensure_engine("flux2klein")` evicts any loaded model, loads FLUX.2 Klein into VRAM
+5. `_generate_flux2klein(params)` runs the diffusion pipeline; PyTorch uses CUDA
 6. The output image/video is written to `/opt/arthur-gen/images/` or `.../videos/`
 7. A JSON entry is appended to `gallery.json`
 8. The file path + metadata is returned to the browser as JSON
@@ -130,7 +130,7 @@ This is the **single source of truth** for what models exist, what parameters th
 ```python
 @dataclass
 class EngineInfo:
-    key: str          # "flux2" | "sd35" | "wan"
+    key: str          # "flux2klein" | "sd35" | "wan"
     label: str        # Human-readable display name
     description: str  # Shown in the UI sidebar
     output_type: str  # "image" | "video"
@@ -180,7 +180,7 @@ _ensure_engine(key)
     │       ├── STATE.loaded_pipe2 = None
     │       ├── STATE.active_engine = None
     │       └── free_vram()  (gc.collect + torch.cuda.empty_cache)
-    └── _LOADERS[key]()  → _load_flux2() / _load_sd35() / _load_wan()
+    └── _LOADERS[key]()  → _load_flux2klein() / _load_sd35() / _load_wan()
 ```
 
 **Public entry point:**
@@ -286,7 +286,7 @@ A standalone Python script that POSTs a pre-built dashboard JSON to Grafana's RE
 
 ## 4. AI Engines — Supported Models
 
-### 4.1 FLUX.2 [dev] — `flux2` — ⛔ BLOCKED on this hardware
+### 4.1 FLUX.2 [dev] — `flux2` — 🗑️ REMOVED (was: BLOCKED)
 
 | Property | Value |
 |---|---|
@@ -294,33 +294,32 @@ A standalone Python script that POSTs a pre-built dashboard JSON to Grafana's RE
 | **Architecture** | 32B rectified flow transformer (DiT) |
 | **Text encoder** | Mistral3ForConditionalGeneration (VLM, multimodal) |
 | **Quantization** | Transformer: **GGUF Q4_K_M** (`city96/FLUX.2-dev-gguf`, ~20 GB). Text encoder: **NF4 BnB 4-bit** |
-| **Disk size** | ~19 GB GGUF + ~14.5 GB BnB encoder files (cached) |
-| **Status** | **BLOCKED** — see below |
+| **Disk size** | ~19 GB GGUF + ~32 GB BnB encoder cache (~51 GB total) |
+| **Status** | **REMOVED 2026-08-13** — engine entry, loaders, UI tab, and all model files deleted from the VM |
 | **Output type** | Image (PNG) |
 | **Supports I2I** | Yes — pass `reference_image` for image editing mode |
 | **License** | FLUX [dev] Non-Commercial License |
-| **Requires HF token** | Yes (gated model) — `HF_TOKEN` in `/opt/arthur-img/.env` |
+| **Requires HF token** | Yes (gated model) — was `HF_TOKEN` in `/opt/arthur-img/.env` |
 
-**⛔ BLOCKED (2026-08-13, GPU-only policy):** the Q4_K_M GGUF is ~20 GB and
-the NF4 text encoder another ~6 GB — **~27 GB total, larger than the whole
-15.5 GiB card**. No amount of TTS-engine eviction helps; the engine cannot run
-on this hardware without CPU offloading, which is forbidden by policy
-("never use CPU rendering / system-RAM offloading"). `POST /generate/flux2`
-returns HTTP 503 with the reason; the UI shows it as unavailable. The loader
-and probe both contain a structural VRAM guard so the engine can never
-silently degrade to a CPU path — on a 32 GB+ GPU it runs fully on CUDA
-(loader: `_load_flux2`; the historical CPU group-offload path is quarantined
-in `_load_flux2_cpu` and only reachable with `IMGLAB_GPU_ONLY=0`).
+**🗑️ REMOVED (2026-08-13):** the Q4_K_M GGUF is ~20 GB and the NF4 text
+encoder another ~6 GB — **~27 GB total, larger than the whole 15.5 GiB card**.
+No amount of TTS-engine eviction helps, and the GPU-only policy forbids the
+CPU offloading that would be required (user directive: *"never use CPU
+rendering / system-RAM offloading — if it doesn't fit even with TTS models
+removed, disable it, maybe remove it completely"*). Deleted: the engine entry
+(`image_lab_config.py`), the three loader/synth functions + probe
+(`image_lab_engines.py`), the UI tab, the 19 GB GGUF directory
+(`/opt/arthur-img-models/gguf/flux2/`), the 32 GB BnB cache
+(`huggingface/hub/models--diffusers--FLUX.2-dev-bnb-4bit/`), and the
+`nvfp4/flux2` stub. The Klein siblings (`flux2klein`, `flux2klein9b`) are
+unaffected — they fit and run pure-GPU.
 
-History: a leaf-level group-offload implementation was tested 2026-08-13 and
-*worked* (~15 min/image at 28 steps — CPU streaming), but was rejected: too
-slow, and CPU streaming is against the GPU-only policy. Section 12 holds the
-even older BnB-era account.
-
-Default generation parameters (kept for API reference — valid on a GPU big
-enough to run the model): `width`/`height` 1024×1024 (256–2048, step 64),
-`num_inference_steps` 28 (1–50), `guidance_scale` 4.0 (1.0–20.0), `seed` -1
-(random).
+History (for reference): a leaf-level group-offload implementation was tested
+2026-08-13 and *worked* (~15 min/image at 28 steps — CPU streaming), but was
+rejected: too slow, and CPU streaming is against the GPU-only policy.
+Section 12 holds the even older BnB-era account. To restore on a 32 GB+ GPU:
+re-add the loader/probe with the structural VRAM guard, re-download the GGUF
+and BnB cache, and unblock the probe check.
 
 ---
 
@@ -549,8 +548,8 @@ Returns the current state of all engines and hardware.
 {
   "engines": [
     {
-      "key": "flux2",
-      "label": "FLUX.2 [dev]",
+      "key": "flux2klein",
+      "label": "FLUX.2 Klein",
       "description": "...",
       "output_type": "image",
       "vram_gb": 10.0,
@@ -580,7 +579,7 @@ Returns the current state of all engines and hardware.
 
 Triggers image or video generation. Accepts multipart/form-data.
 
-**URL parameters:** `engine_key` = `flux2` | `sd35` | `wan`
+**URL parameters:** `engine_key` = `flux2klein` | `flux2klein9b` | `sd35` | `wan` | `ideogram4`
 
 **Common form fields:**
 
@@ -593,7 +592,7 @@ Triggers image or video generation. Accepts multipart/form-data.
 | `num_inference_steps` | int | 28 | Denoising steps |
 | `guidance_scale` | float | 4.0 | Prompt adherence strength |
 | `seed` | int | -1 | -1 for random, fixed value for reproducibility |
-| `reference_image` | file | null | Optional image upload (FLUX.2 I2I, Wan I2V) |
+| `reference_image` | file | null | Optional image upload (FLUX.2 Klein I2I, Wan I2V) |
 
 **Wan-specific fields:**
 
@@ -610,10 +609,10 @@ Triggers image or video generation. Accepts multipart/form-data.
 [
   {
     "id": "uuid-string",
-    "engine": "flux2",
+    "engine": "flux2klein",
     "output_type": "image",
-    "filename": "flux2_20260524_2314_abc123.png",
-    "url": "/outputs/flux2_20260524_2314_abc123.png",
+    "filename": "flux2klein_20260524_2314_abc123.png",
+    "url": "/outputs/flux2klein_20260524_2314_abc123.png",
     "params": { "prompt": "...", "seed": 1234567 },
     "created_at": 1779663000.0
   }

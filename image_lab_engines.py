@@ -1,8 +1,13 @@
 """
-image_lab_engines.py — Load / unload / generate functions for all three engines:
-  flux2  — FLUX.2 [dev] GGUF (Q3_K_M / Q4_K_M / Q5_K_M / Q8_0) via city96
-  sd35   — Stable Diffusion 3.5 Large GGUF (Q4_0 / Q5_0 / Q8_0) via city96
-  wan    — Wan2.2 T2V / I2V GGUF (Q3_K_M / Q4_K_M / Q5_K_M / Q8_0) via QuantStack
+image_lab_engines.py — Load / unload / generate functions for all engines:
+  flux2klein  — FLUX.2 Klein 4B (custom NF4 encoder assembly)
+  flux2klein9b — FLUX.2 Klein 9B-KV GGUF (Q4_K_M) via QuantStack
+  sd35        — Stable Diffusion 3.5 Large GGUF (Q4_0 / Q5_0 / Q8_0) via city96
+  wan         — Wan2.2 T2V / I2V GGUF (Q3_K_M / Q4_K_M / Q5_K_M / Q8_0) via QuantStack
+  ideogram4   — Ideogram 4 (API)
+
+Note: flux2 (FLUX.2 [dev] 32B) was REMOVED 2026-08-13 — its ~27 GB footprint
+cannot fit the 15.5 GiB card and the GPU-only policy forbids CPU fallback.
 
 GGUF files are downloaded from HuggingFace on first use and cached under GGUF_ROOT.
 Non-transformer pipeline components (text encoders, VAE, scheduler, tokenizers)
@@ -32,13 +37,7 @@ NVFP4_ROOT = "/opt/arthur-img-models/nvfp4"
 # GGUF file catalogue
 # ---------------------------------------------------------------------------
 
-# (repo_id, filename_in_repo)  — for flat-layout repos (FLUX.2, SD35)
-_FLUX2_GGUF: dict[str, tuple[str, str]] = {
-    "Q3_K_M": ("city96/FLUX.2-dev-gguf", "flux2-dev-Q3_K_M.gguf"),
-    "Q4_K_M": ("city96/FLUX.2-dev-gguf", "flux2-dev-Q4_K_M.gguf"),
-    "Q5_K_M": ("city96/FLUX.2-dev-gguf", "flux2-dev-Q5_K_M.gguf"),
-    "Q8_0":   ("city96/FLUX.2-dev-gguf", "flux2-dev-Q8_0.gguf"),
-}
+# (repo_id, filename_in_repo)  — for flat-layout repos (SD35)
 _SD35_GGUF: dict[str, tuple[str, str]] = {
     "Q4_0": ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q4_0.gguf"),
     "Q5_0": ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q5_0.gguf"),
@@ -101,7 +100,7 @@ def _load_nvfp4_transformer(model_key: str, subfolder: str):
     """
     Load a pre-saved NVFP4-quantized transformer from disk.
     The transformer must have been saved by nvfp4_save.py first.
-    `model_key`  — e.g. "flux2", "sd35", "wan-t2v", "wan-i2v"
+    `model_key`  — e.g. "sd35", "wan-t2v", "wan-i2v"
     `subfolder`  — "transformer" or "transformer_2"
     """
     import torch
@@ -206,222 +205,6 @@ def _evict_tts_engines() -> int:
     _t.sleep(2)  # let CUDA return the freed memory to the driver
     return torch.cuda.mem_get_info()[0] // (1024 * 1024)
 
-# ---------------------------------------------------------------------------
-# FLUX.2 [dev]
-# ---------------------------------------------------------------------------
-
-def _load_flux2(quant: str = "Q4_K_M"):
-    import torch
-    from diffusers import Flux2Pipeline, Flux2Transformer2DModel
-    from transformers import AutoModel
-
-    quant = quant or "Q4_K_M"
-    t0    = time.time()
-    token = HF_TOKEN or True
-
-    if not GPU_ONLY:
-        # Historical CPU path — ONLY for GPU-less machines that explicitly
-        # opt out with IMGLAB_GPU_ONLY=0. NEVER used on the VM (GPU-only
-        # policy). Quarantined below so the GPU-only code stays clean.
-        return _load_flux2_cpu(quant)
-
-    # ── GPU-only policy guard ────────────────────────────────────────────────
-    # Policy (2026-08-13): no CPU rendering, no system-RAM offloading — ever.
-    # The Q4_K_M GGUF is ~20 GB, LARGER than the whole 15.5 GiB card, so on
-    # this hardware flux2 is BLOCKED: evicting the TTS engines does not help
-    # because the quant alone cannot fit. The check below is structural — on
-    # a GPU big enough to hold quant + encoder + VAE it runs fully on CUDA.
-
-    # ── Transformer ──────────────────────────────────────────────────────────
-    if quant == "nvfp4":
-        transformer = _load_nvfp4_transformer("flux2", "transformer")
-    else:
-        if quant not in _FLUX2_GGUF:
-            raise RuntimeError(
-                f"FLUX.2 quant '{quant}' not recognised. "
-                f"Valid options: {list(_FLUX2_GGUF)} + ['nvfp4']"
-            )
-        repo_id, fname = _FLUX2_GGUF[quant]
-        gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "flux2"))
-
-        # Structural VRAM guard (fail loudly, never degrade to CPU): the quant
-        # must fit together with the NF4 text encoder (~6 GB) + VAE (~0.4 GB)
-        # + activation headroom (~1.1 GB), with 512 MiB margin.
-        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-        need_mb = os.path.getsize(gguf_path) // (1024 * 1024) + 7_500
-        if need_mb > free_mb - 512:
-            raise RuntimeError(
-                f"FLUX.2 [dev] is BLOCKED on this GPU: quant '{quant}' needs "
-                f"~{need_mb/1024:.1f} GiB of VRAM but only {free_mb/1024:.1f} GiB "
-                f"is free (card: 15.5 GiB). GPU-only policy — no CPU offloading, "
-                f"no system-RAM streaming. Runs only on a GPU big enough to "
-                f"hold everything on CUDA.")
-
-        log.info("Loading FLUX.2 [dev] transformer from GGUF — quant=%s …", quant)
-        transformer = Flux2Transformer2DModel.from_single_file(
-            gguf_path,
-            quantization_config = _gguf_quant_config(),
-            torch_dtype         = torch.bfloat16,
-        ).to("cuda")
-
-    # ── Text encoder (Mistral Small 3.1 24B, NF4 pre-quantised) ─────────────
-    log.info("Loading FLUX.2 text encoder (NF4) directly on CUDA …")
-    text_encoder = AutoModel.from_pretrained(
-        ENGINES["flux2"].hf_repo,
-        subfolder  = "text_encoder",
-        device_map = "cuda",
-        dtype      = torch.bfloat16,
-        token      = token,
-    )
-
-    # ── Pipeline assembly ────────────────────────────────────────────────────
-    log.info("Loading FLUX.2 [dev] pipeline shell (quant=%s) …", quant)
-    pipe = Flux2Pipeline.from_pretrained(
-        ENGINES["flux2"].hf_repo,
-        transformer  = transformer,
-        text_encoder = text_encoder,
-        torch_dtype  = torch.bfloat16,
-        token        = token,
-    ).to("cuda")
-
-    pipe.vae.enable_slicing()
-    pipe.vae.enable_tiling()
-
-    log.info("CUDA after pipeline ready: %.2f GiB",
-             torch.cuda.memory_allocated() / 1024**3)
-
-    STATE.loaded_model  = pipe
-    STATE.active_engine = "flux2"
-    STATE.active_quant  = quant
-    ENGINES["flux2"].loaded = True
-    log.info("FLUX.2 [dev] ready (GPU-only, quant=%s) in %.1f s",
-             quant, time.time() - t0)
-
-
-def _load_flux2_cpu(quant: str = "Q4_K_M"):
-    """Historical CPU group-offload path — ONLY for GPU-less deployments that
-    explicitly opt out with IMGLAB_GPU_ONLY=0. Quarantined 2026-08-13 under
-    the GPU-only policy; the VM (GPU_ONLY=1) never reaches this function."""
-    import torch
-    from diffusers import Flux2Pipeline, Flux2Transformer2DModel
-    from diffusers.hooks import apply_group_offloading
-    from transformers import AutoModel
-
-    quant = quant or "Q4_K_M"
-    t0    = time.time()
-    token = HF_TOKEN or True
-
-    if quant == "nvfp4":
-        transformer = _load_nvfp4_transformer("flux2", "transformer")
-    else:
-        if quant not in _FLUX2_GGUF:
-            raise RuntimeError(
-                f"FLUX.2 quant '{quant}' not recognised. "
-                f"Valid options: {list(_FLUX2_GGUF)} + ['nvfp4']"
-            )
-        repo_id, fname = _FLUX2_GGUF[quant]
-        gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "flux2"))
-        log.info("Loading FLUX.2 [dev] transformer from GGUF — quant=%s …", quant)
-        transformer = Flux2Transformer2DModel.from_single_file(
-            gguf_path,
-            quantization_config = _gguf_quant_config(),
-            torch_dtype         = torch.bfloat16,
-        )
-        # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
-        # Group offloading moves one leaf layer at a time to GPU during forward,
-        # keeping peak VRAM for the transformer to ~300-500 MB per step.
-        log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
-        apply_group_offloading(
-            transformer,
-            onload_device  = torch.device("cuda"),
-            offload_device = torch.device("cpu"),
-            offload_type   = "leaf_level",
-            use_stream     = False,
-        )
-
-    log.info("Loading FLUX.2 text encoder (NF4, CPU) …")
-    text_encoder = AutoModel.from_pretrained(
-        ENGINES["flux2"].hf_repo,
-        subfolder  = "text_encoder",
-        device_map = "cpu",
-        dtype      = torch.bfloat16,
-        token      = token,
-    )
-    log.info("Applying leaf-level group offloading to text encoder …")
-    try:
-        apply_group_offloading(
-            text_encoder,
-            onload_device  = torch.device("cuda"),
-            offload_device = torch.device("cpu"),
-            offload_type   = "leaf_level",
-            use_stream     = False,
-        )
-    except ValueError as exc:
-        if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
-            log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
-            from accelerate.hooks import remove_hook_from_module
-            remove_hook_from_module(text_encoder, recurse=True)
-            apply_group_offloading(
-                text_encoder,
-                onload_device  = torch.device("cuda"),
-                offload_device = torch.device("cpu"),
-                offload_type   = "leaf_level",
-                use_stream     = False,
-            )
-        else:
-            raise
-
-    log.info("Loading FLUX.2 [dev] pipeline shell (quant=%s) …", quant)
-    pipe = Flux2Pipeline.from_pretrained(
-        ENGINES["flux2"].hf_repo,
-        transformer  = transformer,
-        text_encoder = text_encoder,
-        torch_dtype  = torch.bfloat16,
-        token        = token,
-    )
-    # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
-    # doesn't block waiting for a CPU→GPU transfer. DO NOT call pipe.to("cuda")
-    # (would drag the group-offloaded transformer / text encoder back to GPU)
-    # or enable_model_cpu_offload() (AlignDevicesHook conflicts with offload).
-    log.info("Moving VAE to CUDA …")
-    pipe.vae = pipe.vae.to("cuda")
-    pipe.vae.enable_slicing()
-    pipe.vae.enable_tiling()
-
-    STATE.loaded_model  = pipe
-    STATE.active_engine = "flux2"
-    STATE.active_quant  = quant
-    ENGINES["flux2"].loaded = True
-    log.info("FLUX.2 [dev] ready (CPU group-offload path, quant=%s) in %.1f s",
-             quant, time.time() - t0)
-
-
-def _generate_flux2(params: dict) -> list[dict]:
-    import torch
-
-    pipe  = STATE.loaded_model
-    seed  = params.get("seed", -1)
-    if seed == -1:
-        seed = random_seed()
-
-    # Use CUDA generator — GPU-only policy: the whole pipeline lives on CUDA.
-    generator = torch.Generator("cuda").manual_seed(seed)
-
-    log.info("CUDA allocated before pipe() call: %.2f GiB",
-             torch.cuda.memory_allocated() / 1024**3)
-
-    result = pipe(
-        prompt              = params["prompt"],
-        image               = _load_ref_image(params.get("reference_image")),
-        width               = int(params.get("width",  1024)),
-        height              = int(params.get("height", 1024)),
-        num_inference_steps = int(params.get("num_inference_steps", 28)),
-        guidance_scale      = float(params.get("guidance_scale", 4.0)),
-        generator           = generator,
-    )
-
-    final_params = {**params, "seed": seed}
-    return save_images(result.images, "flux2", final_params)
 
 
 # ---------------------------------------------------------------------------
@@ -1059,7 +842,6 @@ def probe_availability():
     Check which engines can be loaded (packages importable, not that models
     are downloaded — that happens lazily on first generate call).
     """
-    _probe_flux2()
     _probe_flux2klein()
     _probe_flux2klein9b()
     _probe_sd35()
@@ -1089,7 +871,6 @@ def _strip_missing_nvfp4_options():
     MIN_SHARD_BYTES = 1 * 1024 ** 3  # 1 GB
 
     checks = {
-        "flux2": os.path.join(NVFP4_ROOT, "flux2",   "transformer"),
         "sd35":  os.path.join(NVFP4_ROOT, "sd35",    "transformer"),
         "wan":   os.path.join(NVFP4_ROOT, "wan-t2v", "transformer"),
     }
@@ -1111,34 +892,6 @@ def _strip_missing_nvfp4_options():
                     p["options"] = [o for o in p["options"] if o.get("value") != "nvfp4"]
             if not log.isEnabledFor(logging.WARNING):
                 log.info("NVFP4 not saved for %s — removed from quant options", engine_key)
-
-
-def _probe_flux2():
-    try:
-        from diffusers import Flux2Pipeline      # noqa: F401
-        import bitsandbytes                      # noqa: F401
-        import requests                          # noqa: F401
-        if not HF_TOKEN:
-            from huggingface_hub import get_token
-            tok = get_token()
-            if not tok:
-                raise RuntimeError("No HF_TOKEN and no cached HF token found")
-        # GPU-only policy (2026-08-13): no CPU offloading, ever. The Q4_K_M
-        # GGUF (~20 GB) + NF4 text encoder (~6 GB) + VAE ≈ 27 GB — larger than
-        # this 16 GB card, so flux2 is BLOCKED here regardless of TTS eviction.
-        if GPU_ONLY:
-            import torch
-            total_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
-            if total_mb < 27_000:
-                raise RuntimeError(
-                    "BLOCKED: Q4_K_M GGUF + NF4 encoder need ~27 GB VRAM; this "
-                    "card has 15.5 GiB. GPU-only policy — no CPU offloading. "
-                    "Requires a bigger GPU (32 GB+).")
-        ENGINES["flux2"].available = True
-    except Exception as exc:
-        ENGINES["flux2"].available = False
-        ENGINES["flux2"].error     = str(exc)
-        log.warning("FLUX.2 [dev] unavailable: %s", exc)
 
 
 def _probe_flux2klein():
@@ -1254,7 +1007,6 @@ def _load_ref_image(ref) -> Optional[Any]:
 # ---------------------------------------------------------------------------
 
 _LOADERS = {
-    "flux2":         _load_flux2,
     "flux2klein":    _load_flux2klein,
     "flux2klein9b":  _load_flux2klein9b,
     "sd35":          _load_sd35,
@@ -1263,7 +1015,6 @@ _LOADERS = {
 }
 
 _GENERATORS = {
-    "flux2":         _generate_flux2,
     "flux2klein":    _generate_flux2klein,
     "flux2klein9b":  _generate_flux2klein9b,
     "sd35":          _generate_sd35,

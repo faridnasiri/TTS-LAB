@@ -42,7 +42,7 @@ GPU_ONLY = GPU_ONLY or NO_MODEL_OFFLOAD
 
 @dataclass
 class EngineInfo:
-    key: str                          # API key used in URL  e.g. "flux2"
+    key: str                          # API key used in URL  e.g. "flux2klein"
     label: str                        # Human label
     description: str
     output_type: str                  # "image" | "video"
@@ -74,55 +74,6 @@ def _p(name, type_, default, label, min_=None, max_=None, step=None,
 # ---------------------------------------------------------------------------
 
 ENGINES: dict[str, EngineInfo] = {
-
-    "flux2": EngineInfo(
-        key         = "flux2",
-        label       = "FLUX.2 [dev]",
-        description = (
-            "32B rectified flow transformer. State-of-the-art text-to-image and "
-            "image editing (reference image supported). GGUF quantised transformer "
-            "loaded from city96/FLUX.2-dev-gguf. Non-transformer components "
-            "(T5 encoder, VAE) reused from the pre-quantised BnB NF4 cache."
-        ),
-        output_type = "image",
-        vram_gb     = 16.0,
-        hf_repo     = "diffusers/FLUX.2-dev-bnb-4bit",
-        hf_repo_alt = None,
-        params      = [
-            _p("prompt",              "textarea", "",     "Prompt",
-               tooltip="Describe the image you want to generate.", required=True),
-            _p("reference_image",     "file",     None,   "Reference image (optional)",
-               tooltip="Upload a reference image for style/content transfer (I2I mode)."),
-            _p("width",               "int",      1024,   "Width (px)",
-               min_=256, max_=2048, step=64,
-               tooltip="Output width in pixels. Must be a multiple of 64."),
-            _p("height",              "int",      1024,   "Height (px)",
-               min_=256, max_=2048, step=64,
-               tooltip="Output height in pixels. Must be a multiple of 64."),
-            _p("num_inference_steps", "int",      28,     "Steps",
-               min_=1, max_=50, step=1,
-               tooltip="28 is a good trade-off; fewer = faster but lower quality."),
-            _p("guidance_scale",      "float",    3.5,    "Guidance scale",
-               min_=1.0, max_=20.0, step=0.5,
-               tooltip="How strongly the model follows the prompt. 3.5–4.0 is typical."),
-            _p("seed",                "int",      -1,     "Seed (-1 = random)",
-               min_=-1, max_=2**31-1, step=1,
-               tooltip="Fixed seed for reproducible results."),
-            _p("quant",               "select",   "Q4_K_M", "Quantization",
-               options=[
-                   {"value": "Q3_K_M", "label": "Q3_K_M — 16 GB transformer  (smallest GGUF)"},
-                   {"value": "Q4_K_M", "label": "Q4_K_M — 20 GB transformer  ✓ recommended GGUF"},
-                   {"value": "Q5_K_M", "label": "Q5_K_M — 24 GB transformer  (higher quality GGUF)"},
-                   {"value": "Q8_0",   "label": "Q8_0   — 35 GB transformer  (near-lossless GGUF)"},
-                   {"value": "nvfp4",  "label": "NVFP4  — ~8 GB transformer  ⚡ Blackwell native (run nvfp4_save.py first)"},
-               ],
-               tooltip=(
-                   "GGUF quantisation uses city96/FLUX.2-dev-gguf, downloaded on first use. "
-                   "NVFP4 uses torchao NVFP4WeightOnlyConfig baked from BF16 by nvfp4_save.py — "
-                   "fastest on RTX 5060 Ti (Blackwell SM100+). Q4_K_M is best GGUF trade-off."
-               )),
-        ],
-    ),
 
     "sd35": EngineInfo(
         key         = "sd35",
@@ -183,8 +134,8 @@ ENGINES: dict[str, EngineInfo] = {
         label       = "FLUX.2 Klein 4B",
         description = (
             "FLUX.2 Klein 4B — compact 4B flow transformer from Black Forest Labs. "
-            "Apache 2.0 license. Uses Qwen3 text encoder (far smaller than the Mistral 24B "
-            "in FLUX.2-dev). Fits in ~13 GB VRAM at BF16 — runs on our RTX 5060 Ti. "
+            "Apache 2.0 license. Uses Qwen3 text encoder (far smaller than the 32B "
+            "dev variant's Mistral 24B). Fits in ~10 GiB VRAM — runs on our RTX 5060 Ti. "
             "Loaded directly from HuggingFace (no pre-saved shared dir needed). "
             "Supports text-to-image and image-to-image (reference image)."
         ),

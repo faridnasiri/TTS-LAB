@@ -10,7 +10,6 @@ For each transformer this script:
   4. Deletes the temporary BF16 cache to reclaim disk space immediately.
 
 Supported models:
-  - FLUX.2 [dev]     : black-forest-labs/FLUX.2-dev          → nvfp4/flux2/transformer/
   - SD 3.5 Large     : stabilityai/stable-diffusion-3.5-large → nvfp4/sd35/transformer/
   - Wan2.2 T2V       : Wan-AI/Wan2.2-T2V-A14B-Diffusers      → nvfp4/wan-t2v/transformer/
                                                                   nvfp4/wan-t2v/transformer_2/
@@ -19,7 +18,7 @@ Supported models:
 
 Requirements:
   - torchao installed in the env (pip install torchao)
-  - HF_TOKEN with access to gated models (FLUX.2-dev, stable-diffusion-3.5-large)
+  - HF_TOKEN with access to gated models (stable-diffusion-3.5-large)
 
 Run (after service is stopped or alongside it):
     /opt/arthur-img-env/bin/python /opt/arthur-img/nvfp4_save.py
@@ -41,13 +40,6 @@ TEMP_BF16  = "/opt/arthur-img-models/temp_bf16"
 # Job list  (label, hf_repo, subfolder, out_dir)
 # ---------------------------------------------------------------------------
 JOBS = [
-    # FLUX.2 [dev] — gated, needs HF_TOKEN with access to black-forest-labs/FLUX.2-dev
-    (
-        "flux2/transformer",
-        "black-forest-labs/FLUX.2-dev",
-        "transformer",
-        f"{NVFP4_ROOT}/flux2/transformer",
-    ),
     # SD 3.5 Large — gated, needs HF_TOKEN with access to stabilityai/stable-diffusion-3.5-large
     (
         "sd35/transformer",

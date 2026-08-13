@@ -264,7 +264,6 @@ UI_HTML = r"""<!DOCTYPE html>
         <h2>Gallery</h2>
         <select class="gallery-filter" id="galleryFilter" onchange="loadGallery()">
           <option value="">All engines</option>
-          <option value="flux2">FLUX.2 [dev]</option>
           <option value="sd35">SD 3.5 Large</option>
           <option value="wan">Wan2.2</option>
           <option value="ideogram4">Ideogram 4</option>
@@ -289,7 +288,7 @@ UI_HTML = r"""<!DOCTYPE html>
 // State
 // ============================================================
 const ENGINES_META = {};   // filled by /status
-let currentEngine  = 'flux2';
+let currentEngine  = 'flux2klein';
 let formValues     = {};   // param key → current value
 let uploadedFile   = null; // reference image bytes
 let lastStatus     = null; // last /status response
@@ -364,8 +363,8 @@ async function refreshStatus() {
 // ============================================================
 function buildEngineTabs() {
   const tabs = document.getElementById('engineTabs');
-  const keys = ['flux2', 'flux2klein', 'flux2klein9b', 'sd35', 'wan', 'ideogram4'];
-  const labels = { flux2: 'FLUX.2', flux2klein: 'FLUX.2 Klein', flux2klein9b: 'Klein 9B-KV', sd35: 'SD 3.5 Large', wan: 'Wan2.2', ideogram4: 'Ideogram 4' };
+  const keys = ['flux2klein', 'flux2klein9b', 'sd35', 'wan', 'ideogram4'];
+  const labels = { flux2klein: 'FLUX.2 Klein', flux2klein9b: 'Klein 9B-KV', sd35: 'SD 3.5 Large', wan: 'Wan2.2', ideogram4: 'Ideogram 4' };
   tabs.innerHTML = keys.map(k => `
     <div class="engine-tab" id="tab-${k}" onclick="selectEngine('${k}')">
       ${labels[k]}

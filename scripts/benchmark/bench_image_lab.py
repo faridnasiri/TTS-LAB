@@ -53,7 +53,7 @@ RUNS = [
     ("sd35",       "Q4_0",    4, "SD 3.5 Large · GGUF Q4_0 (turbo-style, 4 steps)"),
     ("sd35",       "nvfp4",   8, "SD 3.5 Large · NVFP4 (lightning, 8 steps)"),
     ("flux2klein", "",        4, "FLUX.2 Klein 4B · BF16 (distilled, 4 steps)"),
-    ("flux2",      "Q4_K_M", 28, "FLUX.2 [dev] · GGUF Q4_K_M"),
+    ("flux2klein9b", "",      4, "FLUX.2 Klein 9B-KV · GGUF (distilled, 4 steps)"),
 ]
 
 # ---------------------------------------------------------------------------
