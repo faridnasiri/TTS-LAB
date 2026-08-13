@@ -346,7 +346,10 @@ def _load_flux2klein(quant: str = ""):
     from diffusers import Flux2KleinPipeline
 
     t0    = time.time()
-    token = HF_TOKEN or True
+    # Same hf_hub 1.16.1 issue as the 9B-KV loader: `token=True` REQUIRES a
+    # token and the systemd service has none — and this is a PUBLIC repo,
+    # so no token is needed at all.
+    token = None
 
     log.info("Loading FLUX.2 Klein 4B from HuggingFace (%s) …",
              ENGINES["flux2klein"].hf_repo)
@@ -356,8 +359,16 @@ def _load_flux2klein(quant: str = ""):
         token       = token,
     )
     if GPU_ONLY:
-        log.info("GPU-only mode enabled: moving FLUX.2 Klein 4B to CUDA …")
-        pipe = pipe.to("cuda")
+        # The GPU is shared with the TTS engine containers (~3.4 GiB resident
+        # on ports 8101-8104). Full-GPU klein-4B needs ~12.4 GiB; when there
+        # isn't enough free VRAM, CPU-offload the pipeline instead (62 GB RAM).
+        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        if free_mb >= 12500:
+            log.info("GPU-only mode enabled: moving FLUX.2 Klein 4B to CUDA …")
+            pipe = pipe.to("cuda")
+        else:
+            log.info("VRAM free %d MiB < 12500 — CPU-offloading FLUX.2 Klein 4B …", free_mb)
+            pipe.enable_model_cpu_offload()
     else:
         pipe.enable_model_cpu_offload()
     pipe.vae.enable_slicing()
@@ -391,6 +402,226 @@ def _generate_flux2klein(params: dict) -> list[dict]:
 
     final_params = {**params, "seed": seed}
     return save_images(result.images, "flux2klein", final_params)
+
+
+# ---------------------------------------------------------------------------
+# FLUX.2 Klein 9B-KV (GGUF Q4_K_M)
+# ---------------------------------------------------------------------------
+
+_FLUX2KLEIN9B_GGUF: dict[str, tuple[str, str]] = {
+    "Q4_K_M": ("QuantStack/FLUX.2-Klein-9B-KV-GGUF", "Flux-2-Klein-9B-KV-Q4_K_M.gguf"),
+}
+
+# Official black-forest-labs/FLUX.2-klein-9b-kv repo is gated (token lacks
+# access), so the transformer comes from the public QuantStack GGUF.  That
+# GGUF carries no `mmdit_*` config metadata, and diffusers' auto-config
+# inference (DIFFUSERS_DEFAULT_PIPELINE_PATHS) would pick the wrong FLUX.2-dev
+# 32B config, so we derive the config from the actual GGUF tensor shapes and
+# pass it explicitly:
+#
+#   double_blocks 0..7   (8 layers)   qkv [12288,4096] -> hidden 4096, 32 heads x 128
+#   single_blocks 0..23  (24 layers)  linear1 [36864,4096] = qkv 12288 + mlp 24576
+#   img_mlp.0 [24576,4096]            -> mlp_ratio 3.0 (diffusers SwiGLU doubles: 4096*3*2)
+#   txt_in [12288,4096]               -> joint_attention_dim 12288 (= 3 x Qwen3-8B hidden 4096)
+#   time_in [256,4096]                -> timestep_guidance_channels 256
+#   guidance_in absent                -> guidance_embeds false (distilled)
+_FLUX2KLEIN9B_CONFIG: dict = {
+    "_class_name":              "Flux2Transformer2DModel",
+    "_diffusers_version":       "0.37.0.dev0",
+    "attention_head_dim":       128,
+    "axes_dims_rope":           [32, 32, 32, 32],
+    "eps":                      1e-06,
+    "guidance_embeds":          False,
+    "in_channels":              128,
+    "joint_attention_dim":      12288,
+    "mlp_ratio":                3.0,
+    "num_attention_heads":      32,
+    "num_layers":               8,
+    "num_single_layers":        24,
+    "out_channels":             None,
+    "patch_size":               1,
+    "rope_theta":               2000,
+    "timestep_guidance_channels": 256,
+}
+
+
+def _flux2klein9b_config_dir() -> str:
+    """Return (creating if needed) the local transformer config dir for the GGUF."""
+    cfg_dir = os.path.join(GGUF_ROOT, "flux2klein9b", "transformer_cfg")
+    os.makedirs(cfg_dir, exist_ok=True)
+    import json
+    with open(os.path.join(cfg_dir, "config.json"), "w") as f:
+        json.dump(_FLUX2KLEIN9B_CONFIG, f, indent=2)
+    return cfg_dir
+
+
+def _load_flux2klein9b(quant: str = "Q4_K_M"):
+    import torch
+    from diffusers import Flux2KleinKVPipeline, Flux2Transformer2DModel
+    from diffusers.models import AutoencoderKLFlux2
+    from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+    from transformers import AutoModel, Qwen2TokenizerFast
+
+    quant = quant or "Q4_K_M"
+    if quant not in _FLUX2KLEIN9B_GGUF:
+        raise RuntimeError(
+            f"FLUX.2 Klein 9B-KV quant '{quant}' not recognised. "
+            f"Valid options: {list(_FLUX2KLEIN9B_GGUF)}"
+        )
+    t0    = time.time()
+    # NOTE: hf_hub 1.16.1 treats `token=True` as "a token is REQUIRED" and
+    # raises LocalTokenNotFoundError before any cache check — and the systemd
+    # service has no HF_TOKEN (shell /etc/environment isn't loaded by systemd).
+    # All components below come from PUBLIC repos, so no token is needed.
+    token = None
+    repo  = ENGINES["flux2klein9b"].hf_repo_alt   # black-forest-labs/FLUX.2-klein-4B (shared components)
+
+    # ── VRAM budget decision ─────────────────────────────────────────────────
+    # The GPU is shared with the TTS engine containers (ports 8101-8104),
+    # which keep a TTS model resident (~3.4 GiB observed). Full-GPU budget
+    # (transformer 5.7 + Qwen3-8B NF4 5 + VAE 3 + activations 1.5 ≈ 15.2 GiB)
+    # only fits when the GPU is ours alone; otherwise the text encoder drops
+    # to CPU bf16 with group offloading (VM has 62 GB RAM).
+    encoder_on_gpu = False
+    if GPU_ONLY:
+        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        encoder_on_gpu = free_mb >= 15500
+        log.info("VRAM free at load: %d MiB → text encoder %s",
+                 free_mb, "on GPU (NF4)" if encoder_on_gpu else "on CPU (bf16 + group offload)")
+
+    # ── Transformer (GGUF Q4_K_M, explicit derived config) ────────────────
+    repo_id, fname = _FLUX2KLEIN9B_GGUF[quant]
+    gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "flux2klein9b"))
+    log.info("Loading FLUX.2 Klein 9B-KV transformer from GGUF — quant=%s …", quant)
+    transformer = Flux2Transformer2DModel.from_single_file(
+        gguf_path,
+        config              = _flux2klein9b_config_dir(),
+        quantization_config = _gguf_quant_config(),
+        torch_dtype         = torch.bfloat16,
+    )
+    if GPU_ONLY:
+        transformer = transformer.to("cuda")
+    else:
+        from diffusers.hooks import apply_group_offloading
+        log.info("Applying leaf-level group offloading to FLUX.2 Klein 9B-KV transformer …")
+        apply_group_offloading(
+            transformer,
+            onload_device  = torch.device("cuda"),
+            offload_device = torch.device("cpu"),
+            offload_type   = "leaf_level",
+            use_stream     = False,
+        )
+
+    # ── Text encoder (Qwen3-8B, hidden 4096 → 3 x 4096 = 12288 joint dim) ──
+    if GPU_ONLY and encoder_on_gpu:
+        from transformers import BitsAndBytesConfig
+        log.info("Loading Qwen3-8B text encoder (NF4 4-bit) directly on CUDA …")
+        text_encoder = AutoModel.from_pretrained(
+            "Qwen/Qwen3-8B",
+            quantization_config = BitsAndBytesConfig(
+                load_in_4bit              = True,
+                bnb_4bit_quant_type       = "nf4",
+                bnb_4bit_compute_dtype    = torch.bfloat16,
+                bnb_4bit_use_double_quant = True,
+            ),
+            device_map = "cuda",
+        )
+    else:
+        log.info("Loading Qwen3-8B text encoder (BF16, CPU) …")
+        text_encoder = AutoModel.from_pretrained(
+            "Qwen/Qwen3-8B",
+            device_map = "cpu",
+            torch_dtype = torch.bfloat16,
+        )
+        from diffusers.hooks import apply_group_offloading
+        log.info("Applying leaf-level group offloading to Qwen3-8B text encoder …")
+        apply_group_offloading(
+            text_encoder,
+            onload_device  = torch.device("cuda"),
+            offload_device = torch.device("cpu"),
+            offload_type   = "leaf_level",
+            use_stream     = False,
+        )
+
+    # ── Shared klein components (from the accessible klein-4B repo) ────────
+    tokenizer  = Qwen2TokenizerFast.from_pretrained("Qwen/Qwen3-8B")
+    vae        = AutoencoderKLFlux2.from_pretrained(
+        repo, subfolder = "vae", torch_dtype = torch.bfloat16, token = token,
+    )
+    scheduler  = FlowMatchEulerDiscreteScheduler.from_pretrained(
+        repo, subfolder = "scheduler", torch_dtype = torch.bfloat16, token = token,
+    )
+
+    # ── Pipeline assembly ──────────────────────────────────────────────────
+    log.info("Assembling FLUX.2 Klein 9B-KV pipeline …")
+    pipe = Flux2KleinKVPipeline(
+        transformer  = transformer,
+        text_encoder = text_encoder,
+        tokenizer    = tokenizer,
+        vae          = vae,
+        scheduler    = scheduler,
+        is_distilled = True,
+    )
+    if GPU_ONLY:
+        if encoder_on_gpu:
+            log.info("GPU-only mode enabled: moving FLUX.2 Klein 9B-KV to CUDA …")
+            pipe = pipe.to("cuda")
+        else:
+            # Encoder is CPU-offloaded (group-offload hooks already attached);
+            # pipe.to("cuda") would drag it back onto the GPU. Move only the
+            # transformer and VAE — the hooks stream encoder layers per-forward.
+            log.info("Moving transformer + VAE to CUDA (encoder stays CPU-offloaded) …")
+            pipe.transformer = pipe.transformer.to("cuda")
+            pipe.vae         = pipe.vae.to("cuda")
+    else:
+        pipe.enable_model_cpu_offload()
+    pipe.vae.enable_slicing()
+    pipe.vae.enable_tiling()
+
+    STATE.loaded_model       = pipe
+    STATE.active_engine      = "flux2klein9b"
+    STATE.active_quant       = quant
+    ENGINES["flux2klein9b"].loaded = True
+    log.info("FLUX.2 Klein 9B-KV ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0,
+             torch.cuda.memory_allocated() / 1024**3)
+
+
+def _generate_flux2klein9b(params: dict) -> list[dict]:
+    import torch
+
+    pipe = STATE.loaded_model
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+
+    generator = torch.Generator("cpu").manual_seed(seed)
+
+    # Note: no guidance_scale — step-distilled klein models run without CFG
+    # (guidance=None in the pipeline). The UI still shows the param for
+    # consistency with the other klein engine.
+    result = pipe(
+        prompt              = params["prompt"],
+        image               = _load_ref_image(params.get("reference_image")),
+        width               = int(params.get("width",  1024)),
+        height              = int(params.get("height", 1024)),
+        num_inference_steps = int(params.get("num_inference_steps", 4)),
+        generator           = generator,
+    )
+
+    final_params = {**params, "seed": seed}
+    return save_images(result.images, "flux2klein9b", final_params)
+
+
+def _probe_flux2klein9b():
+    try:
+        from diffusers import Flux2KleinKVPipeline, Flux2Transformer2DModel  # noqa: F401
+        from transformers import AutoModel, Qwen2TokenizerFast               # noqa: F401
+        ENGINES["flux2klein9b"].available = True
+    except Exception as exc:
+        ENGINES["flux2klein9b"].available = False
+        ENGINES["flux2klein9b"].error     = str(exc)
+        log.warning("FLUX.2 Klein 9B-KV unavailable: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -687,6 +918,7 @@ def probe_availability():
     """
     _probe_flux2()
     _probe_flux2klein()
+    _probe_flux2klein9b()
     _probe_sd35()
     _probe_wan()
     _probe_ideogram4()
@@ -868,17 +1100,19 @@ def _load_ref_image(ref) -> Optional[Any]:
 # ---------------------------------------------------------------------------
 
 _LOADERS = {
-    "flux2":      _load_flux2,
-    "flux2klein": _load_flux2klein,
-    "sd35":       _load_sd35,
-    "wan":        _load_wan,
-    "ideogram4":  _load_ideogram4,
+    "flux2":         _load_flux2,
+    "flux2klein":    _load_flux2klein,
+    "flux2klein9b":  _load_flux2klein9b,
+    "sd35":          _load_sd35,
+    "wan":           _load_wan,
+    "ideogram4":     _load_ideogram4,
 }
 
 _GENERATORS = {
-    "flux2":      _generate_flux2,
-    "flux2klein": _generate_flux2klein,
-    "sd35":       _generate_sd35,
-    "wan":        _generate_wan,
-    "ideogram4":  _generate_ideogram4,
+    "flux2":         _generate_flux2,
+    "flux2klein":    _generate_flux2klein,
+    "flux2klein9b":  _generate_flux2klein9b,
+    "sd35":          _generate_sd35,
+    "wan":           _generate_wan,
+    "ideogram4":     _generate_ideogram4,
 }

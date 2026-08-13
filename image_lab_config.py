@@ -217,6 +217,46 @@ ENGINES: dict[str, EngineInfo] = {
         ],
     ),
 
+    "flux2klein9b": EngineInfo(
+        key         = "flux2klein9b",
+        label       = "FLUX.2 Klein 9B-KV",
+        description = (
+            "FLUX.2 Klein 9B-KV — the mid-size Klein variant from Black Forest Labs "
+            "(official 9B-KV repo is gated). Runs the Q4_K_M GGUF from "
+            "QuantStack/FLUX.2-Klein-9B-KV-GGUF with a locally-derived transformer "
+            "config (8 double + 24 single blocks, hidden 4096). Uses the Qwen3-8B "
+            "text encoder (NF4-quantised) and the shared FLUX.2 Klein VAE/scheduler. "
+            "KV reference-token caching enables efficient image editing."
+        ),
+        output_type = "image",
+        vram_gb     = 13.5,
+        hf_repo     = "QuantStack/FLUX.2-Klein-9B-KV-GGUF",
+        hf_repo_alt = "black-forest-labs/FLUX.2-klein-4B",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image you want to generate.", required=True),
+            _p("negative_prompt",     "textarea", "",     "Negative prompt",
+               tooltip="Describe what you do NOT want in the image."),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Upload a reference image for I2I / style-transfer mode (KV-cached)."),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=2048, step=64,
+               tooltip="Output width in pixels. Must be a multiple of 64."),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=2048, step=64,
+               tooltip="Output height in pixels. Must be a multiple of 64."),
+            _p("num_inference_steps", "int",      4,      "Steps",
+               min_=1, max_=20, step=1,
+               tooltip="4 steps is optimal — FLUX.2-klein models are step-distilled. More steps rarely help."),
+            _p("guidance_scale",      "float",    3.5,    "Guidance scale",
+               min_=1.0, max_=10.0, step=0.5,
+               tooltip="Ignored for this step-distilled model; included for UI consistency."),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1,
+               tooltip="Fixed seed for reproducible results."),
+        ],
+    ),
+
     "wan": EngineInfo(
         key         = "wan",
         label       = "Wan2.2",

@@ -1,6 +1,6 @@
 # Arthur TTS Lab
 
-> 28-engine TTS benchmark + 1 LLM (Qwen 3.6 27B) + 5-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> 28-engine TTS benchmark + 1 LLM (Qwen 3.6 27B) + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
 > **Deployed to:** `arthur@192.168.0.87:8009` (TTS) / `:8006` (LLM) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
@@ -75,7 +75,7 @@ Deploy command (on VM):
 | `tts_lab_utils.py` | 103 | `_to_wav()`, `_wav_dur()`, `_safe_del()`, `_ram_mb()`, `_require_gpu()` |
 | `voice_library.py` | 593 | Persian Voice Library — Common Voice download, speaker embeddings |
 | `image_lab.py` | 188 | Image Lab FastAPI entry-point (port 8002) |
-| `image_lab_engines.py` | 884 | 5 image/video engine load/synth pairs |
+| `image_lab_engines.py` | 1,118 | 6 image/video engine load/synth pairs |
 | `image_lab_ui.py` | 891 | Image Lab web UI |
 
 ## Build / Run / Test / Deploy Commands
@@ -240,6 +240,7 @@ Response differs from TTS engines:
 | `docs/benchmarks/*.md` | RTF benchmark results by date |
 | `docs/containerization/07-QWEN36-LLM-PLAN.md` | Qwen 3.6 LLM integration plan — model selection, VRAM strategy, eviction protocol |
 | `docs/containerization/08-QWEN36-DEPLOYMENT.md` | **Qwen 3.6 LLM deployment reference** — full deploy guide, API, VRAM budget, troubleshooting |
+| `docs/image-lab/FLUX2_KLEIN_9B_KV.md` | **FLUX.2 Klein 9B-KV engine** — GGUF config derivation, Qwen3-8B encoder, VRAM budget |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
 | `docs/issues/*.md` | Bug investigations (VibeVoice, S2-Pro, ChatTTS) |
