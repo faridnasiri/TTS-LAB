@@ -227,7 +227,10 @@ async def engine_logs(since: int = 0):
     lines that only exist engine-side (e.g. chatterboxturbo chunking).
     """
     entries = [e for e in _server_log if e["seq"] > since]
-    return {"entries": entries, "seq": _server_log_seq}
+    # Read the seq cursor live from the module — the by-value import above
+    # freezes it at import time and would otherwise always report 0.
+    import tts_lab_config as _cfg
+    return {"entries": entries, "seq": _cfg._server_log_seq}
 
 
 @app.post("/synthesize")

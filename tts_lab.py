@@ -176,7 +176,10 @@ async def get_logs(since: int = 0, engine: str = ""):
         except Exception as e:
             return JSONResponse({"error": str(e), "entries": [], "seq": 0}, status_code=502)
     entries = [e for e in _server_log if e["seq"] > since]
-    return JSONResponse({"entries": entries, "seq": _server_log_seq})
+    # Read the seq cursor live from the module — the by-value import above
+    # freezes it at import time and would otherwise always report 0.
+    import tts_lab_config as _cfg
+    return JSONResponse({"entries": entries, "seq": _cfg._server_log_seq})
 
 
 @app.get("/voices/{model}")
