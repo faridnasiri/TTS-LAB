@@ -192,6 +192,19 @@ def _load_flux2(quant: str = "Q4_K_M"):
     t0    = time.time()
     token = HF_TOKEN or True
 
+    # ── VRAM budget decision ─────────────────────────────────────────────────
+    # flux2-dev-Q4_K_M.gguf is ~20 GB — LARGER than the 15.5 GiB usable VRAM on
+    # this card, so the transformer can never live fully on GPU and is always
+    # group-offloaded (leaf-level). The text encoder (Mistral Small 3.1 24B,
+    # NF4, ~6 GB) goes to GPU only when the card is essentially empty.
+    encoder_on_gpu = False
+    if GPU_ONLY:
+        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        encoder_on_gpu = free_mb >= 15500
+        log.info("VRAM free at load: %d MiB → text encoder %s",
+                 free_mb, "on GPU (NF4)" if encoder_on_gpu
+                          else "CPU-offloaded (bf16 + group offload)")
+
     # ── Transformer ──────────────────────────────────────────────────────────
     if quant == "nvfp4":
         transformer = _load_nvfp4_transformer("flux2", "transformer")
@@ -214,24 +227,22 @@ def _load_flux2(quant: str = "Q4_K_M"):
         _apply_transformer_group_offload = True
 
     if _apply_transformer_group_offload:
-        if GPU_ONLY:
-            log.info("GPU-only mode enabled: moving FLUX.2 transformer to CUDA without group offloading …")
-            transformer = transformer.to("cuda")
-        else:
-            # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
-            # Group offloading moves one leaf layer at a time to GPU during forward,
-            # keeping peak VRAM for transformer to ~300-500 MB per step.
-            log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
-            apply_group_offloading(
-                transformer,
-                onload_device  = torch.device("cuda"),
-                offload_device = torch.device("cpu"),
-                offload_type   = "leaf_level",
-                use_stream     = False,
-            )
+        # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
+        # Group offloading moves one leaf layer at a time to GPU during forward,
+        # keeping peak VRAM for the transformer to ~300-500 MB per step. Q4_K_M
+        # is ~20 GB — larger than the whole 16 GB card — so this applies in
+        # GPU-only mode too (the old full-CUDA path could never fit).
+        log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
+        apply_group_offloading(
+            transformer,
+            onload_device  = torch.device("cuda"),
+            offload_device = torch.device("cpu"),
+            offload_type   = "leaf_level",
+            use_stream     = False,
+        )
 
     # ── Text encoder (Mistral Small 3.1 24B, NF4 pre-quantised) ─────────────
-    if GPU_ONLY:
+    if GPU_ONLY and encoder_on_gpu:
         log.info("Loading FLUX.2 text encoder (NF4) directly on CUDA …")
         text_encoder = AutoModel.from_pretrained(
             ENGINES["flux2"].hf_repo,
@@ -283,16 +294,14 @@ def _load_flux2(quant: str = "Q4_K_M"):
         token        = token,
     )
 
-    if GPU_ONLY:
-        log.info("GPU-only mode enabled: moving FLUX.2 [dev] pipeline to CUDA …")
-        pipe = pipe.to("cuda")
-    else:
-        # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
-        # doesn't block waiting for a CPU→GPU transfer. DO NOT call
-        # enable_model_cpu_offload() here — that would add AlignDevicesHook to the
-        # transformer / text_encoder and conflict with group offloading.
-        log.info("Moving VAE to CUDA …")
-        pipe.vae = pipe.vae.to("cuda")
+    # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
+    # doesn't block waiting for a CPU→GPU transfer. DO NOT call pipe.to("cuda")
+    # or enable_model_cpu_offload() here — pipe.to("cuda") would drag the
+    # group-offloaded transformer / text encoder back to GPU (the Q4_K_M GGUF
+    # can't fit), and enable_model_cpu_offload() would add an AlignDevicesHook
+    # that conflicts with group offloading.
+    log.info("Moving VAE to CUDA …")
+    pipe.vae = pipe.vae.to("cuda")
 
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()

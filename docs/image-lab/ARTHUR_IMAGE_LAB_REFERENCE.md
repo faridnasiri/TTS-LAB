@@ -293,9 +293,9 @@ A standalone Python script that POSTs a pre-built dashboard JSON to Grafana's RE
 | **HuggingFace repo** | `diffusers/FLUX.2-dev-bnb-4bit` |
 | **Architecture** | 32B rectified flow transformer (DiT) |
 | **Text encoder** | Mistral3ForConditionalGeneration (VLM, multimodal) |
-| **Quantization** | Both transformer and text encoder are **pre-quantized NF4 BnB 4-bit** in the checkpoint |
-| **Disk size** | ~32 GB (transformer: 17 GB on disk as BnB uint8, text encoder: 14.5 GB) |
-| **VRAM when loaded** | ~10 GB (4-bit transformer ~6 GB + 4-bit Mistral3 ~4 GB + VAE ~0.3 GB) |
+| **Quantization** | Transformer: **GGUF Q4_K_M** (`city96/FLUX.2-dev-gguf`, ~19 GB disk). Text encoder: **NF4 BnB 4-bit** from the bnb-4bit repo |
+| **Disk size** | ~19 GB GGUF + ~14.5 GB BnB encoder files (cached) |
+| **VRAM when loaded** | **~3-4 GiB** (group-offloaded — one leaf layer at a time; fits alongside the TTS engine containers' ~3.4 GiB) |
 | **Output type** | Image (PNG) |
 | **Supports I2I** | Yes — pass `reference_image` for image editing mode |
 | **License** | FLUX [dev] Non-Commercial License |
@@ -310,21 +310,37 @@ A standalone Python script that POSTs a pre-built dashboard JSON to Grafana's RE
 | `guidance_scale` | 4.0 | 1.0–20.0 |
 | `seed` | -1 (random) | -1 to 2³¹-1 |
 
-**Loading strategy (critical — see also section 12):**
+**Loading strategy (current, as of 2026-08-13 — section 12 holds the older BnB-era history):**
 
 ```python
+# Transformer: GGUF Q4_K_M (~20 GB) via from_single_file — weights stay in
+# GGUF quantized form in RAM; no device_map → no AlignDevicesHook to remove.
+transformer = Flux2Transformer2DModel.from_single_file(
+    gguf_path, quantization_config=_gguf_quant_config(), torch_dtype=torch.bfloat16)
+apply_group_offloading(transformer, onload_device=torch.device("cuda"),
+                       offload_device=torch.device("cpu"),
+                       offload_type="leaf_level", use_stream=False)
+# Text encoder: Mistral Small 3.1 24B, NF4 from diffusers/FLUX.2-dev-bnb-4bit.
+# Loads on GPU only when free VRAM >= 15500 MiB at load time; otherwise bf16
+# on CPU + leaf-level group offloading (62 GB RAM is plenty).
 pipe = Flux2Pipeline.from_pretrained(
     "diffusers/FLUX.2-dev-bnb-4bit",
-    torch_dtype = torch.bfloat16,
-    device_map  = "balanced",   # accelerate places 4-bit components on CUDA directly
-    token       = HF_TOKEN,
+    transformer=transformer, text_encoder=text_encoder,
+    torch_dtype=torch.bfloat16, token=HF_TOKEN,  # gated repo — token from .env
 )
+pipe.vae = pipe.vae.to("cuda")   # ONLY the VAE — never pipe.to("cuda")
 pipe.vae.enable_slicing()
 pipe.vae.enable_tiling()
-pipe.enable_attention_slicing(1)
 ```
 
-**Why `device_map="balanced"` is mandatory:** The model weights are stored as BnB uint8 (4-bit packed). Calling `.to("cuda:0")` on a BnB model attempts to **dequantize** the weights back to bfloat16 before moving — that requires 17 GB for the transformer alone, causing OOM. `device_map="balanced"` uses accelerate to place each component on CUDA natively without dequantization.
+**Why group offloading is mandatory (fixed 2026-08-13):** the Q4_K_M GGUF is
+~20 GB — **larger than the whole 15.5 GiB card** — so the previous GPU_ONLY
+path (`transformer.to("cuda")`) OOM'd on every load (HTTP 503, "Tried to
+allocate 82.00 MiB" after the full transformer was crammed in). Leaf-level
+group offloading streams one layer at a time from RAM to VRAM during forward,
+keeping the engine at **~3-4 GiB resident** — it coexists with the TTS engine
+containers instead of fighting them. Cost: ~31 s/step at 1024² → a 28-step
+image takes **~15 min** (verified 2026-08-13, HTTP 200, valid 1024×1024 PNG).
 
 ---
 
