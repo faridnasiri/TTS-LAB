@@ -307,7 +307,15 @@ Re-probe all engine availability without restarting the server.
 
 ### `GET /logs`
 
-Last 200 server-side log entries (ring buffer).
+Last 400 server-side log entries (ring buffer).
+
+**Query params:**
+| Param | Type | Default | Description |
+|-------|------|---------|-------------|
+| `since` | int | `0` | Only return entries with `seq > since` (incremental polling) |
+| `engine` | string | `""` | Proxy to that engine container's own `/logs` — includes engine-side per-chunk `CHUNK` lines (e.g. `chatterboxturbo`) that never reach the orchestrator. Unknown engine → 404; container unreachable → 502. |
+
+**Response:** `{"entries": [{"seq", "ts", "cat", "engine", "msg"}...], "seq": <live cursor — pass as since on next poll>}`
 
 ---
 
@@ -484,6 +492,7 @@ Last 200 server-side log entries (ring buffer).
 - Failed chunks are logged and skipped; survivors are stitched. Raises an error only if ALL chunks fail.
 - Per-call output is capped at ~40 s (1,000 speech tokens hardcoded in the library at the 25 Hz S3 token rate) — long text must be split across calls.
 - No word-level timestamps: the engine returns audio only; use OmniVoice or an external aligner for `.words.json`.
+- **Chunk offsets (stopgap for timestamps):** every response includes a `chunks` array — `[{"index", "start_ms", "dur_ms", "chars"}...]` with each chunk's offset in the stitched audio (gaps between chunks are `chunk_silence_ms`). `sum(chunks[].chars)` equals the source text length — use it as a truncation canary. Each chunk starts at a sentence/comma boundary, so Whisper-segmenting per chunk yields aligned words with no mid-sentence seams.
 
 ---
 
