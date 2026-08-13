@@ -179,10 +179,129 @@ def _ensure_engine(key: str, quant: str = ""):
         STATE.loading = False
 
 # ---------------------------------------------------------------------------
+# Shared-GPU helper
+# ---------------------------------------------------------------------------
+
+def _evict_tts_engines() -> int:
+    """POST /evict to every TTS engine container to free shared GPU memory.
+
+    GPU-only policy (2026-08-13): image engines NEVER fall back to CPU
+    rendering or system-RAM offloading. When a loader needs more VRAM than is
+    free, the TTS containers' resident models are evicted first — they
+    lazy-reload on their next TTS request (a few seconds of added latency).
+    Returns the free VRAM in MiB after the evictions settle.
+    """
+    import time as _t
+    import urllib.request as _urllib
+    import torch
+    for port in (8101, 8102, 8103, 8104):
+        try:
+            req = _urllib.Request(
+                f"http://localhost:{port}/evict", data=b"", method="POST")
+            with _urllib.urlopen(req, timeout=5) as resp:
+                log.info("TTS engine container :%d evicted (%s)",
+                         port, resp.read().decode().strip()[:120])
+        except Exception:
+            pass   # container down / nothing loaded — fine
+    _t.sleep(2)  # let CUDA return the freed memory to the driver
+    return torch.cuda.mem_get_info()[0] // (1024 * 1024)
+
+# ---------------------------------------------------------------------------
 # FLUX.2 [dev]
 # ---------------------------------------------------------------------------
 
 def _load_flux2(quant: str = "Q4_K_M"):
+    import torch
+    from diffusers import Flux2Pipeline, Flux2Transformer2DModel
+    from transformers import AutoModel
+
+    quant = quant or "Q4_K_M"
+    t0    = time.time()
+    token = HF_TOKEN or True
+
+    if not GPU_ONLY:
+        # Historical CPU path — ONLY for GPU-less machines that explicitly
+        # opt out with IMGLAB_GPU_ONLY=0. NEVER used on the VM (GPU-only
+        # policy). Quarantined below so the GPU-only code stays clean.
+        return _load_flux2_cpu(quant)
+
+    # ── GPU-only policy guard ────────────────────────────────────────────────
+    # Policy (2026-08-13): no CPU rendering, no system-RAM offloading — ever.
+    # The Q4_K_M GGUF is ~20 GB, LARGER than the whole 15.5 GiB card, so on
+    # this hardware flux2 is BLOCKED: evicting the TTS engines does not help
+    # because the quant alone cannot fit. The check below is structural — on
+    # a GPU big enough to hold quant + encoder + VAE it runs fully on CUDA.
+
+    # ── Transformer ──────────────────────────────────────────────────────────
+    if quant == "nvfp4":
+        transformer = _load_nvfp4_transformer("flux2", "transformer")
+    else:
+        if quant not in _FLUX2_GGUF:
+            raise RuntimeError(
+                f"FLUX.2 quant '{quant}' not recognised. "
+                f"Valid options: {list(_FLUX2_GGUF)} + ['nvfp4']"
+            )
+        repo_id, fname = _FLUX2_GGUF[quant]
+        gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "flux2"))
+
+        # Structural VRAM guard (fail loudly, never degrade to CPU): the quant
+        # must fit together with the NF4 text encoder (~6 GB) + VAE (~0.4 GB)
+        # + activation headroom (~1.1 GB), with 512 MiB margin.
+        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        need_mb = os.path.getsize(gguf_path) // (1024 * 1024) + 7_500
+        if need_mb > free_mb - 512:
+            raise RuntimeError(
+                f"FLUX.2 [dev] is BLOCKED on this GPU: quant '{quant}' needs "
+                f"~{need_mb/1024:.1f} GiB of VRAM but only {free_mb/1024:.1f} GiB "
+                f"is free (card: 15.5 GiB). GPU-only policy — no CPU offloading, "
+                f"no system-RAM streaming. Runs only on a GPU big enough to "
+                f"hold everything on CUDA.")
+
+        log.info("Loading FLUX.2 [dev] transformer from GGUF — quant=%s …", quant)
+        transformer = Flux2Transformer2DModel.from_single_file(
+            gguf_path,
+            quantization_config = _gguf_quant_config(),
+            torch_dtype         = torch.bfloat16,
+        ).to("cuda")
+
+    # ── Text encoder (Mistral Small 3.1 24B, NF4 pre-quantised) ─────────────
+    log.info("Loading FLUX.2 text encoder (NF4) directly on CUDA …")
+    text_encoder = AutoModel.from_pretrained(
+        ENGINES["flux2"].hf_repo,
+        subfolder  = "text_encoder",
+        device_map = "cuda",
+        dtype      = torch.bfloat16,
+        token      = token,
+    )
+
+    # ── Pipeline assembly ────────────────────────────────────────────────────
+    log.info("Loading FLUX.2 [dev] pipeline shell (quant=%s) …", quant)
+    pipe = Flux2Pipeline.from_pretrained(
+        ENGINES["flux2"].hf_repo,
+        transformer  = transformer,
+        text_encoder = text_encoder,
+        torch_dtype  = torch.bfloat16,
+        token        = token,
+    ).to("cuda")
+
+    pipe.vae.enable_slicing()
+    pipe.vae.enable_tiling()
+
+    log.info("CUDA after pipeline ready: %.2f GiB",
+             torch.cuda.memory_allocated() / 1024**3)
+
+    STATE.loaded_model  = pipe
+    STATE.active_engine = "flux2"
+    STATE.active_quant  = quant
+    ENGINES["flux2"].loaded = True
+    log.info("FLUX.2 [dev] ready (GPU-only, quant=%s) in %.1f s",
+             quant, time.time() - t0)
+
+
+def _load_flux2_cpu(quant: str = "Q4_K_M"):
+    """Historical CPU group-offload path — ONLY for GPU-less deployments that
+    explicitly opt out with IMGLAB_GPU_ONLY=0. Quarantined 2026-08-13 under
+    the GPU-only policy; the VM (GPU_ONLY=1) never reaches this function."""
     import torch
     from diffusers import Flux2Pipeline, Flux2Transformer2DModel
     from diffusers.hooks import apply_group_offloading
@@ -192,24 +311,8 @@ def _load_flux2(quant: str = "Q4_K_M"):
     t0    = time.time()
     token = HF_TOKEN or True
 
-    # ── VRAM budget decision ─────────────────────────────────────────────────
-    # flux2-dev-Q4_K_M.gguf is ~20 GB — LARGER than the 15.5 GiB usable VRAM on
-    # this card, so the transformer can never live fully on GPU and is always
-    # group-offloaded (leaf-level). The text encoder (Mistral Small 3.1 24B,
-    # NF4, ~6 GB) goes to GPU only when the card is essentially empty.
-    encoder_on_gpu = False
-    if GPU_ONLY:
-        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-        encoder_on_gpu = free_mb >= 15500
-        log.info("VRAM free at load: %d MiB → text encoder %s",
-                 free_mb, "on GPU (NF4)" if encoder_on_gpu
-                          else "CPU-offloaded (bf16 + group offload)")
-
-    # ── Transformer ──────────────────────────────────────────────────────────
     if quant == "nvfp4":
         transformer = _load_nvfp4_transformer("flux2", "transformer")
-        # nvfp4 transformer is already on GPU; skip group offloading
-        _apply_transformer_group_offload = False
     else:
         if quant not in _FLUX2_GGUF:
             raise RuntimeError(
@@ -224,14 +327,9 @@ def _load_flux2(quant: str = "Q4_K_M"):
             quantization_config = _gguf_quant_config(),
             torch_dtype         = torch.bfloat16,
         )
-        _apply_transformer_group_offload = True
-
-    if _apply_transformer_group_offload:
         # GGUF loaded via from_single_file() has no device_map → no AlignDevicesHook.
         # Group offloading moves one leaf layer at a time to GPU during forward,
-        # keeping peak VRAM for the transformer to ~300-500 MB per step. Q4_K_M
-        # is ~20 GB — larger than the whole 16 GB card — so this applies in
-        # GPU-only mode too (the old full-CUDA path could never fit).
+        # keeping peak VRAM for the transformer to ~300-500 MB per step.
         log.info("Applying leaf-level group offloading to FLUX.2 transformer …")
         apply_group_offloading(
             transformer,
@@ -241,27 +339,28 @@ def _load_flux2(quant: str = "Q4_K_M"):
             use_stream     = False,
         )
 
-    # ── Text encoder (Mistral Small 3.1 24B, NF4 pre-quantised) ─────────────
-    if GPU_ONLY and encoder_on_gpu:
-        log.info("Loading FLUX.2 text encoder (NF4) directly on CUDA …")
-        text_encoder = AutoModel.from_pretrained(
-            ENGINES["flux2"].hf_repo,
-            subfolder  = "text_encoder",
-            device_map = "cuda",
-            dtype      = torch.bfloat16,
-            token      = token,
+    log.info("Loading FLUX.2 text encoder (NF4, CPU) …")
+    text_encoder = AutoModel.from_pretrained(
+        ENGINES["flux2"].hf_repo,
+        subfolder  = "text_encoder",
+        device_map = "cpu",
+        dtype      = torch.bfloat16,
+        token      = token,
+    )
+    log.info("Applying leaf-level group offloading to text encoder …")
+    try:
+        apply_group_offloading(
+            text_encoder,
+            onload_device  = torch.device("cuda"),
+            offload_device = torch.device("cpu"),
+            offload_type   = "leaf_level",
+            use_stream     = False,
         )
-    else:
-        log.info("Loading FLUX.2 text encoder (NF4, CPU) …")
-        text_encoder = AutoModel.from_pretrained(
-            ENGINES["flux2"].hf_repo,
-            subfolder  = "text_encoder",
-            device_map = "cpu",
-            dtype      = torch.bfloat16,
-            token      = token,
-        )
-        log.info("Applying leaf-level group offloading to text encoder …")
-        try:
+    except ValueError as exc:
+        if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
+            log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
+            from accelerate.hooks import remove_hook_from_module
+            remove_hook_from_module(text_encoder, recurse=True)
             apply_group_offloading(
                 text_encoder,
                 onload_device  = torch.device("cuda"),
@@ -269,22 +368,9 @@ def _load_flux2(quant: str = "Q4_K_M"):
                 offload_type   = "leaf_level",
                 use_stream     = False,
             )
-        except ValueError as exc:
-            if "AlignDevicesHook" in str(exc) or "CpuOffload" in str(exc):
-                log.warning("AlignDevicesHook found on text encoder; removing before group offload …")
-                from accelerate.hooks import remove_hook_from_module
-                remove_hook_from_module(text_encoder, recurse=True)
-                apply_group_offloading(
-                    text_encoder,
-                    onload_device  = torch.device("cuda"),
-                    offload_device = torch.device("cpu"),
-                    offload_type   = "leaf_level",
-                    use_stream     = False,
-                )
-            else:
-                raise
+        else:
+            raise
 
-    # ── Pipeline assembly ────────────────────────────────────────────────────
     log.info("Loading FLUX.2 [dev] pipeline shell (quant=%s) …", quant)
     pipe = Flux2Pipeline.from_pretrained(
         ENGINES["flux2"].hf_repo,
@@ -293,27 +379,20 @@ def _load_flux2(quant: str = "Q4_K_M"):
         torch_dtype  = torch.bfloat16,
         token        = token,
     )
-
     # VAE is small (~300 MB). Keep it on GPU permanently so the decode step
     # doesn't block waiting for a CPU→GPU transfer. DO NOT call pipe.to("cuda")
-    # or enable_model_cpu_offload() here — pipe.to("cuda") would drag the
-    # group-offloaded transformer / text encoder back to GPU (the Q4_K_M GGUF
-    # can't fit), and enable_model_cpu_offload() would add an AlignDevicesHook
-    # that conflicts with group offloading.
+    # (would drag the group-offloaded transformer / text encoder back to GPU)
+    # or enable_model_cpu_offload() (AlignDevicesHook conflicts with offload).
     log.info("Moving VAE to CUDA …")
     pipe.vae = pipe.vae.to("cuda")
-
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
-
-    log.info("CUDA after pipeline ready: %.2f GiB",
-             torch.cuda.memory_allocated() / 1024**3)
 
     STATE.loaded_model  = pipe
     STATE.active_engine = "flux2"
     STATE.active_quant  = quant
     ENGINES["flux2"].loaded = True
-    log.info("FLUX.2 [dev] ready (group-offload leaf-level, quant=%s) in %.1f s",
+    log.info("FLUX.2 [dev] ready (CPU group-offload path, quant=%s) in %.1f s",
              quant, time.time() - t0)
 
 
@@ -325,8 +404,7 @@ def _generate_flux2(params: dict) -> list[dict]:
     if seed == -1:
         seed = random_seed()
 
-    # Use CUDA generator — group offloading makes transformer.device="cuda",
-    # so the pipeline creates latents on CUDA.
+    # Use CUDA generator — GPU-only policy: the whole pipeline lives on CUDA.
     generator = torch.Generator("cuda").manual_seed(seed)
 
     log.info("CUDA allocated before pipe() call: %.2f GiB",
@@ -352,41 +430,97 @@ def _generate_flux2(params: dict) -> list[dict]:
 
 def _load_flux2klein(quant: str = ""):
     import torch
-    from diffusers import Flux2KleinPipeline
+    from diffusers import Flux2KleinPipeline, Flux2Transformer2DModel
+    from diffusers.models import AutoencoderKLFlux2
+    from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+    from transformers import AutoModel, Qwen2TokenizerFast
 
     t0    = time.time()
     # Same hf_hub 1.16.1 issue as the 9B-KV loader: `token=True` REQUIRES a
     # token and the systemd service has none — and this is a PUBLIC repo,
     # so no token is needed at all.
     token = None
+    repo  = ENGINES["flux2klein"].hf_repo   # black-forest-labs/FLUX.2-klein-4B
 
-    log.info("Loading FLUX.2 Klein 4B from HuggingFace (%s) …",
-             ENGINES["flux2klein"].hf_repo)
-    pipe = Flux2KleinPipeline.from_pretrained(
-        ENGINES["flux2klein"].hf_repo,   # black-forest-labs/FLUX.2-klein-4B
-        torch_dtype = torch.bfloat16,
-        token       = token,
-    )
-    if GPU_ONLY:
-        # The GPU is shared with the TTS engine containers (~3.4 GiB resident
-        # on ports 8101-8104). Full-GPU klein-4B needs ~12.4 GiB; when there
-        # isn't enough free VRAM, CPU-offload the pipeline instead (62 GB RAM).
-        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-        if free_mb >= 12500:
-            log.info("GPU-only mode enabled: moving FLUX.2 Klein 4B to CUDA …")
-            pipe = pipe.to("cuda")
-        else:
-            log.info("VRAM free %d MiB < 12500 — CPU-offloading FLUX.2 Klein 4B …", free_mb)
-            pipe.enable_model_cpu_offload()
-    else:
+    if not GPU_ONLY:
+        # GPU-less machines (IMGLAB_GPU_ONLY=0) — historical path.
+        log.info("Loading FLUX.2 Klein 4B from HuggingFace (%s) …", repo)
+        pipe = Flux2KleinPipeline.from_pretrained(
+            repo, torch_dtype = torch.bfloat16, token = token,
+        )
         pipe.enable_model_cpu_offload()
+        pipe.vae.enable_slicing()
+
+        STATE.loaded_model       = pipe
+        STATE.active_engine      = "flux2klein"
+        STATE.active_quant       = ""
+        ENGINES["flux2klein"].loaded = True
+        log.info("FLUX.2 Klein 4B ready in %.1f s", time.time() - t0)
+        return
+
+    # ── GPU-only policy (2026-08-13) ─────────────────────────────────────────
+    # Never fall back to CPU. The full bf16 repo measures ~15.1 GiB with the
+    # Qwen3-4B text encoder — no room left for 1024² generation on a 15.5 GiB
+    # card. The encoder is therefore loaded NF4 4-bit on CUDA (as in the 9B-KV
+    # loader); the transformer stays full bf16. The TTS engine containers
+    # (~3.4 GiB resident when loaded) are evicted first when needed — they
+    # lazy-reload on their next TTS request.
+    free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    if free_mb < 12500:
+        log.info("VRAM free %d MiB < 12500 — evicting TTS engine containers …", free_mb)
+        free_mb = _evict_tts_engines()
+    if free_mb < 12500:
+        raise RuntimeError(
+            f"FLUX.2 Klein 4B needs ~12 GiB free VRAM; only {free_mb} MiB "
+            f"available after evicting the TTS engines. "
+            f"(GPU-only policy — no CPU offloading.)")
+
+    log.info("Loading FLUX.2 Klein 4B transformer (BF16) …")
+    transformer = Flux2Transformer2DModel.from_pretrained(
+        repo, subfolder = "transformer", torch_dtype = torch.bfloat16,
+        token = token,
+    )
+
+    from transformers import BitsAndBytesConfig
+    log.info("Loading FLUX.2 Klein 4B text encoder (Qwen3, NF4 4-bit) directly on CUDA …")
+    text_encoder = AutoModel.from_pretrained(
+        repo,
+        subfolder  = "text_encoder",
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit              = True,
+            bnb_4bit_quant_type       = "nf4",
+            bnb_4bit_compute_dtype    = torch.bfloat16,
+            bnb_4bit_use_double_quant = True,
+        ),
+        device_map = "cuda",
+        token      = token,
+    )
+
+    log.info("Loading FLUX.2 Klein 4B tokenizer / VAE / scheduler …")
+    tokenizer = Qwen2TokenizerFast.from_pretrained(repo, subfolder = "tokenizer")
+    vae       = AutoencoderKLFlux2.from_pretrained(
+        repo, subfolder = "vae", torch_dtype = torch.bfloat16, token = token,
+    )
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+        repo, subfolder = "scheduler", torch_dtype = torch.bfloat16, token = token,
+    )
+
+    log.info("Assembling FLUX.2 Klein 4B pipeline …")
+    pipe = Flux2KleinPipeline(
+        transformer  = transformer,
+        text_encoder = text_encoder,
+        tokenizer    = tokenizer,
+        vae          = vae,
+        scheduler    = scheduler,
+    ).to("cuda")
     pipe.vae.enable_slicing()
 
     STATE.loaded_model       = pipe
     STATE.active_engine      = "flux2klein"
     STATE.active_quant       = ""
     ENGINES["flux2klein"].loaded = True
-    log.info("FLUX.2 Klein 4B ready in %.1f s", time.time() - t0)
+    log.info("FLUX.2 Klein 4B ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
 
 
 def _generate_flux2klein(params: dict) -> list[dict]:
@@ -486,17 +620,23 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
     repo  = ENGINES["flux2klein9b"].hf_repo_alt   # black-forest-labs/FLUX.2-klein-4B (shared components)
 
     # ── VRAM budget decision ─────────────────────────────────────────────────
-    # The GPU is shared with the TTS engine containers (ports 8101-8104),
-    # which keep a TTS model resident (~3.4 GiB observed). Full-GPU budget
-    # (transformer 5.7 + Qwen3-8B NF4 5 + VAE 3 + activations 1.5 ≈ 15.2 GiB)
-    # only fits when the GPU is ours alone; otherwise the text encoder drops
-    # to CPU bf16 with group offloading (VM has 62 GB RAM).
-    encoder_on_gpu = False
+    # GPU-only policy (2026-08-13): never fall back to CPU or system-RAM
+    # offloading. Full-GPU budget (transformer 5.7 + Qwen3-8B NF4 4.5 + VAE
+    # 0.3 + activations ≈ 12-13 GiB) needs the GPU almost to itself — evict
+    # the TTS engine containers (~3.4 GiB resident when loaded) first; they
+    # lazy-reload on their next TTS request. Threshold 14800 leaves margin
+    # over the ~12.5 GiB measured need while staying below the ~15350 MiB
+    # max achievable free (TTS containers' CUDA contexts never fully release).
     if GPU_ONLY:
         free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-        encoder_on_gpu = free_mb >= 15500
-        log.info("VRAM free at load: %d MiB → text encoder %s",
-                 free_mb, "on GPU (NF4)" if encoder_on_gpu else "on CPU (bf16 + group offload)")
+        if free_mb < 14800:
+            log.info("VRAM free %d MiB < 14800 — evicting TTS engine containers …", free_mb)
+            free_mb = _evict_tts_engines()
+        if free_mb < 14800:
+            raise RuntimeError(
+                f"FLUX.2 Klein 9B-KV needs ~13 GiB free VRAM; only "
+                f"{free_mb} MiB free after evicting the TTS engines. "
+                f"(GPU-only policy — no CPU offloading.)")
 
     # ── Transformer (GGUF Q4_K_M, explicit derived config) ────────────────
     repo_id, fname = _FLUX2KLEIN9B_GGUF[quant]
@@ -522,7 +662,7 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
         )
 
     # ── Text encoder (Qwen3-8B, hidden 4096 → 3 x 4096 = 12288 joint dim) ──
-    if GPU_ONLY and encoder_on_gpu:
+    if GPU_ONLY:
         from transformers import BitsAndBytesConfig
         log.info("Loading Qwen3-8B text encoder (NF4 4-bit) directly on CUDA …")
         text_encoder = AutoModel.from_pretrained(
@@ -572,16 +712,10 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
         is_distilled = True,
     )
     if GPU_ONLY:
-        if encoder_on_gpu:
-            log.info("GPU-only mode enabled: moving FLUX.2 Klein 9B-KV to CUDA …")
-            pipe = pipe.to("cuda")
-        else:
-            # Encoder is CPU-offloaded (group-offload hooks already attached);
-            # pipe.to("cuda") would drag it back onto the GPU. Move only the
-            # transformer and VAE — the hooks stream encoder layers per-forward.
-            log.info("Moving transformer + VAE to CUDA (encoder stays CPU-offloaded) …")
-            pipe.transformer = pipe.transformer.to("cuda")
-            pipe.vae         = pipe.vae.to("cuda")
+        # Everything is already on CUDA (transformer + NF4 encoder + VAE) —
+        # GPU-only policy, no CPU-offloaded components left to drag back.
+        log.info("GPU-only mode enabled: moving FLUX.2 Klein 9B-KV to CUDA …")
+        pipe = pipe.to("cuda")
     else:
         pipe.enable_model_cpu_offload()
     pipe.vae.enable_slicing()
@@ -989,6 +1123,17 @@ def _probe_flux2():
             tok = get_token()
             if not tok:
                 raise RuntimeError("No HF_TOKEN and no cached HF token found")
+        # GPU-only policy (2026-08-13): no CPU offloading, ever. The Q4_K_M
+        # GGUF (~20 GB) + NF4 text encoder (~6 GB) + VAE ≈ 27 GB — larger than
+        # this 16 GB card, so flux2 is BLOCKED here regardless of TTS eviction.
+        if GPU_ONLY:
+            import torch
+            total_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            if total_mb < 27_000:
+                raise RuntimeError(
+                    "BLOCKED: Q4_K_M GGUF + NF4 encoder need ~27 GB VRAM; this "
+                    "card has 15.5 GiB. GPU-only policy — no CPU offloading. "
+                    "Requires a bigger GPU (32 GB+).")
         ENGINES["flux2"].available = True
     except Exception as exc:
         ENGINES["flux2"].available = False

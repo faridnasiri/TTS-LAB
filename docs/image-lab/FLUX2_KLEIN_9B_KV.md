@@ -72,25 +72,29 @@ that's **Qwen3-8B** (`Qwen/Qwen3-8B`, public, 36 layers, hidden 4096, heads 32).
 The gated repo's text encoder is 4 shards ≈ 9.4B params, consistent with Qwen3-8B
 + embedding overhead.
 
-- **GPU_ONLY mode, GPU free:** NF4 4-bit via bitsandbytes (0.49.2, installed)
-  → ~5 GB VRAM. No HF token needed (public repo).
-- **GPU_ONLY mode, GPU shared (the VM):** the GPU is shared with the TTS
-  engine containers (ports 8101-8104 keep ~3.4 GiB resident). If free VRAM
-  < 15.5 GiB at load, the encoder loads bf16 on CPU + leaf-level group
-  offloading instead — the engine then fits in ~10 GiB total (verified:
-  5.56 GiB CUDA with the TTS engine loaded). Decision logged at load time.
-- **Non-GPU mode:** bf16 on CPU + leaf-level group offloading (62 GB RAM is fine).
+- **GPU_ONLY (default):** NF4 4-bit via bitsandbytes (0.49.2, installed),
+  **always on GPU** (`device_map="cuda"`, `bnb_4bit_quant_type="nf4"`) → ~2.5 GB
+  VRAM. No HF token needed (public repo). If free VRAM < 14800 MiB at load
+  time, the loader first POSTs `/evict` to the TTS engine containers (ports
+  8101-8104) to reclaim the shared GPU, then re-checks; if still short it
+  raises a clear `RuntimeError`. There is **no CPU fallback** — GPU-only policy.
+- **Non-GPU mode (`IMGLAB_GPU_ONLY=0`):** bf16 on CPU + leaf-level group
+  offloading (62 GB RAM is fine) — historical path kept for GPU-less machines.
 
-## VRAM budget (16 GB RTX 5060 Ti)
+## VRAM budget (16 GB RTX 5060 Ti, measured)
 
 | Component | Size on GPU |
 |---|---|
 | Transformer Q4_K_M GGUF | ~5.7 GB (dequant fused at forward) |
-| Qwen3-8B text encoder (NF4) | ~5 GB — or **0 GB** when CPU-offloaded |
+| Qwen3-8B text encoder (NF4) | ~2.5 GB |
 | VAE (AutoencoderKLFlux2) | ~3 GB (slicing + tiling enabled) |
 | Latents / activations @1024² | < 1.5 GB |
-| **Total, encoder on GPU** | **~14 GB — needs the GPU to itself** |
-| **Total, encoder CPU-offloaded** | **~9 GB — fits alongside TTS engines** (measured: 5.56 GiB CUDA) |
+| **Total, everything on CUDA** | **~10 GiB — measured 9.98 GiB CUDA (2026-08-13)** |
+
+Fits on the 15.5 GiB card with ~4-5 GiB headroom for activations. The TTS
+engine containers normally keep ~3.4 GiB resident, so the loader evicts them
+when free VRAM drops below the 14800 MiB threshold (max achievable free with
+TTS CUDA contexts resident is ~15354 MiB).
 
 ## Loading path (what actually runs)
 
@@ -98,10 +102,18 @@ The gated repo's text encoder is 4 shards ≈ 9.4B params, consistent with Qwen3
 transformer = Flux2Transformer2DModel.from_single_file(
     gguf_path, config=_flux2klein9b_config_dir(),
     quantization_config=_gguf_quant_config(), torch_dtype=torch.bfloat16)
-pipe = Flux2KleinKVPipeline(transformer=…, text_encoder=Qwen3-8B (NF4 GPU or bf16 CPU),
+text_encoder = AutoModel.from_pretrained("Qwen/Qwen3-8B",
+    quantization_config=BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16, bnb_4bit_use_double_quant=True),
+    device_map="cuda")                                  # NF4 — ALWAYS on GPU (GPU_ONLY)
+pipe = Flux2KleinKVPipeline(transformer=transformer.to("cuda"),
+                            text_encoder=text_encoder,
                             tokenizer=Qwen2TokenizerFast("Qwen/Qwen3-8B"),
                             vae=AutoencoderKLFlux2(4B repo), scheduler=…, is_distilled=True)
+pipe = pipe.to("cuda")
 # token=None for all from_pretrained calls — public repos, service has no HF_TOKEN
+# If free VRAM < 14800 MiB before the load: POST /evict to TTS containers (8101-8104),
+# re-check, raise RuntimeError if still short. No CPU fallback.
 ```
 
 Verified end-to-end on the VM (diffusers 0.38.0, gguf 0.19.0):
@@ -109,7 +121,8 @@ Verified end-to-end on the VM (diffusers 0.38.0, gguf 0.19.0):
 - all **233 converted tensors match** the model state_dict (0 shape mismatches)
 - CUDA forward pass (8×8 latent, 64 text tokens) in **1.5 s** — clean output
 - **Live generation 2026-08-13:** `POST /generate/flux2klein9b` 1024×1024/4-step
-  → HTTP 200 in 40 s with the TTS engine resident (encoder CPU-offloaded)
+  → HTTP 200 in 39-41 s, **9.98 GiB CUDA total, encoder NF4 on GPU**
+  (eviction not needed — free VRAM exceeded the threshold)
 
 ## UI / API
 
@@ -131,11 +144,14 @@ Verified end-to-end on the VM (diffusers 0.38.0, gguf 0.19.0):
   `token=None` — all components come from public repos. Same fix applied to
   the klein-4B engine, which had the identical latent bug.
 - **`CUDA out of memory` at generation despite the budget looking fine**
-  (fixed 2026-08-13): the GPU is shared with the TTS engine containers.
-  Observed: TTS engine-current holds 3.35 GiB resident. The loader now checks
-  free VRAM at load time and drops the text encoder to CPU (bf16 + group
-  offload) when free VRAM < 15.5 GiB; klein-4B got the same treatment
-  (CPU-offloads the whole pipeline below 12.5 GiB free).
+  (fixed 2026-08-13): the GPU is shared with the TTS engine containers
+  (engine-current holds ~3.35 GiB resident). The loader now checks free VRAM
+  at load time and, when free < 14800 MiB, POSTs `/evict` to the TTS engine
+  containers (8101-8104) before proceeding — the eviction helper logs each
+  `/evict` response with the reclaimed `vram_free_mb`. If free VRAM is still
+  insufficient after eviction, the loader raises a clear `RuntimeError`
+  (GPU-only policy — it never falls back to CPU). klein-4B got the same
+  treatment (NF4 encoder, threshold 12500 MiB).
 - **Shape mismatch on load** (`check_quantized_param_shape`): the local config
   was regenerated from a different GGUF — delete
   `GGUF_ROOT/flux2klein9b/transformer_cfg/` and retry.

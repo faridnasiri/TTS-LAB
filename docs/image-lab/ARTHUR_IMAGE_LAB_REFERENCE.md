@@ -286,61 +286,41 @@ A standalone Python script that POSTs a pre-built dashboard JSON to Grafana's RE
 
 ## 4. AI Engines — Supported Models
 
-### 4.1 FLUX.2 [dev] — `flux2`
+### 4.1 FLUX.2 [dev] — `flux2` — ⛔ BLOCKED on this hardware
 
 | Property | Value |
 |---|---|
-| **HuggingFace repo** | `diffusers/FLUX.2-dev-bnb-4bit` |
+| **HuggingFace repo** | `diffusers/FLUX.2-dev-bnb-4bit` (gated) |
 | **Architecture** | 32B rectified flow transformer (DiT) |
 | **Text encoder** | Mistral3ForConditionalGeneration (VLM, multimodal) |
-| **Quantization** | Transformer: **GGUF Q4_K_M** (`city96/FLUX.2-dev-gguf`, ~19 GB disk). Text encoder: **NF4 BnB 4-bit** from the bnb-4bit repo |
+| **Quantization** | Transformer: **GGUF Q4_K_M** (`city96/FLUX.2-dev-gguf`, ~20 GB). Text encoder: **NF4 BnB 4-bit** |
 | **Disk size** | ~19 GB GGUF + ~14.5 GB BnB encoder files (cached) |
-| **VRAM when loaded** | **~3-4 GiB** (group-offloaded — one leaf layer at a time; fits alongside the TTS engine containers' ~3.4 GiB) |
+| **Status** | **BLOCKED** — see below |
 | **Output type** | Image (PNG) |
 | **Supports I2I** | Yes — pass `reference_image` for image editing mode |
 | **License** | FLUX [dev] Non-Commercial License |
-| **Requires HF token** | Yes (gated model) |
+| **Requires HF token** | Yes (gated model) — `HF_TOKEN` in `/opt/arthur-img/.env` |
 
-**Default parameters:**
+**⛔ BLOCKED (2026-08-13, GPU-only policy):** the Q4_K_M GGUF is ~20 GB and
+the NF4 text encoder another ~6 GB — **~27 GB total, larger than the whole
+15.5 GiB card**. No amount of TTS-engine eviction helps; the engine cannot run
+on this hardware without CPU offloading, which is forbidden by policy
+("never use CPU rendering / system-RAM offloading"). `POST /generate/flux2`
+returns HTTP 503 with the reason; the UI shows it as unavailable. The loader
+and probe both contain a structural VRAM guard so the engine can never
+silently degrade to a CPU path — on a 32 GB+ GPU it runs fully on CUDA
+(loader: `_load_flux2`; the historical CPU group-offload path is quarantined
+in `_load_flux2_cpu` and only reachable with `IMGLAB_GPU_ONLY=0`).
 
-| Parameter | Default | Range |
-|---|---|---|
-| `width` / `height` | 1024 × 1024 | 256–2048 (step 64) |
-| `num_inference_steps` | 28 | 1–50 |
-| `guidance_scale` | 4.0 | 1.0–20.0 |
-| `seed` | -1 (random) | -1 to 2³¹-1 |
+History: a leaf-level group-offload implementation was tested 2026-08-13 and
+*worked* (~15 min/image at 28 steps — CPU streaming), but was rejected: too
+slow, and CPU streaming is against the GPU-only policy. Section 12 holds the
+even older BnB-era account.
 
-**Loading strategy (current, as of 2026-08-13 — section 12 holds the older BnB-era history):**
-
-```python
-# Transformer: GGUF Q4_K_M (~20 GB) via from_single_file — weights stay in
-# GGUF quantized form in RAM; no device_map → no AlignDevicesHook to remove.
-transformer = Flux2Transformer2DModel.from_single_file(
-    gguf_path, quantization_config=_gguf_quant_config(), torch_dtype=torch.bfloat16)
-apply_group_offloading(transformer, onload_device=torch.device("cuda"),
-                       offload_device=torch.device("cpu"),
-                       offload_type="leaf_level", use_stream=False)
-# Text encoder: Mistral Small 3.1 24B, NF4 from diffusers/FLUX.2-dev-bnb-4bit.
-# Loads on GPU only when free VRAM >= 15500 MiB at load time; otherwise bf16
-# on CPU + leaf-level group offloading (62 GB RAM is plenty).
-pipe = Flux2Pipeline.from_pretrained(
-    "diffusers/FLUX.2-dev-bnb-4bit",
-    transformer=transformer, text_encoder=text_encoder,
-    torch_dtype=torch.bfloat16, token=HF_TOKEN,  # gated repo — token from .env
-)
-pipe.vae = pipe.vae.to("cuda")   # ONLY the VAE — never pipe.to("cuda")
-pipe.vae.enable_slicing()
-pipe.vae.enable_tiling()
-```
-
-**Why group offloading is mandatory (fixed 2026-08-13):** the Q4_K_M GGUF is
-~20 GB — **larger than the whole 15.5 GiB card** — so the previous GPU_ONLY
-path (`transformer.to("cuda")`) OOM'd on every load (HTTP 503, "Tried to
-allocate 82.00 MiB" after the full transformer was crammed in). Leaf-level
-group offloading streams one layer at a time from RAM to VRAM during forward,
-keeping the engine at **~3-4 GiB resident** — it coexists with the TTS engine
-containers instead of fighting them. Cost: ~31 s/step at 1024² → a 28-step
-image takes **~15 min** (verified 2026-08-13, HTTP 200, valid 1024×1024 PNG).
+Default generation parameters (kept for API reference — valid on a GPU big
+enough to run the model): `width`/`height` 1024×1024 (256–2048, step 64),
+`num_inference_steps` 28 (1–50), `guidance_scale` 4.0 (1.0–20.0), `seed` -1
+(random).
 
 ---
 
