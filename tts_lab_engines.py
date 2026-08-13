@@ -17,7 +17,7 @@ from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, REFERENCE_VOICES_DIR, INDEXTTS_DIR,
     OPENVOICE_MODELS_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
-    slog,
+    _state, slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
 
@@ -1759,6 +1759,13 @@ def _synth_chatterboxturbo(inst, text, params):
     if len(chunks) <= 1:
         wav = inst.generate(chunks[0] if chunks else text, **kw)
         arr = wav.squeeze().cpu().numpy().astype(np.float32)
+        _dur_ms = int(len(arr) / inst.sr * 1000)
+        # Expose chunk metadata (start/dur offsets in the stitched audio) so
+        # callers can align slides to speech without an external aligner.
+        _state["chatterboxturbo"]["last_chunks"] = [{
+            "index": 0, "start_ms": 0, "dur_ms": _dur_ms,
+            "chars": len(chunks[0] if chunks else text),
+        }]
         return _to_wav(arr, inst.sr), inst.sr
 
     # ── Multi-chunk — synthesise and stitch ──
@@ -1770,6 +1777,8 @@ def _synth_chatterboxturbo(inst, text, params):
     _t_start = time.perf_counter()
     _failures = 0
     _first_error = None
+    _chunk_meta: list[dict] = []
+    _offset_ms = 0
     for i, chunk in enumerate(chunks):
         if _seed != 0:
             torch.manual_seed(_seed + i)
@@ -1788,6 +1797,14 @@ def _synth_chatterboxturbo(inst, text, params):
             continue
         arr = wav.squeeze().cpu().numpy().astype(np.float32)
         _t1 = time.perf_counter()
+        _dur_ms = int(len(arr) / sr * 1000)
+        # Expose per-chunk start/dur offsets (ms, in the stitched audio) so
+        # callers can align slides to speech and skip seam regions.
+        _chunk_meta.append({
+            "index": i, "start_ms": _offset_ms, "dur_ms": _dur_ms,
+            "chars": len(chunk),
+        })
+        _offset_ms += _dur_ms + int(silence_ms)
         all_audio.append(arr)
         # Silence gap between chunks (except after the last)
         if i < len(chunks) - 1 and silence_ms > 0:
@@ -1809,6 +1826,7 @@ def _synth_chatterboxturbo(inst, text, params):
     total_dur = len(combined) / sr
     slog("CHUNK", "chatterboxturbo",
          f"  Stitched {len(chunks)} chunks → {total_dur:.1f}s ({len(combined)} samples)")
+    _state["chatterboxturbo"]["last_chunks"] = _chunk_meta
     return _to_wav(combined, sr), sr
 
 

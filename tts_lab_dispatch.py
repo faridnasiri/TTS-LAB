@@ -484,7 +484,7 @@ def _do_synth(name: str, text: str, params: dict) -> dict:
     synth_s = time.perf_counter() - t0
     dur = _wav_dur(wav)
     slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms  dur {int(dur*1000)} ms  RTF {round(synth_s/dur,3) if dur>0 else 0}×  {sr} Hz")
-    return {
+    resp = {
         "audio_b64":    base64.b64encode(wav).decode(),
         "sample_rate":  sr,
         "synth_time_ms": int(synth_s * 1000),
@@ -492,6 +492,11 @@ def _do_synth(name: str, text: str, params: dict) -> dict:
         "rtf":          round(synth_s / dur, 4) if dur > 0 else 0,
         "load_time_s":  st["load_time_s"],
     }
+    # Engines that chunk (chatterboxturbo) attach per-chunk offsets via _state
+    chunks = _state.get(name, {}).get("last_chunks")
+    if chunks:
+        resp["chunks"] = chunks
+    return resp
 
 
 def _do_synth_remote(name: str, text: str, params: dict) -> dict:
@@ -534,7 +539,7 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
     dur_ms = result.get("audio_dur_ms", 0)
     dur_s = dur_ms / 1000.0 if dur_ms > 0 else 0
     slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms (remote)  dur {dur_ms} ms  RTF {round(synth_s/dur_s,3) if dur_s>0 else 0}×  {result.get('sample_rate', 0)} Hz")
-    return {
+    resp = {
         "audio_b64":    result["audio_b64"],
         "sample_rate":  result["sample_rate"],
         "synth_time_ms": int(synth_s * 1000),
@@ -542,6 +547,10 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
         "rtf":          round(synth_s / dur_s, 4) if dur_s > 0 else 0,
         "load_time_s":  result.get("load_time_s", 0),
     }
+    # Per-chunk offsets (chatterboxturbo) — forwarded from the engine server
+    if result.get("chunks"):
+        resp["chunks"] = result["chunks"]
+    return resp
 
 
 def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:

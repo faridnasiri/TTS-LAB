@@ -157,8 +157,24 @@ async def status():
 
 
 @app.get("/logs")
-async def get_logs(since: int = 0):
-    """Return server-side log entries with seq > since."""
+async def get_logs(since: int = 0, engine: str = ""):
+    """Return server-side log entries with seq > since.
+
+    With `engine=<name>` of a remote engine container, proxies to that
+    container's own /logs — includes engine-side per-chunk CHUNK lines
+    (e.g. chatterboxturbo chunking) that never reach the orchestrator.
+    """
+    if engine:
+        import httpx
+        try:
+            from tts_lab_dispatch import _REMOTE_ENGINES
+            url = _REMOTE_ENGINES.get(engine)
+            if not url:
+                return JSONResponse({"error": f"Unknown remote engine: {engine}", "entries": [], "seq": 0}, status_code=404)
+            r = httpx.get(f"{url}/logs", params={"since": since}, timeout=10.0)
+            return JSONResponse(r.json())
+        except Exception as e:
+            return JSONResponse({"error": str(e), "entries": [], "seq": 0}, status_code=502)
     entries = [e for e in _server_log if e["seq"] > since]
     return JSONResponse({"entries": entries, "seq": _server_log_seq})
 

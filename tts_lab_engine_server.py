@@ -38,7 +38,7 @@ else:
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from tts_lab_config import MODEL_ORDER, MODEL_INFO, _state, slog
+from tts_lab_config import MODEL_ORDER, MODEL_INFO, _state, _server_log, _server_log_seq, slog
 from tts_lab_dispatch import _available
 from tts_lab_engines import LOADERS, SYNTHERS
 from tts_lab_utils import _wav_dur, _safe_del
@@ -219,6 +219,17 @@ async def health():
     )
 
 
+@app.get("/logs")
+async def engine_logs(since: int = 0):
+    """Return this engine container's ring-buffer log entries (seq > since).
+
+    Same shape as the orchestrator's /logs — includes per-chunk CHUNK
+    lines that only exist engine-side (e.g. chatterboxturbo chunking).
+    """
+    entries = [e for e in _server_log if e["seq"] > since]
+    return {"entries": entries, "seq": _server_log_seq}
+
+
 @app.post("/synthesize")
 async def synthesize(req: SynthRequest):
     # Validate engine is available
@@ -263,7 +274,7 @@ async def synthesize(req: SynthRequest):
         # Release any VRAM leaked by this synthesis
         _clear_cuda_cache()
 
-        return {
+        resp = {
             "audio_b64": base64.b64encode(wav).decode(),
             "sample_rate": sr,
             "synth_time_ms": synth_ms,
@@ -271,6 +282,12 @@ async def synthesize(req: SynthRequest):
             "rtf": round(synth_ms / dur_ms, 4) if dur_ms > 0 else 0,
             "load_time_s": _load_times.get(req.engine, 0),
         }
+        # Engines that chunk (chatterboxturbo) attach per-chunk offsets
+        # (start_ms/dur_ms in the stitched audio) via _state — pass through.
+        chunks = _state.get(req.engine, {}).get("last_chunks")
+        if chunks:
+            resp["chunks"] = chunks
+        return resp
     except Exception as e:
         traceback.print_exc()
         # Auto-evict on error — the loaded model may be stale/corrupted,
@@ -286,7 +303,7 @@ async def synthesize(req: SynthRequest):
             slog("SYNTH", req.engine,
                  f"synth {synth_ms}ms  dur {dur_ms}ms  "
                  f"RTF {round(synth_ms/dur_ms,4) if dur_ms>0 else 0}×  {sr} Hz  (retry OK)")
-            return {
+            resp = {
                 "audio_b64": base64.b64encode(wav).decode(),
                 "sample_rate": sr,
                 "synth_time_ms": synth_ms,
@@ -294,6 +311,10 @@ async def synthesize(req: SynthRequest):
                 "rtf": round(synth_ms / dur_ms, 4) if dur_ms > 0 else 0,
                 "load_time_s": _load_times.get(req.engine, 0),
             }
+            chunks = _state.get(req.engine, {}).get("last_chunks")
+            if chunks:
+                resp["chunks"] = chunks
+            return resp
         except Exception as e2:
             traceback.print_exc()
             print(f"[engine-server:{_STACK}] Retry also failed — giving up")
