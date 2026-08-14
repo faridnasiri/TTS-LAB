@@ -1,5 +1,5 @@
 # Arthur Server — Session Summary
-> Chat sessions: 2026-03-23 → 2026-06-29
+> Chat sessions: 2026-03-23 → 2026-08-14
 > Branch: `main`
 
 ---
@@ -402,3 +402,43 @@ ssh -i $key arthur@192.168.0.87 "sudo journalctl -u arthur -f"
 - [ ] Switch STT to `small.en` (better accent handling, safe now at 6 vCPUs)
 - [ ] Add `small.en` model upgrade to `setup_vm.sh`
 - [ ] Test end-to-end with a real scam call
+
+---
+
+## Session 2026-08-13/14 — Ideogram 4: Blank Images (Caption Starvation) + Seed Randomization
+
+Full write-up: [docs/image-lab/IDEOGRAM4_FIX_2026-08-14.md](../image-lab/IDEOGRAM4_FIX_2026-08-14.md). Commit `ea24d9c`.
+
+### What happened
+
+Ideogram 4 generations from **short plain-text prompts** came back uniform
+gray at 1024², with a "caption verifier" warning that looked like a safety
+filter. Root cause: Ideogram 4 conditions the image only through attention to
+text tokens; below ~1% text-token ratio the CFG branches collapse (measured:
+blank at 0.24–0.41%, real at 0.73–2.85%). "Safety filter" = the caption
+verifier's JSON warning — no safety filter exists.
+
+### What was done
+
+1. **Auto-expansion (default ON):** short plain-text prompts (<1% text-ratio)
+   are expanded to a JSON caption via **Ideogram's hosted magic-prompt API**
+   (`api.ideogram.ai/v1/ideogram-v4/magic-prompt`, free, `IDEOGRAM_API_KEY`).
+   JSON captions and long prompts pass through **byte-identical**; expansion
+   failure never blocks the request. **No local LLM** — an on-device Qwen3-VL
+   expansion is impossible because the pipe's text_encoder is a headless
+   `Qwen3VLModel` (no lm_head, no generate()); Qwen3-8B-Instruct is HF-gated
+   and the lab token has no access. User chose cloud over local.
+2. **Seed randomization:** `seed=-1` now draws a random seed server-side
+   (was the pipeline's deterministic default 67280421310721 → byte-identical
+   images). Actual seed recorded in API response + gallery.
+
+### Verified
+
+Engine-level + live API (service restarted): short prompt → real image +
+expanded caption; production JSON caption → byte-identical + real image;
+seed recorded/randomized; empty prompt → 422 unchanged. Deployed md5s match
+repo (`26b0e41e…`, `6c98ffcb…`).
+
+### Not approved (do NOT implement)
+
+Fix #2 (cap resolution for short prompts), fix #4 (idle-eviction `last_used` bug).

@@ -241,6 +241,7 @@ Response differs from TTS engines:
 | `docs/containerization/07-QWEN36-LLM-PLAN.md` | Qwen 3.6 LLM integration plan — model selection, VRAM strategy, eviction protocol |
 | `docs/containerization/08-QWEN36-DEPLOYMENT.md` | **Qwen 3.6 LLM deployment reference** — full deploy guide, API, VRAM budget, troubleshooting |
 | `docs/image-lab/FLUX2_KLEIN_9B_KV.md` | **FLUX.2 Klein 9B-KV engine** — GGUF config derivation, Qwen3-8B encoder, VRAM budget |
+| `docs/image-lab/IDEOGRAM4_FIX_2026-08-14.md` | **Ideogram 4 blank-image fix** — caption starvation root cause, auto-expansion via hosted magic-prompt API, seed randomization |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
 | `docs/issues/*.md` | Bug investigations (VibeVoice, S2-Pro, ChatTTS) |
