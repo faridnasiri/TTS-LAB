@@ -813,7 +813,7 @@ def _generate_ideogram4(params: dict) -> list[dict]:
     if steps == 0:
         steps = None
 
-    images, caption = ideogram4_engine.generate_ideogram4(
+    images, caption, seed_used = ideogram4_engine.generate_ideogram4(
         pipe,
         prompt=prompt,
         width=int(params.get("width", 1024)),
@@ -828,8 +828,9 @@ def _generate_ideogram4(params: dict) -> list[dict]:
         magic_prompt_aspect_ratio=params.get("magic_prompt_aspect_ratio", "1:1"),
     )
 
-    seed = params.get("seed", -1) if params.get("seed", -1) >= 0 else None
-    final_params = {**params, "seed": seed, "caption": caption}
+    # Record the ACTUAL seed used — auto seed is now randomized server-side,
+    # so the gallery/API shows the real seed for reproducibility.
+    final_params = {**params, "seed": seed_used, "caption": caption}
     return save_images(images, "ideogram4", final_params)
 
 

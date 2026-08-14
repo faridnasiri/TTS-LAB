@@ -3,22 +3,31 @@ ideogram4_lab_engine.py — Ideogram 4 text-to-image engine for Arthur Image Lab
 
 Integrates the ideogram4 package as a local PyPI-installed dependency.
 Supports both nf4 (CUDA-only, bitsandbytes) and fp8 (any device) quantizations.
-Optional magic-prompt expansion (no local model — all API-based, zero VRAM):
 
-  1. Ideogram hosted API (free, best quality)  — IDEOGRAM_API_KEY
-  2. DeepSeek native API (v1.txt prompt)        — DEEPSEEK_API_KEY
-  3. OpenRouter → DeepSeek V3 (v1.txt fallback) — OPENROUTER_API_KEY
+Prompt handling:
+  * Magic-prompt expansion (opt-in, use_magic_prompt=True):
+      1. Ideogram hosted API (free, best quality)  — IDEOGRAM_API_KEY
+      2. DeepSeek native API (v1.txt prompt)        — DEEPSEEK_API_KEY
+      3. OpenRouter → DeepSeek V3 (v1.txt fallback) — OPENROUTER_API_KEY
+  * Local auto-expansion (default ON): short plain-text prompts (text-token
+    ratio < 1% of the image grid) are expanded to a JSON caption via
+    Ideogram's own hosted magic-prompt API (free — IDEOGRAM_API_KEY, the same
+    endpoint the opt-in 'Magic prompt' toggle uses; no local model is run for
+    this). Fixes the blank-gray output caused by caption starvation (see
+    _needs_caption_expansion). JSON captions and long prompts pass through
+    unchanged, so the API path for structured captions is byte-identical.
 
 Usage:
     from ideogram4_lab_engine import load_ideogram4, generate_ideogram4
     pipeline = load_ideogram4(quant="nf4")
-    images   = generate_ideogram4(pipeline, prompt="a cat", ...)
+    images, caption, seed_used = generate_ideogram4(pipeline, prompt="a cat", ...)
 """
 
 from __future__ import annotations
 import json
 import logging
 import os
+import random
 import time
 from pathlib import Path
 from typing import Optional
@@ -300,6 +309,44 @@ def _expand_via_deepseek(
         log.warning("DeepSeek magic-prompt expansion failed: %s", exc)
         return None
 
+def _count_text_tokens(pipe, prompt: str) -> int:
+    """Count prompt tokens exactly as the pipeline's _tokenize does."""
+    messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+    text = pipe.text_tokenizer.apply_chat_template(
+        messages, add_generation_prompt=True, tokenize=False
+    )
+    encoded = pipe.text_tokenizer(text, return_tensors="pt", add_special_tokens=False)
+    return int(encoded["input_ids"].shape[1])
+
+
+def _needs_caption_expansion(pipe, prompt: str, width: int, height: int) -> bool:
+    """True when a short plain-text prompt would starve caption conditioning.
+
+    Ideogram 4 conditions the image ONLY through attention to text tokens.
+    Below ~1% text-token ratio the CFG branches collapse to near-equal
+    velocities and the latent decays to uniform gray (verified in production:
+    blank at 0.24–0.41%, real at 0.73–2.85%). JSON captions — structured by
+    definition — and long prompts pass through untouched.
+    """
+    try:
+        if not prompt.strip():
+            return False
+        from ideogram4.magic_prompt import _strip_code_fences
+        try:
+            obj = json.loads(_strip_code_fences(prompt))
+            if isinstance(obj, dict):
+                return False  # already a structured caption
+        except Exception:
+            pass
+        patch = pipe.config.patch_size * pipe.config.ae_scale_factor
+        num_image_tokens = (height // patch) * (width // patch)
+        num_text = _count_text_tokens(pipe, prompt)
+        ratio = num_text / (num_text + num_image_tokens)
+        return ratio < 0.01
+    except Exception:
+        return False  # heuristic failure must never block generation
+
+
 def _expand_via_openrouter(
     prompt: str,
     aspect_ratio: str = "1:1",
@@ -509,13 +556,22 @@ def generate_ideogram4(
         guidance_scale: CFG scale (used if no guidance_schedule given).
         guidance_schedule: Per-step CFG weights (overrides guidance_scale).
         mu, std: Logit-normal schedule params (overrides preset).
-        seed: Random seed (-1 = random).
-        use_magic_prompt: If True, expand prompt via OpenRouter.
+        seed: Random seed (-1 = random — drawn server-side per request).
+        use_magic_prompt: If True, expand prompt via external API first
+            (Ideogram hosted → DeepSeek → OpenRouter).
         magic_prompt_aspect_ratio: Target aspect ratio for magic prompt.
         **kwargs: Ignored extra params for compatibility.
 
+    Auto-expansion: a short plain-text prompt (text-token ratio < 1% of the
+    image-token grid) is expanded to a structured JSON caption via Ideogram's
+    hosted magic-prompt API (free, IDEOGRAM_API_KEY). JSON captions and long
+    prompts are passed through untouched, so API callers sending structured
+    captions get byte-identical behavior.
+
     Returns:
-        list of PIL Image objects.
+        (images, caption, seed_used) — images, the final caption used, and the
+        seed actually used (equal to `seed` when seed >= 0, otherwise the
+        randomly drawn seed for reproducibility).
     """
     import torch
     from ideogram4.sampler_configs import PRESETS
@@ -537,6 +593,25 @@ def generate_ideogram4(
         else:
             log.warning(
                 "Magic-prompt expansion failed — using prompt as-is. "
+                "Ideogram 4 expects a JSON caption for best results."
+            )
+
+    # --- Caption auto-expansion (fix: blank images from short prompts) ---
+    # Ideogram 4 conditions the image only through attention to text tokens;
+    # below ~1% text-token ratio the CFG branches collapse and output is
+    # uniform gray (verified: blank ≤0.41%, real ≥0.73%). Expand short
+    # plain-text prompts to a JSON caption via Ideogram's own hosted
+    # magic-prompt API (free — same service the UI's 'Magic prompt' toggle
+    # uses; no local model is run). JSON captions and long prompts are
+    # untouched, so the API path for structured captions is byte-identical.
+    if prompt.strip() and _needs_caption_expansion(pipe, prompt, width, height):
+        expanded = _expand_via_ideogram(prompt, magic_prompt_aspect_ratio)
+        if expanded:
+            log.info("Ideogram hosted API auto-expanded short prompt to JSON caption")
+            prompt = expanded
+        else:
+            log.warning(
+                "Caption auto-expansion failed — using prompt as-is. "
                 "Ideogram 4 expects a JSON caption for best results."
             )
 
@@ -564,7 +639,10 @@ def generate_ideogram4(
 
     # --- Generate ---
     start = time.time()
-    gen_seed = seed if seed >= 0 else None
+    # Fix: seed=-1 used to resolve to None, which left the pipeline's CUDA
+    # generator at its DEFAULT seed (67280421310721) — every request produced
+    # byte-identical images. Draw a real random seed server-side instead.
+    gen_seed = seed if seed >= 0 else random.randrange(2**31 - 1)
 
     # VRAM optimisation: offload components not needed during denoising
     import gc
@@ -643,7 +721,7 @@ def generate_ideogram4(
         len(images), elapsed, effective_num_steps, width, height, preset,
     )
 
-    return images, prompt  # Return final caption for API response
+    return images, prompt, gen_seed  # images, final caption, seed used
 
 
 # ---------------------------------------------------------------------------
