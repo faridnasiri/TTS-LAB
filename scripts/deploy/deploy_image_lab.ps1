@@ -276,9 +276,52 @@ Run-Phase 5 "SCP code files to VM" {
         $igKey = ($igKeyLine -split "=", 2)[1].Trim()
         if ($igKey) { $envLines += "IDEOGRAM_API_KEY=$igKey" }
     }
-    $envText = $envLines -join '\n'
-    Invoke-SSH "printf '$envText\n' > /opt/arthur-img/.env && chmod 600 /opt/arthur-img/.env"
-    Write-Host "  .env written with runtime configuration."
+    # Merge, never overwrite: keys the template has a fresh value for are
+    # updated in place; any OTHER keys in the existing VM .env (manual
+    # additions like EMBED_CACHE_ROOT) are preserved verbatim across
+    # redeploys. To remove a key from the VM, edit /opt/arthur-img/.env by
+    # hand — the merge won't delete it.
+    $managed = @{}
+    foreach ($line in $envLines) {
+        $kv = $line -split "=", 2
+        $managed[$kv[0].Trim()] = $kv[1].Trim()
+    }
+
+    $remoteEnvPath = "/opt/arthur-img/.env"
+    $existingText = (Invoke-SSH "test -f $remoteEnvPath && cat $remoteEnvPath || true" | Out-String)
+    $existingText = $existingText -replace "`r`n", "`n"
+
+    $outLines = [System.Collections.Generic.List[string]]::new()
+    $seen     = @{}
+    if ($existingText.Trim()) {
+        foreach ($line in ($existingText -split "`n")) {
+            $m = [regex]::Match($line, "^([A-Za-z_][A-Za-z0-9_]*)\s*=")
+            if ($m.Success) {
+                $key = $m.Groups[1].Value
+                if ($managed.ContainsKey($key)) {
+                    $outLines.Add("$key=$($managed[$key])")
+                    $seen[$key] = $true
+                    continue
+                }
+            }
+            $outLines.Add($line)  # comment, blank, or manual key — keep verbatim
+        }
+    }
+    foreach ($key in $managed.Keys) {
+        if (-not $seen.ContainsKey($key)) {
+            $outLines.Add("$key=$($managed[$key])")
+        }
+    }
+
+    # Write locally, SCP via /tmp, then move into place — avoids shell quoting
+    # issues with token values and writes the file byte-exact (UTF-8, no BOM).
+    $localEnv = Join-Path $env:TEMP "arthur-img.env"
+    [System.IO.File]::WriteAllText($localEnv, ($outLines -join "`n") + "`n",
+                                   (New-Object System.Text.UTF8Encoding($false)))
+    Invoke-SCP -LocalFiles @($localEnv) -RemoteDest "/tmp/arthur-img.env"
+    Remove-Item $localEnv -Force
+    Invoke-SSH "mv /tmp/arthur-img.env $remoteEnvPath && chmod 600 $remoteEnvPath"
+    Write-Host "  .env merged: template keys updated, manual additions preserved."
 
     Invoke-SSH "ls -la /opt/arthur-img/"
 }
