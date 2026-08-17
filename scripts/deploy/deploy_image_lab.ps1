@@ -289,7 +289,7 @@ Run-Phase 5 "SCP code files to VM" {
 
     $remoteEnvPath = "/opt/arthur-img/.env"
     $existingText = (Invoke-SSH "test -f $remoteEnvPath && cat $remoteEnvPath || true" | Out-String)
-    $existingText = $existingText -replace "`r`n", "`n"
+    $existingText = ($existingText -replace "`r`n", "`n").TrimEnd("`n")
 
     $outLines = [System.Collections.Generic.List[string]]::new()
     $seen     = @{}
