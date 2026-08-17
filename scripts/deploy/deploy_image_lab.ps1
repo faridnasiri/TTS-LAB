@@ -38,12 +38,22 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# ── Paths ──────────────────────────────────────────────────────────────────────
+# This script lives in scripts/deploy/ — the lab code files sit at the repo
+# root, two levels up (the housekeep commit 5532d6b moved the scripts into
+# subdirectories without adjusting path resolution). Fall back to the legacy
+# layout (script deployed next to the code) if the files aren't at the root.
+$repoRoot = Split-Path $PSScriptRoot -Parent | Split-Path -Parent
+if (-not (Test-Path (Join-Path $repoRoot "image_lab.py"))) {
+    $repoRoot = $PSScriptRoot
+}
+
 # ── Resolve HF token ──────────────────────────────────────────────────────────
 if (-not $HFToken) {
     if ($env:HF_TOKEN) {
         $HFToken = $env:HF_TOKEN
-    } elseif (Test-Path "$PSScriptRoot\secrets.env") {
-        $line = (Get-Content "$PSScriptRoot\secrets.env") | Where-Object { $_ -match "^HF_TOKEN=" }
+    } elseif (Test-Path "$repoRoot\secrets.env") {
+        $line = (Get-Content "$repoRoot\secrets.env") | Where-Object { $_ -match "^HF_TOKEN=" }
         if ($line) { $HFToken = ($line -split "=", 2)[1].Trim() }
     }
 }
@@ -212,15 +222,15 @@ for repo in models:
 # ─────────────────────────────────────────────────────────────────────────────
 Run-Phase 5 "SCP code files to VM" {
     $files = @(
-        "$PSScriptRoot\image_lab.py",
-        "$PSScriptRoot\image_lab_config.py",
-        "$PSScriptRoot\image_lab_engines.py",
-        "$PSScriptRoot\image_lab_dispatch.py",
-        "$PSScriptRoot\image_lab_ui.py",
-        "$PSScriptRoot\image_lab_utils.py",
-        "$PSScriptRoot\scripts\download\gguf_download.py",
-        "$PSScriptRoot\scripts\utils\nvfp4_save.py",
-        "$PSScriptRoot\ideogram4_lab_engine.py"
+        "$repoRoot\image_lab.py",
+        "$repoRoot\image_lab_config.py",
+        "$repoRoot\image_lab_engines.py",
+        "$repoRoot\image_lab_dispatch.py",
+        "$repoRoot\image_lab_ui.py",
+        "$repoRoot\image_lab_utils.py",
+        "$repoRoot\scripts\download\gguf_download.py",
+        "$repoRoot\scripts\utils\nvfp4_save.py",
+        "$repoRoot\ideogram4_lab_engine.py"
     )
 
     foreach ($f in $files) {
@@ -230,7 +240,7 @@ Run-Phase 5 "SCP code files to VM" {
     Invoke-SCP -LocalFiles $files -RemoteDest "/opt/arthur-img/"
 
     # Copy magic prompt template alongside the engine module for fallback
-    $magicPromptDir = "$PSScriptRoot\ideogram4\src\ideogram4\magic_prompt_system_prompts"
+    $magicPromptDir = "$repoRoot\ideogram4\src\ideogram4\magic_prompt_system_prompts"
     if (Test-Path "$magicPromptDir\v1.txt") {
         Invoke-SCP -LocalFiles @("$magicPromptDir\v1.txt") -RemoteDest "/opt/arthur-img/"
         Write-Host "  Copied magic prompt v1.txt template to /opt/arthur-img/"
@@ -249,19 +259,19 @@ Run-Phase 5 "SCP code files to VM" {
         $envLines = @("HF_TOKEN=$HFToken") + $envLines
     }
     # Add OPENROUTER_API_KEY if found in secrets.env
-    $orKeyLine = Get-Content "$PSScriptRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^OPENROUTER_API_KEY=" }
+    $orKeyLine = Get-Content "$repoRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^OPENROUTER_API_KEY=" }
     if ($orKeyLine) {
         $orKey = ($orKeyLine -split "=", 2)[1].Trim()
         if ($orKey) { $envLines += "OPENROUTER_API_KEY=$orKey" }
     }
     # Add DEEPSEEK_API_KEY if found in secrets.env
-    $dsKeyLine = Get-Content "$PSScriptRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^DEEPSEEK_API_KEY=" }
+    $dsKeyLine = Get-Content "$repoRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^DEEPSEEK_API_KEY=" }
     if ($dsKeyLine) {
         $dsKey = ($dsKeyLine -split "=", 2)[1].Trim()
         if ($dsKey) { $envLines += "DEEPSEEK_API_KEY=$dsKey" }
     }
     # Add IDEOGRAM_API_KEY if found in secrets.env (free hosted magic-prompt API)
-    $igKeyLine = Get-Content "$PSScriptRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^IDEOGRAM_API_KEY=" }
+    $igKeyLine = Get-Content "$repoRoot\secrets.env" -ErrorAction SilentlyContinue | Where-Object { $_ -match "^IDEOGRAM_API_KEY=" }
     if ($igKeyLine) {
         $igKey = ($igKeyLine -split "=", 2)[1].Trim()
         if ($igKey) { $envLines += "IDEOGRAM_API_KEY=$igKey" }

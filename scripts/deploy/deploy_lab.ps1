@@ -97,6 +97,14 @@ function should_run([int]$n) {
 $script:failures = 0
 $labDir = $PSScriptRoot
 
+# Repo root — scripts moved into scripts/deploy/ (housekeep commit 5532d6b)
+# while the lab code files sit at the repo root, two levels up. Fall back to
+# the legacy layout (script deployed next to the code) if not found.
+$repoRoot = Split-Path $PSScriptRoot -Parent | Split-Path -Parent
+if (-not (Test-Path (Join-Path $repoRoot "tts_lab.py"))) {
+    $repoRoot = $PSScriptRoot
+}
+
 Write-Host ""
 Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Green
 Write-Host "║      Arthur TTS Lab — Zero-to-Hero Deploy                    ║" -ForegroundColor Green
@@ -339,7 +347,7 @@ if (should_run 5) {
     )
 
     foreach ($f in $coreFiles) {
-        $full = Join-Path $labDir $f.L
+        $full = Join-Path $repoRoot $f.L
         if (Test-Path $full) { scp_to $full $f.R }
         else                 { warn "  Missing locally: $($f.L)" }
     }
