@@ -1,5 +1,13 @@
 # Arthur TTS Lab — Known Issues & Next Steps
 
+## Latest incident — 2026-08-17 boot hang (recovered, see report)
+
+- Guest hung ~8h in initramfs shell after forced restart — root fs carried ext4 error bit from unclean shutdown; boot `fsck -p` refused auto-repair. Fixed with `e2fsck -fy` from the shell; zero data loss.
+- **`arthur-lab.service` (port 8001, bare-metal) RETIRED** (masked) — venv `/opt/arthur-bench-env` and lab code at `/opt/arthur/` were removed during container migration; service crash-looped since Aug 12. Orchestrator (8009) is the lab.
+- **Full report + recovery runbook:** [incident-2026-08-17-boot-hang-initramfs.md](../issues/incident-2026-08-17-boot-hang-initramfs.md)
+
+---
+
 ## Engines fixed (session 2026-06-27/29)
 
 ### omnivoice — remote routing ✅ FIXED
