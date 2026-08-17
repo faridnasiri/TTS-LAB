@@ -704,16 +704,25 @@ def generate_ideogram4(
             f"or ensure your prompt follows the Ideogram 4 caption schema."
         ) from exc
     finally:
-        # Restore offloaded components
-        if vae_offloaded and hasattr(pipe, 'autoencoder'):
-            pipe.autoencoder = pipe.autoencoder.to('cuda')
-            gc.collect(); torch.cuda.empty_cache()
-        if uc_offloaded and hasattr(pipe, 'unconditional_transformer'):
-            pipe.unconditional_transformer = pipe.unconditional_transformer.to('cuda')
-            gc.collect(); torch.cuda.empty_cache()
-        if te_offloaded and hasattr(pipe, 'text_encoder'):
-            pipe.text_encoder = pipe.text_encoder.to('cuda')
-            gc.collect(); torch.cuda.empty_cache()
+        # Keep offloaded components in RAM, NOT on CUDA. The pipeline moves
+        # text_encoder/autoencoder back onto the GPU while it works and leaves
+        # them there; restoring them to 'cuda' here let the full stack
+        # (11+ GB) pile up on the card until the next request OOM'd (observed:
+        # 4th gen at 1024² failed with only ~1 GB free, 10.93 GB allocated).
+        # Only the conditional transformer stays resident (~5.5 GB) — the
+        # pipeline pulls the rest back in when needed (~3 s PCIe per request).
+        for comp_name in ("autoencoder", "unconditional_transformer", "text_encoder"):
+            comp = getattr(pipe, comp_name, None)
+            if comp is None:
+                continue
+            try:
+                dev = next(comp.parameters()).device
+            except StopIteration:
+                continue
+            if dev.type == "cuda":
+                setattr(pipe, comp_name, comp.to("cpu"))
+                gc.collect(); torch.cuda.empty_cache()
+                log.info("Returned %s to CPU after generation", comp_name)
 
     elapsed = time.time() - start
     log.info(
