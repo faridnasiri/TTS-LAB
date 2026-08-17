@@ -35,6 +35,22 @@ os.environ.setdefault("HF_HOME",            hf_home)
 os.environ.setdefault("TRANSFORMERS_CACHE", hf_home)
 os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hf_home)
 
+# NOTE: PYTORCH_CUDA_ALLOC_CONF=expandable_segments was tried (2026-08-14)
+# and REVERTED — it pinned ~3 GB of freed text-encoder memory on the card
+# (partially-used segments can't shrink), raising load-time footprint from
+# 5.5 GB to 8.5 GB and breaking generation outright. Do not re-enable.
+#
+# Measured 2026-08-16: the same ~4.4 GB driver-level pin happens with the
+# NATIVE allocator after every cache-miss klein generation — the NF4
+# encoder's freed blocks can't shrink out of segments shared with the live
+# transformer (gc + synchronize + empty_cache + ipc_collect all leave it).
+# The pool is NOT lost: torch reuses it (1024² cache-hit and even encoder
+# re-loads absorb into it, +8 MiB driver growth), so it costs nothing for
+# image generations — it only makes nvidia-smi and the load-time headroom
+# gate (~5.1 GiB driver-free) conservative, and starves other processes
+# (TTS containers) of those 4.4 GiB. Restarting the service or a full
+# engine unload (all segments freed together) returns it to the driver.
+
 # ---- Logging ----
 import collections
 

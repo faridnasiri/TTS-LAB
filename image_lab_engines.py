@@ -15,12 +15,14 @@ are loaded from the pre-saved shared directories written by preq_save.py.
 """
 
 from __future__ import annotations
+import gc
+import hashlib
 import logging
 import os
 import time
 from typing import Any, Optional
 
-from image_lab_config import ENGINES, STATE, HF_TOKEN, HF_HOME, GPU_ONLY
+from image_lab_config import ENGINES, STATE, OUTPUT_ROOT, HF_TOKEN, HF_HOME, GPU_ONLY
 from image_lab_utils import free_vram, random_seed, save_image, save_images, save_video
 
 # Local directory for cached GGUF model files
@@ -32,6 +34,197 @@ PREQ_ROOT = "/opt/arthur-img-models/quantized"
 
 # NVFP4-quantized transformers saved by nvfp4_save.py (torchao NVFP4WeightOnlyConfig)
 NVFP4_ROOT = "/opt/arthur-img-models/nvfp4"
+
+# ── Prompt-embedding disk cache ─────────────────────────────────────────────
+# prompt_embeds depend ONLY on the prompt text (and the fixed encoder) — they
+# are deterministic. Caching them lets repeat prompts skip the ~4.5 GiB Qwen3
+# text encoder entirely: it loads lazily, only for prompts never seen before.
+# Lives under the output root (writable by the service); bump the version to
+# invalidate after an encoder change.
+# Optional override: point the embed cache at a RAM disk (e.g. /dev/shm) to
+# keep the ~12.5 MB-per-prompt writes off the NVMe. Trade-off: tmpfs is
+# volatile — a VM reboot wipes the cache and previously-seen prompts re-encode
+# once (+10-15 s each). Default (disk) keeps the cache across reboots.
+EMBED_CACHE_ROOT    = os.environ.get("EMBED_CACHE_ROOT", "").strip() or os.path.join(OUTPUT_ROOT, "embed_cache")
+EMBED_CACHE_VERSION = 1
+
+# ── Gemini Flash prompt expansion (optional, free tier) ─────────────────────
+# When GEMINI_API_KEY is set, klein prompts are expanded by Gemini BEFORE the
+# local Qwen3 encode — richer captions, zero extra VRAM (the embeddings are
+# still produced by the local encoder). Any failure falls back to the original
+# prompt; expansion never blocks generation.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL   = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash").strip()
+
+_GEMINI_EXPAND_INSTRUCTION = (
+    "You are a prompt engineer for a text-to-image model (FLUX.2 Klein). "
+    "Rewrite the user's prompt into ONE vivid paragraph of at most 60 words "
+    "that the image model will render well.\n\n"
+    "Hard rules:\n"
+    "- Preserve the user's literal requests exactly: any text they ask to "
+    "WRITE or display must appear VERBATIM in your output.\n"
+    "- If the prompt references an attached reference image, describe what to "
+    "do WITH it — do not invent new scene content that replaces it.\n"
+    "- Add concrete visual detail (lighting, palette, style, composition) but "
+    "never contradict or add to literal text requests.\n"
+    "- Plain English. No preamble. No markdown. Only the rewritten prompt."
+)
+
+
+def _embed_cache_path(engine_key: str, prompt: str) -> str:
+    """Disk path for the cached embeddings of `prompt` (hash-keyed)."""
+    digest = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:24]
+    return os.path.join(EMBED_CACHE_ROOT, f"v{EMBED_CACHE_VERSION}", engine_key, digest + ".pt")
+
+
+def _embed_cache_load(path: str) -> Optional[Any]:
+    """Load cached prompt_embeds (None if absent/corrupt)."""
+    import torch
+    if not os.path.isfile(path):
+        return None
+    try:
+        return torch.load(path, map_location="cpu", weights_only=True)["prompt_embeds"]
+    except Exception as ex:
+        log.warning("Embedding cache unreadable (%s) — ignoring", ex)
+        return None
+
+
+def _embed_cache_save(path: str, prompt_embeds: Any) -> None:
+    """Save prompt_embeds to disk; failures are non-fatal (cache is an optimisation)."""
+    import torch
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save({"prompt_embeds": prompt_embeds.detach().cpu()}, path)
+    except Exception as ex:
+        log.warning("Embedding cache write failed (%s) — continuing without it", ex)
+
+
+def _gemini_expand_prompt(prompt: str) -> Optional[str]:
+    """Expand `prompt` via the free Gemini Flash tier. Returns None (use the
+    original prompt) on any failure — no key, HTTP error, unparseable reply."""
+    if not GEMINI_API_KEY:
+        return None
+    try:
+        import httpx
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}")
+        r = httpx.post(url, json={
+            "contents": [{"parts": [{"text": _GEMINI_EXPAND_INSTRUCTION + "\n\nPrompt: " + prompt}]}],
+            # gemini-2.5-flash thinks by default (~190 hidden thought tokens)
+            # and maxOutputTokens caps THOUGHTS + visible text combined —
+            # at 200 the visible answer was cut at ~8 tokens. thinkingBudget 0
+            # is ignored by the API, so the cap must simply leave room:
+            # 1024 covers ~190 thoughts + the ≤60-word rewrite with headroom.
+            "generationConfig": {"temperature": 0.8, "maxOutputTokens": 1024,
+                                 "thinkingConfig": {"thinkingBudget": 0}},
+        }, timeout=30.0)
+        if r.status_code != 200:
+            log.warning("Gemini expansion HTTP %s — using original prompt", r.status_code)
+            return None
+        parts = r.json().get("candidates", [{}])[0].get("content", {}).get("parts", [])
+        text = parts[0].get("text", "").strip() if parts else ""
+        if not text:
+            log.warning("Gemini returned no text — using original prompt")
+            return None
+        return text
+    except Exception as ex:
+        log.warning("Gemini expansion failed (%s) — using original prompt", ex)
+        return None
+
+
+def _ensure_klein_encoder(pipe: Any, engine_key: str) -> None:
+    """Load the Qwen3 text encoder into the pipeline on demand (embed-cache
+    miss) and place it on CUDA. With the cache, the encoder is only needed
+    for prompts never seen before — leaving it unloaded otherwise keeps the
+    resident set at ~5.7 GiB instead of ~10 GiB."""
+    import torch
+    enc = pipe.text_encoder
+    if enc is not None:
+        if enc.device != torch.device("cuda"):
+            enc.to("cuda")
+        return
+    if engine_key == "flux2klein":
+        repo, extra, label = "black-forest-labs/FLUX.2-klein-4B", {"subfolder": "text_encoder"}, "Qwen3 (klein-4B)"
+    else:
+        repo, extra, label = "Qwen/Qwen3-8B", {}, "Qwen3-8B"
+    from transformers import AutoModel, BitsAndBytesConfig
+    log.info("Loading %s text encoder (NF4 4-bit) on demand — brand-new prompt …", label)
+    pipe.text_encoder = AutoModel.from_pretrained(
+        repo,
+        quantization_config = BitsAndBytesConfig(
+            load_in_4bit              = True,
+            bnb_4bit_quant_type       = "nf4",
+            bnb_4bit_compute_dtype    = torch.bfloat16,
+            bnb_4bit_use_double_quant = True,
+        ),
+        device_map = "cuda",
+        **extra,
+    )
+
+
+def _klein_prompt_embeds(pipe: Any, engine_key: str, prompts: dict) -> dict:
+    """Return {label: prompt_embeds} for the given {label: prompt_text} map.
+
+    Cache hit → embeds from disk, the text encoder never even loads.
+    Cache miss → lazy-load the encoder, encode under torch.no_grad() (the
+    Qwen3 forward with output_hidden_states=True otherwise keeps ~2.4 GiB of
+    per-layer activations live through the returned embeds' autograd graph —
+    the pipeline's own __call__ is no_grad-decorated; our manual call isn't),
+    save to cache, then park the encoder on CPU for the transformer pass.
+    Non-GPU_ONLY keeps the historical direct-encode path (group-offload hooks)."""
+    import torch
+    if not GPU_ONLY:
+        out: dict = {}
+        for label, text in prompts.items():
+            with torch.no_grad():
+                embeds, _ = pipe.encode_prompt(prompt=text, device="cuda")
+            out[label] = embeds
+        pipe.text_encoder.to("cpu")
+        torch.cuda.empty_cache()
+        return out
+
+    result: dict = {}
+    missing: list = []
+    for label, text in prompts.items():
+        cached = _embed_cache_load(_embed_cache_path(engine_key, text))
+        if cached is not None:
+            result[label] = cached.to("cuda")
+        else:
+            missing.append((label, text))
+    if not missing:
+        log.info("Prompt-embedding cache hit (%s) — skipping the text encoder", engine_key)
+        return result
+    _ensure_klein_encoder(pipe, engine_key)
+    for label, text in missing:
+        with torch.no_grad():
+            embeds, _ = pipe.encode_prompt(prompt=text, device="cuda")
+        _embed_cache_save(_embed_cache_path(engine_key, text), embeds)
+        result[label] = embeds
+    _park_klein_encoder(pipe)
+    return result
+
+
+def _park_klein_encoder(pipe) -> None:
+    """Release the NF4 text encoder from VRAM after a cache-miss encode.
+
+    The encoder is dropped (reference + gc), exactly like _unload_current —
+    .to("cpu") alone left it alive on GPU. Note: even freed, its blocks stay
+    pinned at the DRIVER level (~4.4 GiB, shared segments with the live
+    transformer — see the note in image_lab.py) but remain reusable by the
+    torch allocator, so later generations and even the next encoder load
+    absorb into the pool. Only a full unload/restart returns it to the
+    driver. _ensure_klein_encoder re-loads it for brand-new prompts.
+    """
+    import torch
+    enc = getattr(pipe, "text_encoder", None)
+    if enc is None:
+        return
+    pipe.text_encoder = None
+    del enc
+    gc.collect()
+    torch.cuda.empty_cache()
+    torch.cuda.ipc_collect()
+
 
 # ---------------------------------------------------------------------------
 # GGUF file catalogue
@@ -168,6 +361,14 @@ def _ensure_engine(key: str, quant: str = ""):
     if STATE.active_engine == key and STATE.active_quant == quant:
         return  # already loaded with the same quantization
     _unload_current()
+    # GPU-only policy: make room before allocating — evict the TTS engine
+    # containers, then the LLM container if still short (see
+    # _ensure_vram_headroom). Runs after _unload_current so the previous
+    # image engine's VRAM is already accounted for.
+    if GPU_ONLY:
+        need = _VRAM_NEED_MB.get(key)
+        if need is not None:
+            _ensure_vram_headroom(need, key)
     loader = _LOADERS.get(key)
     if loader is None:
         raise RuntimeError(f"No loader for engine '{key}'")
@@ -204,6 +405,95 @@ def _evict_tts_engines() -> int:
             pass   # container down / nothing loaded — fine
     _t.sleep(2)  # let CUDA return the freed memory to the driver
     return torch.cuda.mem_get_info()[0] // (1024 * 1024)
+
+
+# ---------------------------------------------------------------------------
+# VRAM headroom enforcement — every loader makes room before allocating
+# ---------------------------------------------------------------------------
+
+# Minimum free VRAM (MiB) required before each engine's loader starts.
+# Calibrated for the RTX 5060 Ti 16 GB card (~15350 MiB max free once the
+# TTS containers' CUDA contexts release). The GPU-only policy (2026-08-13)
+# forbids CPU fallback, so a short load makes room instead of OOMing mid-load.
+_VRAM_NEED_MB: dict[str, int] = {
+    # Klein engines use a LAZY text encoder — only the transformer is resident
+    # at load (~5.6 GiB); the NF4 Qwen3 encoder (+4.5 GiB) loads on demand for
+    # uncached prompts and is released afterwards (its blocks stay pooled at
+    # the driver level until a full unload — reusable by torch, invisible to
+    # mem_get_info). 10500 lets the engine reload even while TTS containers
+    # hold their CUDA contexts (~10832 MiB free observed), yet still leaves
+    # headroom for the on-demand encode peak (~10.6 GiB). Old values
+    # (12500/14800) assumed the encoder was resident.
+    "flux2klein":   10500,
+    "flux2klein9b": 10500,
+    "sd35":         12500,  # GGUF transformer + shared encoders/VAE ≈ 11-12 GiB
+    "wan":          14800,  # two A14B transformers — needs the card to itself
+    "ideogram4":    12000,  # nf4 transformer + Qwen3-VL encoder + VAE; load peak ≈ 11 GiB
+}
+
+_LLM_CONTAINER_NAME = "tts-lab-llm-qwen36"
+_DOCKER_SOCK = "/var/run/docker.sock"
+
+
+def _stop_llm_container() -> bool:
+    """Stop the Qwen 3.6 LLM container to free its ~13.6 GiB VRAM.
+
+    Last-resort eviction for image loads. Reversible: the TTS orchestrator
+    restarts the container before LLM inference (tts_lab_dispatch Phase 0).
+    Returns True only if this call issued the stop (HTTP 204); False if the
+    container was already stopped (304), the docker socket is missing, or
+    the request failed.
+    """
+    if not os.path.exists(_DOCKER_SOCK):
+        log.warning("No docker socket (%s) — cannot stop LLM container", _DOCKER_SOCK)
+        return False
+    try:
+        import httpx
+        transport = httpx.HTTPTransport(uds=_DOCKER_SOCK)
+        with httpx.Client(transport=transport, timeout=10.0) as client:
+            r = client.post(
+                f"http://localhost/v1.49/containers/{_LLM_CONTAINER_NAME}/stop")
+        stopped = r.status_code == 204
+        log.info("Stop LLM container → HTTP %s %s", r.status_code,
+                 "✓" if stopped else "✗ (already stopped or failed)")
+        return stopped
+    except Exception as exc:
+        log.warning("Failed to stop LLM container: %s", exc)
+        return False
+
+
+def _ensure_vram_headroom(need_mb: int, key: str) -> None:
+    """Make sure `need_mb` MiB of VRAM are free before loading engine `key`.
+
+    Escalation chain (GPU-only policy — image engines never fall back to CPU):
+      1. Evict the TTS engine containers (they lazy-reload on their next
+         TTS request, a few seconds of added latency).
+      2. Stop the LLM container as a last resort (~13.6 GiB).
+      3. Raise a clear error instead of OOMing mid-load.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return  # CPU / CPU-offload mode — nothing to enforce
+    free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    if free_mb >= need_mb:
+        return
+    log.info("VRAM free %d MiB < %d — evicting TTS engine containers …",
+             free_mb, need_mb)
+    free_mb = _evict_tts_engines()
+    if free_mb < need_mb:
+        log.info("Still %d MiB free — stopping LLM container (~13.6 GiB) …", free_mb)
+        if _stop_llm_container():
+            # Wait (bounded) for the driver to reclaim the LLM's memory.
+            t0 = time.monotonic()
+            while free_mb < need_mb and time.monotonic() - t0 < 30:
+                time.sleep(1)
+                free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    if free_mb < need_mb:
+        label = ENGINES.get(key).label if ENGINES.get(key) else key
+        raise RuntimeError(
+            f"{label} needs ~{need_mb // 1024} GiB free VRAM; only {free_mb} MiB "
+            f"available after evicting the TTS engine containers and stopping "
+            f"the LLM container. (GPU-only policy — no CPU offloading.)")
 
 
 
@@ -245,18 +535,9 @@ def _load_flux2klein(quant: str = ""):
     # Never fall back to CPU. The full bf16 repo measures ~15.1 GiB with the
     # Qwen3-4B text encoder — no room left for 1024² generation on a 15.5 GiB
     # card. The encoder is therefore loaded NF4 4-bit on CUDA (as in the 9B-KV
-    # loader); the transformer stays full bf16. The TTS engine containers
-    # (~3.4 GiB resident when loaded) are evicted first when needed — they
-    # lazy-reload on their next TTS request.
-    free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-    if free_mb < 12500:
-        log.info("VRAM free %d MiB < 12500 — evicting TTS engine containers …", free_mb)
-        free_mb = _evict_tts_engines()
-    if free_mb < 12500:
-        raise RuntimeError(
-            f"FLUX.2 Klein 4B needs ~12 GiB free VRAM; only {free_mb} MiB "
-            f"available after evicting the TTS engines. "
-            f"(GPU-only policy — no CPU offloading.)")
+    # loader); the transformer stays full bf16. VRAM headroom is enforced
+    # centrally in _ensure_engine → _ensure_vram_headroom (evicts the TTS
+    # containers, then the LLM container, before allocating).
 
     log.info("Loading FLUX.2 Klein 4B transformer (BF16) …")
     transformer = Flux2Transformer2DModel.from_pretrained(
@@ -264,20 +545,12 @@ def _load_flux2klein(quant: str = ""):
         token = token,
     )
 
-    from transformers import BitsAndBytesConfig
-    log.info("Loading FLUX.2 Klein 4B text encoder (Qwen3, NF4 4-bit) directly on CUDA …")
-    text_encoder = AutoModel.from_pretrained(
-        repo,
-        subfolder  = "text_encoder",
-        quantization_config = BitsAndBytesConfig(
-            load_in_4bit              = True,
-            bnb_4bit_quant_type       = "nf4",
-            bnb_4bit_compute_dtype    = torch.bfloat16,
-            bnb_4bit_use_double_quant = True,
-        ),
-        device_map = "cuda",
-        token      = token,
-    )
+    # Text encoder loads LAZILY — prompt embeddings are cached to disk (see
+    # _klein_prompt_embeds), so the ~4 GiB Qwen3 encoder only loads for
+    # prompts never seen before. Resident set without it: ~5.5 GiB. Its freed
+    # blocks stay pooled at the driver level after a miss (see image_lab.py
+    # note) — reusable by torch, invisible to nvidia-smi until a full unload.
+    text_encoder = None
 
     log.info("Loading FLUX.2 Klein 4B tokenizer / VAE / scheduler …")
     tokenizer = Qwen2TokenizerFast.from_pretrained(repo, subfolder = "tokenizer")
@@ -298,6 +571,14 @@ def _load_flux2klein(quant: str = ""):
     ).to("cuda")
     pipe.vae.enable_slicing()
 
+    # See the 9B-KV loader: the pipeline's `_execution_device` falls back to
+    # `self.device`, which reads the __init__ signature order (text_encoder
+    # first) — so when generation offloads the encoder to CPU, latent
+    # placement would flip to "cpu" and the CUDA VAE would die with a conv
+    # weight/input mismatch. With precomputed embeds the encoder is never
+    # called during generation, so the pipeline genuinely executes on cuda.
+    pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+
     STATE.loaded_model       = pipe
     STATE.active_engine      = "flux2klein"
     STATE.active_quant       = ""
@@ -315,18 +596,54 @@ def _generate_flux2klein(params: dict) -> list[dict]:
         seed = random_seed()
 
     generator = torch.Generator("cpu").manual_seed(seed)
+    guidance  = float(params.get("guidance_scale", 3.5))
 
-    result = pipe(
-        prompt              = params["prompt"],
-        image               = _load_ref_image(params.get("reference_image")),
-        width               = int(params.get("width",  1024)),
-        height              = int(params.get("height", 1024)),
-        num_inference_steps = int(params.get("num_inference_steps", 20)),
-        guidance_scale      = float(params.get("guidance_scale", 3.5)),
-        generator           = generator,
-    )
+    # Optional Gemini prompt expansion (needs GEMINI_API_KEY). Runs BEFORE
+    # encoding, so the expanded caption flows through the normal local Qwen3
+    # encoder — richer text, identical VRAM. Expansion also changes the
+    # embed-cache key, so expanded prompts cache under their own hash.
+    prompt = params["prompt"]
+    expanded = _gemini_expand_prompt(prompt) if GPU_ONLY else None
+    if expanded:
+        log.info("Gemini expanded prompt: %r → %r", prompt, expanded)
+        prompt = expanded
+
+    # Prompt-embedding cache — see _klein_prompt_embeds. CFG mode needs the
+    # empty-prompt (negative) embeds too; the negative prompt is a constant,
+    # so it caches as a single file per engine.
+    embeds = _klein_prompt_embeds(pipe, "flux2klein",
+                                  {"prompt": prompt, "negative": ""})
+
+    # Ref token count is the other budget lever: each ref token costs ~0.5 MiB
+    # of retained K/V across every denoising step. Cap the ref area so a full
+    # landscape screenshot (1024×576, 9216 tokens) passes untouched while
+    # square 1024² refs can't blow the card. (PIL thumbnail keeps aspect.)
+    ref_img = _load_ref_image(params.get("reference_image"))
+    if ref_img is not None:
+        w, h = ref_img.size
+        if w * h > 768 * 768:
+            log.info("Reference image %dx%d exceeds the 16 GB card's KV budget — downscaling to ≤768² px", w, h)
+            ref_img.thumbnail((768, 768))
+
+    try:
+        result = pipe(
+            prompt_embeds           = embeds["prompt"],
+            negative_prompt_embeds  = embeds["negative"],
+            image                   = ref_img,
+            width                   = int(params.get("width",  1024)),
+            height                  = int(params.get("height", 1024)),
+            num_inference_steps     = int(params.get("num_inference_steps", 20)),
+            guidance_scale          = guidance,
+            generator               = generator,
+        )
+    finally:
+        # Release the encoder (reference drop + collect — .to("cpu") alone
+        # doesn't free the device_map NF4 module). No-op if never loaded.
+        _park_klein_encoder(pipe)
 
     final_params = {**params, "seed": seed}
+    if expanded:
+        final_params = {**final_params, "expanded_prompt": expanded}
     return save_images(result.images, "flux2klein", final_params)
 
 
@@ -388,10 +705,10 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
     from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
     from transformers import AutoModel, Qwen2TokenizerFast
 
-    quant = quant or "Q4_K_M"
-    if quant not in _FLUX2KLEIN9B_GGUF:
+    use_quant = quant or "Q4_K_M"   # resolve the caller's "" to the engine default…
+    if use_quant not in _FLUX2KLEIN9B_GGUF:
         raise RuntimeError(
-            f"FLUX.2 Klein 9B-KV quant '{quant}' not recognised. "
+            f"FLUX.2 Klein 9B-KV quant '{use_quant}' not recognised. "
             f"Valid options: {list(_FLUX2KLEIN9B_GGUF)}"
         )
     t0    = time.time()
@@ -405,26 +722,17 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
     # ── VRAM budget decision ─────────────────────────────────────────────────
     # GPU-only policy (2026-08-13): never fall back to CPU or system-RAM
     # offloading. Full-GPU budget (transformer 5.7 + Qwen3-8B NF4 4.5 + VAE
-    # 0.3 + activations ≈ 12-13 GiB) needs the GPU almost to itself — evict
-    # the TTS engine containers (~3.4 GiB resident when loaded) first; they
-    # lazy-reload on their next TTS request. Threshold 14800 leaves margin
-    # over the ~12.5 GiB measured need while staying below the ~15350 MiB
-    # max achievable free (TTS containers' CUDA contexts never fully release).
-    if GPU_ONLY:
-        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-        if free_mb < 14800:
-            log.info("VRAM free %d MiB < 14800 — evicting TTS engine containers …", free_mb)
-            free_mb = _evict_tts_engines()
-        if free_mb < 14800:
-            raise RuntimeError(
-                f"FLUX.2 Klein 9B-KV needs ~13 GiB free VRAM; only "
-                f"{free_mb} MiB free after evicting the TTS engines. "
-                f"(GPU-only policy — no CPU offloading.)")
+    # 0.3 + activations ≈ 12-13 GiB) needs the GPU almost to itself — the TTS
+    # engine containers (~3.4 GiB resident when loaded) are evicted first;
+    # they lazy-reload on their next TTS request. VRAM headroom is enforced
+    # centrally in _ensure_engine → _ensure_vram_headroom (14800 MiB need,
+    # below the ~15350 MiB max achievable free — TTS containers' CUDA
+    # contexts never fully release).
 
     # ── Transformer (GGUF Q4_K_M, explicit derived config) ────────────────
-    repo_id, fname = _FLUX2KLEIN9B_GGUF[quant]
+    repo_id, fname = _FLUX2KLEIN9B_GGUF[use_quant]
     gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "flux2klein9b"))
-    log.info("Loading FLUX.2 Klein 9B-KV transformer from GGUF — quant=%s …", quant)
+    log.info("Loading FLUX.2 Klein 9B-KV transformer from GGUF — quant=%s …", use_quant)
     transformer = Flux2Transformer2DModel.from_single_file(
         gguf_path,
         config              = _flux2klein9b_config_dir(),
@@ -445,19 +753,13 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
         )
 
     # ── Text encoder (Qwen3-8B, hidden 4096 → 3 x 4096 = 12288 joint dim) ──
+    # GPU-only mode loads it LAZILY: prompt embeddings are cached to disk
+    # (see _klein_prompt_embeds), so the ~4.5 GiB encoder only loads for
+    # prompts never seen before. Resident set without it: ~5.7 GiB. Its freed
+    # blocks stay pooled at the driver level after a miss (see image_lab.py
+    # note) — reusable by torch, invisible to nvidia-smi until a full unload.
     if GPU_ONLY:
-        from transformers import BitsAndBytesConfig
-        log.info("Loading Qwen3-8B text encoder (NF4 4-bit) directly on CUDA …")
-        text_encoder = AutoModel.from_pretrained(
-            "Qwen/Qwen3-8B",
-            quantization_config = BitsAndBytesConfig(
-                load_in_4bit              = True,
-                bnb_4bit_quant_type       = "nf4",
-                bnb_4bit_compute_dtype    = torch.bfloat16,
-                bnb_4bit_use_double_quant = True,
-            ),
-            device_map = "cuda",
-        )
+        text_encoder = None
     else:
         log.info("Loading Qwen3-8B text encoder (BF16, CPU) …")
         text_encoder = AutoModel.from_pretrained(
@@ -495,8 +797,8 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
         is_distilled = True,
     )
     if GPU_ONLY:
-        # Everything is already on CUDA (transformer + NF4 encoder + VAE) —
-        # GPU-only policy, no CPU-offloaded components left to drag back.
+        # Everything is already on CUDA (transformer + VAE); the NF4 encoder
+        # loads on demand for cache-miss prompts and is released afterwards.
         log.info("GPU-only mode enabled: moving FLUX.2 Klein 9B-KV to CUDA …")
         pipe = pipe.to("cuda")
     else:
@@ -504,6 +806,23 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
     pipe.vae.enable_slicing()
     pipe.vae.enable_tiling()
 
+    # The pipeline resolves its execution device from the FIRST module's
+    # actual location — `_execution_device` falls back to `self.device`,
+    # which reads the __init__ signature order (text_encoder first), not
+    # `hf_device_map` or `_exclude_from_cpu_offload`. Generation offloads
+    # the text encoder to CPU after encoding (VRAM budget for ref-image KV
+    # caching); without this override, "cpu" propagates into latent
+    # placement and the CUDA VAE dies with a conv weight/input mismatch.
+    # Precomputed embeds mean the encoder is never called during
+    # generation, so the pipeline genuinely executes on cuda while the
+    # encoder sits on CPU — and reports cuda anyway when it is not
+    # offloaded, so the override is never wrong.
+    pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+
+    # Store the CALLER's quant ("" = default), not the resolved default —
+    # _ensure_engine compares active_quant against the request verbatim, so
+    # storing the resolved "Q4_K_M" made every subsequent default-quant
+    # request "mismatch" and pay an unload+reload.
     STATE.loaded_model       = pipe
     STATE.active_engine      = "flux2klein9b"
     STATE.active_quant       = quant
@@ -523,19 +842,50 @@ def _generate_flux2klein9b(params: dict) -> list[dict]:
 
     generator = torch.Generator("cpu").manual_seed(seed)
 
-    # Note: no guidance_scale — step-distilled klein models run without CFG
-    # (guidance=None in the pipeline). The UI still shows the param for
-    # consistency with the other klein engine.
-    result = pipe(
-        prompt              = params["prompt"],
-        image               = _load_ref_image(params.get("reference_image")),
-        width               = int(params.get("width",  1024)),
-        height              = int(params.get("height", 1024)),
-        num_inference_steps = int(params.get("num_inference_steps", 4)),
-        generator           = generator,
-    )
+    # Optional Gemini prompt expansion (needs GEMINI_API_KEY) — see the 4B
+    # generator: richer captions through the same local encoder, identical
+    # VRAM, and a different cache key.
+    prompt = params["prompt"]
+    expanded = _gemini_expand_prompt(prompt) if GPU_ONLY else None
+    if expanded:
+        log.info("Gemini expanded prompt: %r → %r", prompt, expanded)
+        prompt = expanded
+
+    # Prompt-embedding cache — see _klein_prompt_embeds. Step-distilled klein
+    # runs without CFG, so only the positive embeds are needed.
+    embeds = _klein_prompt_embeds(pipe, "flux2klein9b", {"prompt": prompt})
+
+    # Ref token count is the other budget lever: each ref token costs ~0.5 MiB
+    # of retained K/V across every denoising step. Cap the ref area so a full
+    # landscape screenshot (1024×576, 9216 tokens) passes untouched while
+    # square 1024² refs can't blow the card. (PIL thumbnail keeps aspect.)
+    ref_img = _load_ref_image(params.get("reference_image"))
+    if ref_img is not None:
+        w, h = ref_img.size
+        if w * h > 768 * 768:
+            log.info("Reference image %dx%d exceeds the 16 GB card's KV budget — downscaling to ≤768² px", w, h)
+            ref_img.thumbnail((768, 768))
+
+    try:
+        # Note: no guidance_scale — step-distilled klein models run without CFG
+        # (guidance=None in the pipeline). The UI still shows the param for
+        # consistency with the other klein engine.
+        result = pipe(
+            prompt_embeds       = embeds["prompt"],
+            image               = ref_img,
+            width               = int(params.get("width",  1024)),
+            height              = int(params.get("height", 1024)),
+            num_inference_steps = int(params.get("num_inference_steps", 4)),
+            generator           = generator,
+        )
+    finally:
+        # Release the encoder (reference drop + collect — .to("cpu") alone
+        # doesn't free the device_map NF4 module). No-op if never loaded.
+        _park_klein_encoder(pipe)
 
     final_params = {**params, "seed": seed}
+    if expanded:
+        final_params = {**final_params, "expanded_prompt": expanded}
     return save_images(result.images, "flux2klein9b", final_params)
 
 
@@ -966,7 +1316,14 @@ def generate(engine_key: str, params: dict) -> list[dict]:
     quant = params.get("quant", "")
     STATE.generating = True
     try:
-        _ensure_engine(engine_key, quant)
+        try:
+            _ensure_engine(engine_key, quant)
+        except Exception:
+            # A failed load (e.g. CUDA OOM mid-load) leaves partially-loaded
+            # tensors pinned in the caching allocator — release them so the
+            # card isn't bricked until the service restarts.
+            _unload_current()
+            raise
         generator_fn = _GENERATORS[engine_key]
         results = generator_fn(params)
         STATE.last_used = time.time()
@@ -980,7 +1337,17 @@ def generate(engine_key: str, params: dict) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def load_engine(engine_key: str):
-    _ensure_engine(engine_key)
+    try:
+        _ensure_engine(engine_key)
+    except Exception:
+        # Same cleanup as generate() — a failed load must not leave
+        # partially-loaded tensors pinned on the GPU.
+        _unload_current()
+        raise
+    # Mark the model as freshly used so the idle-eviction loop doesn't
+    # instantly recycle an API-preloaded model (last_used is otherwise only
+    # touched by generate()).
+    STATE.last_used = time.time()
 
 
 def unload_engine():
