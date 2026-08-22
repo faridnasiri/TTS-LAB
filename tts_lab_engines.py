@@ -35,6 +35,29 @@ def _ref_wav_path(ref_id: str):
     return None
 
 
+def _stash_builtin_conds(inst):
+    """Keep the pristine built-in voice conditionals for later restoration.
+
+    chatterbox/chatterboxturbo's generate() silently REUSES the previous
+    request's conditioning (self.conds) when no audio_prompt_path is given.
+    That makes "no reference" mean "last caller's voice" instead of the
+    built-in voice. We snapshot the conds the checkpoint loaded, and
+    _reset_engine_conds() restores them. generate() replaces self.conds
+    with a fresh Conditionals object and never mutates one in place, so
+    the snapshot stays valid for the life of the instance.
+    """
+    inst._builtin_conds = getattr(inst, "conds", None)
+    return inst
+
+
+def _reset_engine_conds(inst, engine):
+    """Restore an engine's built-in voice for a no-reference request."""
+    builtin = getattr(inst, "_builtin_conds", None)
+    if builtin is not None and inst.conds is not builtin:
+        inst.conds = builtin
+        slog("REF", engine, "No reference — restored built-in voice conditionals")
+
+
 # ── 1. Piper ──────────────────────────────────────────────────────────────────
 def _load_piper(voice="en_US-ryan-high"):
     import onnxruntime as ort
@@ -621,7 +644,7 @@ def _load_chatterbox(model="persian"):
         inst.device = DEVICE
         inst.tokenizer = EnTokenizer(str(fa_dir / "mtl_tokenizer.json"))
         inst._needs_persian_char_map = True
-        return inst
+        return _stash_builtin_conds(inst)
 
     if model == "v3":
         from huggingface_hub import snapshot_download
@@ -647,9 +670,9 @@ def _load_chatterbox(model="persian"):
         inst.device = DEVICE
         # v3 uses grapheme tokenizer (2454 tokens) — matches text_emb weight shape
         inst.tokenizer = EnTokenizer(str(v3_dir / "grapheme_mtl_merged_expanded_v1.json"))
-        return inst
+        return _stash_builtin_conds(inst)
 
-    return ChatterboxTTS.from_pretrained(device=DEVICE)
+    return _stash_builtin_conds(ChatterboxTTS.from_pretrained(device=DEVICE))
 
 # ── Sentence splitting for long-form synthesis ──────────────────────────────────
 _SENTENCE_RE = re.compile(r'(?<=[.!?۔！？])\s+')
@@ -718,6 +741,15 @@ def _synth_chatterbox(inst, text, params):
         p = _ref_wav_path(pid)
         if p:
             kw["audio_prompt_path"] = str(p)
+            slog("REF", "chatterbox", f"Using reference voice: {p}")
+        else:
+            # Missing id — do NOT inherit the previous request's voice.
+            slog("REF", "chatterbox", f"audio_prompt_id {pid!r} not found — built-in voice")
+            _reset_engine_conds(inst, "chatterbox")
+    else:
+        # No reference — restore the built-in voice (generate() would
+        # otherwise reuse self.conds from the previous request).
+        _reset_engine_conds(inst, "chatterbox")
 
     # ── Text preprocessing (applied once, before splitting) ──
     provider = params.get("use_g2p", "persian_phonemizer")
@@ -1649,7 +1681,7 @@ def _load_chatterboxturbo(model="default"):
         perth.PerthImplicitWatermarker = perth.DummyWatermarker
     from chatterbox.tts_turbo import ChatterboxTurboTTS
     slog("LOAD", "chatterboxturbo", f"Loading ChatterboxTurboTTS (350M, one-step)...")
-    return ChatterboxTurboTTS.from_pretrained(device=DEVICE)
+    return _stash_builtin_conds(ChatterboxTurboTTS.from_pretrained(device=DEVICE))
 
 
 def _synth_chatterboxturbo(inst, text, params):
@@ -1726,6 +1758,17 @@ def _synth_chatterboxturbo(inst, text, params):
             # Chatterbox-Turbo asserts the reference is > 5 s — extend short
             # clips so any reasonable reference works (see helper below).
             kw["audio_prompt_path"] = str(_chatterbox_ref_path(p))
+            slog("REF", "chatterboxturbo", f"Using reference voice: {p}")
+        else:
+            # Resolvable-but-missing id — do NOT inherit the previous
+            # request's voice; fall back to the built-in voice.
+            slog("REF", "chatterboxturbo", f"audio_prompt_id {pid!r} not found — built-in voice")
+            _reset_engine_conds(inst, "chatterboxturbo")
+    else:
+        # No reference at all — generate() reuses self.conds when no path is
+        # given, which would leak the previous caller's voice. Restore the
+        # built-in voice so "no ref" means "built-in voice", as documented.
+        _reset_engine_conds(inst, "chatterboxturbo")
 
     # Seed (via torch global state — not a generate() parameter)
     _seed = int(float(params.get("seed", "0") or "0"))

@@ -247,6 +247,8 @@ data = r.json()   # {audio_b64, sample_rate, synth_time_ms, rtf}
 
 Use engine `chatterbox` (base) instead if you need real `exaggeration`/`cfg_weight` control — slower (RTF ~2.4× vs 1.1×) and heavier (~3 GB vs 700 MB), but the knobs work there.
 
+**No `audio_prompt_id` = built-in voice (enforced since 2026-08-22).** The library's `generate()` reuses the instance's previous conditioning when no reference path is given, which used to leak the *previous caller's* voice into no-ref requests. The lab now restores the checkpoint's built-in conditionals whenever a request has no resolvable reference, and logs a `REF` line showing which voice was used.
+
 **Audio format:** mono 16-bit PCM, 22050 Hz (all engines require mono reference audio for voice cloning; 16–22.05 kHz accepted, engines resample internally).
 
 **Sidecar metadata:** an optional `{stem}.json` next to each WAV adds language + provenance:
