@@ -67,6 +67,15 @@ RUN pip install --no-cache-dir --force-reinstall \
         --index-url https://download.pytorch.org/whl/cu130 \
     && pip install --no-cache-dir --force-reinstall torchcodec==0.11.1
 
+# ── FFmpeg system libs (torchcodec dlopens them at import) ──────────
+# torchcodec 0.11.1 probes libavutil.so.56-60 at import time
+# (libtorchcodec_core*.so dlopen) and the nvidia/cuda base ships no
+# ffmpeg — the smoke below died on "cannot open shared object file:
+# libavutil.so.60". Needed at runtime too: the s2pro pipeline decodes
+# audio through torchcodec. Separate RUN keeps the pip steps cached.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 # ── Build-time smoke test ───────────────────────────────────────────
 # No GPU during build — this verifies the pip graph + ABI only; kernel
 # loading (sm_120 flashinfer JIT) is validated at container start.
