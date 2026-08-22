@@ -6,10 +6,15 @@
 # to pass SGLang ServerArgs for this pipeline (the CLI flags
 # --cuda-graph-max-bs-decode / --mem-fraction-static are rejected:
 # extra_forbidden / "requires a pipeline with a supported target",
-# 2026-08-22). Both fix decode CUDA-graph capture OOM on 16 GB with the
-# 5B model resident: cap the captured batch sizes (default 1..64 — a TTS
-# engine decodes one request at a time) and shrink the static pool
-# (default ~0.9) so capture has headroom.
+# 2026-08-22).
+#
+# Decode CUDA graphs are DISABLED (2026-08-22): capture OOM'd even with
+# the batch sizes capped (cuda_graph_max_bs: 8 → "Capturing batches
+# bs=8 avail_mem=0.84 GB" → CUDA OOM at a 16 MiB alloc). The 5B model
+# (11.46 GiB bf16 in the static pool) + the separate vocoder stage + 3
+# CUDA contexts leave no capture headroom on a 15.48 GiB card. A TTS
+# engine decodes one request at a time — eager decode is the right
+# trade; re-enabling graphs needs a smaller model footprint.
 #
 # Key names: cuda_graph_max_bs is omni's LEGACY PUBLIC knob —
 # build_sglang_server_args's alias table translates it to SGLang's
@@ -17,12 +22,15 @@
 # conflicts with the value build_generation_batch_overrides derives from
 # max_running_requests: "Conflicting ... values: 64 != 8", 2026-08-22).
 # max_running_requests must stay <= cuda_graph_max_bs (validator rejects
-# "cuda_graph_max_bs must cover max_running_requests").
+# "cuda_graph_max_bs must cover max_running_requests"). With graphs
+# disabled the batch validator skips the graph checks; max_running_requests
+# is capped anyway so the KV cache (sized inside the static pool) stays
+# small and the pool fits the model + eager decode activations.
 config_cls: S2ProPipelineConfig
 model_path: fishaudio/s2-pro
 runtime_overrides:
   tts_engine:
     server_args_overrides:
-      cuda_graph_max_bs: 8
+      disable_cuda_graph: true
       max_running_requests: 8
       mem_fraction_static: 0.8
