@@ -52,20 +52,20 @@ RUN pip install --no-cache-dir --no-deps \
         "descript-audio-codec==1.0.0" \
     && pip install --no-cache-dir julius randomname pyloudnorm flatten-dict ffmpy tensorboard argbind einops
 
-# ── torch nightly cu130 for sm_120 (RTX 5060 Ti) ────────────────────
-# torch 2.11.0 (the sglang-omni pin) has no sm_120 kernels. Same
-# override as Dockerfile.stack.current/mid. The cu13 ecosystem above
-# matches cu130; flashinfer JIT-compiles against whatever torch ships,
-# so it tracks the upgrade. pip warns about the stale ==2.11.0 and
-# ==0.11.1 pins and proceeds (exit 0).
-# torchcodec 0.11.1 is torch-2.11 ABI — swapped to the matching nightly
-# so the multimodal pipeline imports under the upgraded torch.
-# torchvision 0.26.0 (the sglang-omni pin, also torch-2.11 ABI) must be
-# swapped too: under torch 2.15.dev its compiled ops fail to register
-# ("operator torchvision::nms does not exist" at import time).
-RUN pip install --no-cache-dir --force-reinstall --pre \
-    torch torchaudio torchcodec torchvision \
-    --index-url https://download.pytorch.org/whl/nightly/cu130
+# ── torch cu130 stable — same 2.11 ABI as the sglang-omni pin ───────
+# The pin (torch==2.11.0, PyPI cu128) fails on this GPU twice over:
+# sglang's sm_120 gate requires torch built with CUDA >= 12.9. The cu130
+# index carries the SAME torch version as a +cu130 build — identical C++
+# ABI (sgl_kernel's prebuilt .so links it), CUDA 13.0 runtime
+# (VM-validated 2026-08-22: capability (12,0), matmul OK). The torch
+# 2.15.dev nightly broke sgl_kernel ("undefined symbol
+# c10_cuda_check_implementation") — this stays pinned.
+# torchvision 0.26.0+cu130 and torchaudio 2.11.0+cu130 match the pins;
+# torchcodec 0.11.1 (the pin, torch-2.11 ABI) comes back from PyPI.
+RUN pip install --no-cache-dir --force-reinstall \
+        torch==2.11.0+cu130 torchaudio==2.11.0+cu130 torchvision==0.26.0+cu130 \
+        --index-url https://download.pytorch.org/whl/cu130 \
+    && pip install --no-cache-dir --force-reinstall torchcodec==0.11.1
 
 # ── Build-time smoke test ───────────────────────────────────────────
 # No GPU during build — this verifies the pip graph + ABI only; kernel
