@@ -105,6 +105,30 @@ ENV HF_HOME=/opt/models/huggingface \
     FLASHINFER_WORKSPACE_BASE=/root \
     FLASHINFER_JIT_DEBUG=0
 
+# ── Skip the CCCL compiler-vs-headers check (flashinfer JIT) ─────────
+# The cu130 torch wheel pulls a MIXED nvidia-* set: nvcc/crt 13.4.46rc1
+# (compiler + cicc) vs nvidia-cuda-runtime 13.0.96 (cuda_runtime_api.h,
+# CUDART_VERSION 13000). CCCL's cuda_toolkit.h #errors when the compiler
+# major.minor != the header's — "CUDA compiler and CUDA toolkit headers
+# are incompatible" — so every flashinfer sm_120f kernel JIT compile dies
+# in ninja (crash loop 2026-08-22).
+#
+# Why not fix the versions? There is no 13.4 runtime wheel on PyPI (max
+# 13.3.29 → header (13,3), still ≠ 13.4), and the 13.0/13.3 nvcc+ crt
+# wheels ship NO cicc (nvvm/) — only crt 13.4.46rc1 has it, and its cicc
+# emits PTX 9.4 which only ptxas 13.4 can assemble. So the compiler stack
+# must stay 13.4.46rc1 and the check must be skipped: compiling 13.4 code
+# against 13.0 headers is the NVIDIA-shipped direction (torch cu130 IS
+# this exact mixed set) and CCCL explicitly blesses it via
+# CCCL_DISABLE_CTK_COMPATIBILITY_CHECK.
+#
+# flashinfer reads env_extra_cuda_cflags = parse_env_flags(
+# "FLASHINFER_EXTRA_CUDAFLAGS") in jit/cpp_ext.py and appends it to every
+# nvcc invocation — no site-packages patching. Validated on the VM GPU:
+# sm_120a compile through the flashinfer libcudacxx + cu13 headers passes
+# with the define (and #errors without), torch CUDA matmul OK.
+ENV FLASHINFER_EXTRA_CUDAFLAGS="-DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK"
+
 EXPOSE 8000
 
 ENTRYPOINT ["sgl-omni", "serve"]
