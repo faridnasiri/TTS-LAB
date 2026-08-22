@@ -1655,7 +1655,21 @@ def _load_chatterboxturbo(model="default"):
 def _synth_chatterboxturbo(inst, text, params):
     import torch
 
-    # Core generation parameters
+    # Chatterbox-Turbo's distilled one-step decoder has NO CFG or emotion
+    # control at inference — upstream chatterbox-tts 0.1.7 (tts_turbo.py)
+    # ignores exaggeration/cfg_weight/min_p entirely. Warn when a caller
+    # explicitly passes them, so nobody tunes dead knobs; the base
+    # 'chatterbox' engine is the one that honors these.
+    _ignored = {k: params.get(k, "") for k in ("exaggeration", "cfg_weight", "min_p")}
+    _active = [f"{k}={v}" for k, v in _ignored.items()
+               if str(v) not in ("", "0", "0.0", "0.00", "None", "none")]
+    if _active:
+        slog("PARAMS", "chatterboxturbo",
+             "Turbo ignores expressiveness knobs (no CFG/emotion at "
+             f"inference): {', '.join(_active)} — use engine 'chatterbox' "
+             "for exaggeration/cfg_weight control")
+
+    # Core generation parameters (accepted for API compat; no effect on Turbo)
     kw = dict(
         exaggeration=float(params.get("exaggeration", 0.5)),
         cfg_weight=float(params.get("cfg_weight", 0.5)),

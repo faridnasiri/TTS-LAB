@@ -240,6 +240,13 @@ r = requests.post("http://192.168.0.87:8009/synthesize/chatterboxturbo",
 data = r.json()   # {audio_b64, sample_rate, synth_time_ms, rtf}
 ```
 
+**⚠️ Chatterbox-Turbo ignores expressiveness knobs.** The distilled one-step decoder has no CFG or emotion control at inference — `exaggeration`, `cfg_weight`, and `min_p` are **silently ignored** by `chatterbox-tts` 0.1.7 (the engine logs a `PARAMS` warning when you pass them). Naturalness on Turbo is driven by:
+- the **reference clip's delivery** (Turbo transfers prosody/emotion from the prompt WAV — pick a 5–10 s reference with the energy you want)
+- **punctuation** in the text (`.?!,` control pause/contour)
+- `temperature` / `top_p` / `repetition_penalty` (honored; defaults 0.8 / 0.95 / 1.2)
+
+Use engine `chatterbox` (base) instead if you need real `exaggeration`/`cfg_weight` control — slower (RTF ~2.4× vs 1.1×) and heavier (~3 GB vs 700 MB), but the knobs work there.
+
 **Audio format:** mono 16-bit PCM, 22050 Hz (all engines require mono reference audio for voice cloning; 16–22.05 kHz accepted, engines resample internally).
 
 **Sidecar metadata:** an optional `{stem}.json` next to each WAV adds language + provenance:
