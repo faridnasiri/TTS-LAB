@@ -65,7 +65,8 @@ RUN pip install --no-cache-dir --force-reinstall --pre \
 RUN python3.10 -c "import torch, sglang, sglang_omni, torchcodec, descript_audio_codec, audiotools; print('sglang-omni smoke OK:', torch.__version__)"
 
 # ── S2-Pro pipeline config (sgl-project/sglang-omni examples/configs)
-COPY s2pro_tts.yaml /opt/s2pro_tts.yaml
+# Path is repo-root-relative (context = repo root, as in compose/Makefile).
+COPY docker/s2pro_tts.yaml /opt/s2pro_tts.yaml
 
 ENV HF_HOME=/opt/models/huggingface \
     FLASHINFER_WORKSPACE_BASE=/root \
