@@ -10,10 +10,19 @@
 # 5B model resident: cap the captured batch sizes (default 1..64 — a TTS
 # engine decodes one request at a time) and shrink the static pool
 # (default ~0.9) so capture has headroom.
+#
+# Key names: cuda_graph_max_bs is omni's LEGACY PUBLIC knob —
+# build_sglang_server_args's alias table translates it to SGLang's
+# cuda_graph_max_bs_decode internally (setting the _decode name directly
+# conflicts with the value build_generation_batch_overrides derives from
+# max_running_requests: "Conflicting ... values: 64 != 8", 2026-08-22).
+# max_running_requests must stay <= cuda_graph_max_bs (validator rejects
+# "cuda_graph_max_bs must cover max_running_requests").
 config_cls: S2ProPipelineConfig
 model_path: fishaudio/s2-pro
 runtime_overrides:
   tts_engine:
     server_args_overrides:
-      cuda_graph_max_bs_decode: 8
+      cuda_graph_max_bs: 8
+      max_running_requests: 8
       mem_fraction_static: 0.8
