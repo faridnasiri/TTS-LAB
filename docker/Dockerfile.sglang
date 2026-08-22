@@ -65,7 +65,10 @@ RUN pip install --no-cache-dir --force-reinstall --pre \
 # ── Build-time smoke test ───────────────────────────────────────────
 # No GPU during build — this verifies the pip graph + ABI only; kernel
 # loading (sm_120 flashinfer JIT) is validated at container start.
-RUN python3.10 -c "import torch, sglang, sglang_omni, torchcodec, descript_audio_codec, audiotools; print('sglang-omni smoke OK:', torch.__version__)"
+# NOTE: descript-audio-codec 1.0.0 renamed its module to `dac` (the
+# sglang-omni s2pro pipeline imports dac.model.base / dac.nn.layers /
+# audiotools.ml — the 0.1.x `descript_audio_codec` name is gone).
+RUN python3.10 -c "import torch, sglang, sglang_omni, torchcodec, dac, audiotools; print('sglang-omni smoke OK:', torch.__version__)"
 
 # ── S2-Pro pipeline config (sgl-project/sglang-omni examples/configs)
 # Path is repo-root-relative (context = repo root, as in compose/Makefile).
