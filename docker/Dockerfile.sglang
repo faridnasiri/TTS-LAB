@@ -55,8 +55,11 @@ RUN pip install --no-cache-dir --no-deps \
 # ==0.11.1 pins and proceeds (exit 0).
 # torchcodec 0.11.1 is torch-2.11 ABI — swapped to the matching nightly
 # so the multimodal pipeline imports under the upgraded torch.
+# torchvision 0.26.0 (the sglang-omni pin, also torch-2.11 ABI) must be
+# swapped too: under torch 2.15.dev its compiled ops fail to register
+# ("operator torchvision::nms does not exist" at import time).
 RUN pip install --no-cache-dir --force-reinstall --pre \
-    torch torchaudio torchcodec \
+    torch torchaudio torchcodec torchvision \
     --index-url https://download.pytorch.org/whl/nightly/cu130
 
 # ── Build-time smoke test ───────────────────────────────────────────
