@@ -145,12 +145,11 @@ ENV FLASHINFER_EXTRA_CUDAFLAGS="-DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK"
 EXPOSE 8000
 
 ENTRYPOINT ["sgl-omni", "serve"]
-# Decode CUDA-graph capture OOMs on 16 GB: with the 5B model resident
-# (~11.5 GiB) the default static pool leaves ~0.3 GB and the 12 captured
-# shapes (bs 1..64) need ~0.3 GB, so the last shapes die on
-# torch.OutOfMemoryError (2026-08-22). Shrink the static pool from the
-# ~0.9 default to 0.8 — frees ~0.4 GB, capture fits. (cuda-graph-max-
-# bs-decode is NOT a valid sgl-omni flag: SGLangServerArgsConfig only
-# exposes mem_fraction_static; the typed config rejects everything else
-# with pydantic extra_forbidden.)
-CMD ["--model-path", "fishaudio/s2-pro", "--config", "/opt/s2pro_tts.yaml", "--host", "0.0.0.0", "--port", "8000", "--mem-fraction-static", "0.8"]
+# Decode CUDA-graph VRAM knobs live in s2pro_tts.yaml
+# (runtime_overrides.tts_engine.server_args_overrides) — the CLI flags
+# are rejected for this pipeline (pydantic extra_forbidden for
+# cuda-graph-max-bs-decode; --mem-fraction-static errors with "requires
+# a pipeline with a supported SGLang AR mem_fraction_static target",
+# 2026-08-22). The yaml is COPY'd above; server_args_overrides flow via
+# FishS2ProEngineBuilder.build() -> override_server_args.
+CMD ["--model-path", "fishaudio/s2-pro", "--config", "/opt/s2pro_tts.yaml", "--host", "0.0.0.0", "--port", "8000"]

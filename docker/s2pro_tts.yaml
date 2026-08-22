@@ -1,5 +1,19 @@
 # S2-Pro pipeline config — vendored from sgl-project/sglang-omni
 # examples/configs/s2pro_tts.yaml (https://github.com/sgl-project/sglang-omni)
 # Used by Dockerfile.sglang: sgl-omni serve --config /opt/s2pro_tts.yaml
+#
+# runtime_overrides.tts_engine.server_args_overrides — the supported way
+# to pass SGLang ServerArgs for this pipeline (the CLI flags
+# --cuda-graph-max-bs-decode / --mem-fraction-static are rejected:
+# extra_forbidden / "requires a pipeline with a supported target",
+# 2026-08-22). Both fix decode CUDA-graph capture OOM on 16 GB with the
+# 5B model resident: cap the captured batch sizes (default 1..64 — a TTS
+# engine decodes one request at a time) and shrink the static pool
+# (default ~0.9) so capture has headroom.
 config_cls: S2ProPipelineConfig
 model_path: fishaudio/s2-pro
+runtime_overrides:
+  tts_engine:
+    server_args_overrides:
+      cuda_graph_max_bs_decode: 8
+      mem_fraction_static: 0.8
