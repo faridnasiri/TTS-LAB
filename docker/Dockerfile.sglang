@@ -67,6 +67,19 @@ RUN pip install --no-cache-dir --force-reinstall \
         --index-url https://download.pytorch.org/whl/cu130 \
     && pip install --no-cache-dir --force-reinstall torchcodec==0.11.1
 
+# ── pip nvcc 13.4 on PATH — flashinfer's SM-12.x gate reads nvcc ────
+# flashinfer's is_cuda_version_at_least("12.9") runs `nvcc --version`
+# (pytorch cpp_extension pattern) to decide if SM-12.x kernels can be
+# targeted. The base image's apt nvcc is CUDA 12.8 — first on PATH — so
+# the arch normalization raised "SM 12.x requires CUDA >= 12.9", the
+# TARGET_CUDA_ARCHS set stayed empty, and CUDA-graph capture died with
+# "FlashInfer requires GPUs with sm75 or higher" (crash loop, 2026-08-22).
+# nvcc 12.8 also can't emit compute_120f cubins (needs CUDA >= 12.9).
+# The cu130 torch pulled nvidia-cuda-nvcc 13.4.46 as nvidia/cu13/bin/nvcc
+# — put it first on PATH (GPU-validated: is_cuda_version_at_least
+# ("12.9") → True). Placed here so the heavy pip layers stay cached.
+ENV PATH=/usr/local/lib/python3.10/dist-packages/nvidia/cu13/bin:$PATH
+
 # ── FFmpeg system libs (torchcodec dlopens them at import) ──────────
 # torchcodec 0.11.1 probes libavutil.so.56-60 at import time
 # (libtorchcodec_core*.so dlopen) and the nvidia/cuda base ships no
