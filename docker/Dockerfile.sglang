@@ -145,10 +145,12 @@ ENV FLASHINFER_EXTRA_CUDAFLAGS="-DCCCL_DISABLE_CTK_COMPATIBILITY_CHECK"
 EXPOSE 8000
 
 ENTRYPOINT ["sgl-omni", "serve"]
-# Decode CUDA-graph capture targets batch sizes 1..64 by default — on a
-# 16 GB card the 5B model leaves ~0.3 GB and the bs=56/64 graphs OOM
-# ("Capture target decode CUDA graph ... avail mem=0.28 GB" →
-# torch.OutOfMemoryError, 2026-08-22). A TTS engine decodes one request
-# at a time, so cap at 8 (bs 1,2,4,8 — 4 small graphs) and shrink the
-# static pool from the 0.9 default to 0.8 so capture has headroom.
-CMD ["--model-path", "fishaudio/s2-pro", "--config", "/opt/s2pro_tts.yaml", "--host", "0.0.0.0", "--port", "8000", "--cuda-graph-max-bs-decode", "8", "--mem-fraction-static", "0.8"]
+# Decode CUDA-graph capture OOMs on 16 GB: with the 5B model resident
+# (~11.5 GiB) the default static pool leaves ~0.3 GB and the 12 captured
+# shapes (bs 1..64) need ~0.3 GB, so the last shapes die on
+# torch.OutOfMemoryError (2026-08-22). Shrink the static pool from the
+# ~0.9 default to 0.8 — frees ~0.4 GB, capture fits. (cuda-graph-max-
+# bs-decode is NOT a valid sgl-omni flag: SGLangServerArgsConfig only
+# exposes mem_fraction_static; the typed config rejects everything else
+# with pydantic extra_forbidden.)
+CMD ["--model-path", "fishaudio/s2-pro", "--config", "/opt/s2pro_tts.yaml", "--host", "0.0.0.0", "--port", "8000", "--mem-fraction-static", "0.8"]
