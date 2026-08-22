@@ -55,9 +55,14 @@ RUN uv pip install --python /opt/arthur/Step-Audio-EditX/.venv/bin/python \
 RUN /opt/arthur/Step-Audio-EditX/.venv/bin/python -c "import torch, vllm, transformers, torchaudio; print('editx smoke OK:', torch.__version__, '| transformers', transformers.__version__)"
 
 # ── Lab engine-server wrapper ───────────────────────────────────────
+# NOTE: unlike engine-current/qwen (which inherit tts-lab-base and its
+# COPY of the lab files), this image is FROM raw nvidia/cuda — every
+# lab file must be listed explicitly. tts_lab_utils is imported by
+# tts_lab_dispatch at startup (ModuleNotFoundError crash, 2026-08-22).
 ARG CACHEBUST=0
 COPY tts_lab_shims.py /opt/arthur/
 COPY tts_lab_config.py /opt/arthur/
+COPY tts_lab_utils.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
 COPY tts_lab_engines.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/
