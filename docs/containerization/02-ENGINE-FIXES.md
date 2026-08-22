@@ -21,7 +21,7 @@
 |--------|-----|------|--------|-----------|---------|
 | Microsoft VibeVoice-1.5B | `vibevoice` | ~6 GB | 3B | EN+ZH only | `docker run lmsysorg/sglang-omni:dev --model microsoft/VibeVoice-1.5B` |
 | BosonAI Higgs Audio v3 | `higgs` | ~8 GB | 4B | **102 (Persian Tier 1)** | `docker run lmsysorg/sglang-omni:dev --model bosonai/higgs-audio-v3-tts-4b` |
-| Fish Audio S2-Pro | `s2pro` | ~10 GB | 5B | 80+ (incl. Persian) | `python -m sglang.launch_server --model fishaudio/s2-pro` |
+| Fish Audio S2-Pro | `s2pro` | ~11 GB | 5B | 80+ (incl. Persian) | `sgl-omni serve --model-path fishaudio/s2-pro --config s2pro_tts.yaml` (unblocked 2026-08-22 — sglang-omni 0.1.3; replaces the failed pip-built sglang[all] launch_server) |
 
 **Why SGLang needed**: These models have **zero Python code** in their Hugging Face repos (no `modeling_*.py`, no `auto_map` in config.json). `trust_remote_code=True` can never work. SGLang-Omni bundles its own model code and dependencies, completely isolated from the main Python environment — zero risk to existing engines.
 
@@ -172,7 +172,7 @@ def _compat_cmi(func=None):  # accepts both @check_model_inputs and @check_model
 |---|--------|---------|---------|
 | 26 | vibevoice | `lmsysorg/sglang-omni:dev --model microsoft/VibeVoice-1.5B` | No |
 | 27 | higgs | `lmsysorg/sglang-omni:dev --model bosonai/higgs-audio-v3-tts-4b` | **Yes** |
-| 28 | s2pro | `sglang.launch_server --model fishaudio/s2-pro` | **Yes** |
+| 28 | s2pro | `sgl-omni serve --model-path fishaudio/s2-pro --config /opt/s2pro_tts.yaml` | **Yes** |
 
 ---
 
@@ -267,10 +267,10 @@ docker run -d --gpus all -p 8101:8000 \
   lmsysorg/sglang-omni:dev \
   --model bosonai/higgs-audio-v3-tts-4b
 
-# s2pro (uses separate SGLang, not SGLang-Omni)
-docker run -d --gpus all -p 8102:8000 \
-  lmsysorg/sglang:latest \
-  python -m sglang.launch_server --model fishaudio/s2-pro
+# s2pro (SGLang-Omni 0.1.3 — devel base for flashinfer sm_120 JIT; replaced the
+# failed pip-built sglang[all] launch_server on 2026-08-22)
+docker run -d --gpus all -p 8005:8000 \
+  tts-lab-sglang-omni:latest
 ```
 
 Then set environment variables in Container 1:

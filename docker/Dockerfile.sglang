@@ -1,35 +1,77 @@
 # syntax=docker/dockerfile:1
 # ═══════════════════════════════════════════════════════════════════
-# Custom SGLang container — newer than lmsysorg/sglang-omni:dev
+# SGLang-Omni container — Fish S2-Pro 5B (sm_120 / Blackwell)
 # ═══════════════════════════════════════════════════════════════════
 #
-# The official Docker image bundles an old transformers that doesn't
-# support S2-Pro. This builds SGLang from pip (latest) with current
-# transformers, enabling S2-Pro and VibeVoice serving.
+# Replaces the old custom SGLang image (sglang[all] pins cu128 nvidia-*
+# wheels; force-reinstalling torch nightly cu130 onto it broke on
+# nvidia-nvjitlink conflicts — S2-Pro stayed blocked since 2026-06-23).
+# sglang-omni 0.1.3 ships day-0 S2-Pro support with the whole graph on
+# CUDA 13: flashinfer[cu13] 0.6.14, nixl-cu13, mooncake-cuda13, and
+# cutlass-dsl 4.6 (pyproject comments: "the generic nixl/-cu12 wheel
+# breaks on cu130" — the ecosystem is DESIGNED for cu130).
 #
-# SIZE: ~20 GB (SGLang + deps + model weights)
-# VRAM: ~11 GB for S2-Pro 5B
+# DEVEL base (not -runtime): flashinfer 0.6.14 is a pure-python wheel
+# that JIT-compiles kernels on first use (upstream ships a prebuilt
+# cache for SM89/90a only — sm_120 compiles its own), and flash-attn-4
+# (beta, >=4.0.0b18) ships NO prebuilt wheels. Both need nvcc.
+#
+# SIZE: ~25 GB · VRAM: ~11 GB (S2-Pro 5B, always-resident)
 # ═══════════════════════════════════════════════════════════════════
+# NOTE: do NOT retag this file as `tts-lab-sglang:latest` — that tag is
+# still used by the vibevoice/higgs POC services (old launch_server
+# entrypoint). s2pro uses `tts-lab-sglang-omni:latest`.
 
-FROM nvidia/cuda:12.8.2-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.2-devel-ubuntu22.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3.10 python3.10-dev curl \
+    python3.10 python3.10-dev curl git \
     && rm -rf /var/lib/apt/lists/* \
     && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.10
 
-# SGLang with all dependencies (flash-attn, triton, etc.)
-RUN pip install --no-cache-dir "sglang[all]"
+# ── SGLang-Omni 0.1.3 (cu13-aligned, sm_120-validated) ──────────────
+# One coherent resolution: torch==2.11.0, transformers 5.12.1,
+# flashinfer[cu13]==0.6.14, nixl-cu13, mooncake-cuda13,
+# torchcodec==0.11.1, protobuf 6.30.2 (via nvidia-cutlass-dsl 4.6.0).
+# --pre: flash-attn-4 is a beta and source-builds against the nvcc above.
+RUN pip install --no-cache-dir --pre "sglang-omni==0.1.3"
 
-# Force torch nightly for Blackwell sm_120 (RTX 5060 Ti).
-# SGLang pins torch to stable 2.11 — override with nightly.
+# ── S2-Pro's Descript DAC codec ─────────────────────────────────────
+# Not bundled in sglang-omni (cookbook adds it). Installed --no-deps:
+# descript-audiotools pins protobuf<3.20 (metadata-only — audiotools
+# never imports protobuf), which would downgrade cutlass-dsl's
+# protobuf>=6.30.2 and break flashinfer's JIT path. audiotools' actual
+# import surface is julius + randomname (+ pyloudnorm, function-level).
+RUN pip install --no-cache-dir --no-deps \
+        "descript-audiotools==0.7.2" \
+        "descript-audio-codec==1.0.0" \
+    && pip install --no-cache-dir julius randomname pyloudnorm
+
+# ── torch nightly cu130 for sm_120 (RTX 5060 Ti) ────────────────────
+# torch 2.11.0 (the sglang-omni pin) has no sm_120 kernels. Same
+# override as Dockerfile.stack.current/mid. The cu13 ecosystem above
+# matches cu130; flashinfer JIT-compiles against whatever torch ships,
+# so it tracks the upgrade. pip warns about the stale ==2.11.0 and
+# ==0.11.1 pins and proceeds (exit 0).
+# torchcodec 0.11.1 is torch-2.11 ABI — swapped to the matching nightly
+# so the multimodal pipeline imports under the upgraded torch.
 RUN pip install --no-cache-dir --force-reinstall --pre \
-    torch torchaudio \
+    torch torchaudio torchcodec \
     --index-url https://download.pytorch.org/whl/nightly/cu130
 
-ENV HF_HOME=/opt/models/huggingface
+# ── Build-time smoke test ───────────────────────────────────────────
+# No GPU during build — this verifies the pip graph + ABI only; kernel
+# loading (sm_120 flashinfer JIT) is validated at container start.
+RUN python3.10 -c "import torch, sglang, sglang_omni, torchcodec, descript_audio_codec, audiotools; print('sglang-omni smoke OK:', torch.__version__)"
+
+# ── S2-Pro pipeline config (sgl-project/sglang-omni examples/configs)
+COPY s2pro_tts.yaml /opt/s2pro_tts.yaml
+
+ENV HF_HOME=/opt/models/huggingface \
+    FLASHINFER_WORKSPACE_BASE=/root \
+    FLASHINFER_JIT_DEBUG=0
+
 EXPOSE 8000
 
-# Entrypoint: launch with --model flag
-ENTRYPOINT ["python3.10", "-m", "sglang.launch_server"]
-CMD ["--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["sgl-omni", "serve"]
+CMD ["--model-path", "fishaudio/s2-pro", "--config", "/opt/s2pro_tts.yaml", "--host", "0.0.0.0", "--port", "8000"]

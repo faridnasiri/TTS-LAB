@@ -26,8 +26,31 @@ UPLOAD_DIR    = Path("/tmp/tts_uploads")
 REFERENCE_VOICES_DIR = Path("/opt/arthur/reference_voices")
 INDEXTTS_DIR  = Path("/opt/models/indextts")
 OPENVOICE_MODELS_DIR = Path("/opt/models/openvoice_v2")
+# Step-Audio-EditX — repo cloned at build time; weights under /opt/models/editx/
+# with `Step-Audio-Tokenizer` and `Step-Audio-EditX` (or *-AWQ-4bit) subfolders.
+EDITX_REPO_DIR   = Path("/opt/arthur/Step-Audio-EditX")
+EDITX_MODEL_DIR  = Path("/opt/models/editx")
 MODELS_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+def _ref_wav_path(ref_id: str):
+    """Resolve a reference WAV by id — checks the permanent curated dir
+    (/opt/arthur/reference_voices) AND the uploads dir, so curated voices
+    work exactly like UI uploads. Returns None when not found.
+
+    Lives here (not tts_lab_engines) so the orchestrator container — which
+    has no numpy/torch — can resolve ref paths too (e.g. for SGLang engines
+    whose containers need an absolute file path in the request body).
+    """
+    if not ref_id:
+        return None
+    for d in (REFERENCE_VOICES_DIR, UPLOAD_DIR):
+        p = d / f"{ref_id}.wav"
+        if p.exists():
+            return p
+    return None
+
 
 # ── Kokoro voice catalogue (54 voices) ────────────────────────────────────────
 ALL_KOKORO_VOICES = [
@@ -238,7 +261,8 @@ MODEL_INFO = {
     "vibevoice":  {"label":"VibeVoice-1.5B","size":"~6 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":6500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "omnivoice":  {"label":"OmniVoice",     "size":"~1.2 GB (BF16)",       "rtf_est":"RTF 0.67× ⚡",          "ram_est_mb":2000, "heavy":True, "notes":"0.6B diffusion LM. 600+ languages. Real-time!","arthur_fit":4},
-    "s2pro":      {"label":"Fish S2-Pro",   "size":"~10 GB (BF16, 5B)",   "rtf_est":"needs SGLang",          "ram_est_mb":10000,"heavy":True,"notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
+    "s2pro":      {"label":"Fish S2-Pro",   "size":"~10 GB (BF16, 5B)",   "rtf_est":"SGLang-Omni (RTF 0.195)", "ram_est_mb":11000,"heavy":True,"notes":"Dual-AR 5B, 80+ langs. Voice cloning via ref WAV + transcript. Always-resident while container runs — orchestrator stops/starts it around EditX/LLM. 15k inline control tags.","arthur_fit":3},
+    "editx":      {"label":"Step Audio EditX","size":"~5 GB (AWQ-4bit)",  "rtf_est":"LLM-based (vLLM)",        "ram_est_mb":9000, "heavy":True,"notes":"3B LLM audio-edit + zero-shot TTS. Clone (zh/en/sichuanese/cantonese/ja/ko) + emotion(14)/style(38)/paralinguistic edits. Needs ref WAV + transcript for cloning. 41.6 kHz.","arthur_fit":4},
     "qwen36":     {"label":"Qwen3.6-35B-A3B","size":"~13 GB (TQ3_4S GGUF)","rtf_est":"LLM — ~107 tok/s","ram_est_mb":13000,"heavy":True,"notes":"Alibaba Qwen 3.6 MoE. 35B total, 3B active params. Reasoning + coding via llama.cpp. Evicts ALL TTS engines before loading.","arthur_fit":3,"engine_type":"llm"},
 }
 
@@ -247,7 +271,7 @@ MODEL_ORDER = [
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "neutts","indextts","manatts","mmsfas","zonos","openvoice",
-    "vibevoice","higgs","omnivoice","s2pro",
+    "vibevoice","higgs","omnivoice","s2pro","editx",
     "qwen36",
 ]
 
@@ -295,5 +319,7 @@ SYNTH_TIMEOUT: dict[str, int] = {
     "manatts":  120,
     "fishspeech":360,
     "chattts":   90,
+    # vLLM engine warmup on first load can exceed the 300 s default
+    "editx":     600,
 }
 DEFAULT_SYNTH_TIMEOUT = 300

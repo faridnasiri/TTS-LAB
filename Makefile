@@ -8,9 +8,12 @@
 #   make rebuild                            # Full chain rebuild (all 7 images)
 #   make sweep                              # Run engine synthesis sweep
 #
-#   ENGINE values:  current | mid | qwen | legacy | orpheus
-#   IMAGE values:   tts-lab-engine-$(ENGINE) | tts-lab-orchestrator
-#   PORT values:    8101 | 8102 | 8103 | 8104
+#   ENGINE values:  current | mid | qwen | legacy | orpheus | editx
+#   IMAGE values:   tts-lab-engine-$(ENGINE) | tts-lab-orchestrator | tts-lab-sglang-omni
+#   PORT values:    8101 | 8102 | 8103 | 8104 | 8105
+#
+#   S2-Pro (sglang-omni image):
+#     docker build -f docker/Dockerfile.sglang -t tts-lab-sglang-omni:latest .
 #
 #   Override torch version for testing:
 #     make build-engine ENGINE=current TORCH_VER=2.12.0.dev20260409+cu128
@@ -24,7 +27,7 @@ PORT   ?= 8101
 TORCH_VER      ?= 2.12.0.dev20260408+cu128
 TORCHAUDIO_VER ?= 2.11.0.dev20260407+cu128
 
-.PHONY: build-engine deploy-engine clean-cache pull rebuild sweep deploy-orchestrator build-llm deploy-llm
+.PHONY: build-engine deploy-engine clean-cache pull rebuild sweep deploy-orchestrator build-llm deploy-llm build-sglang-omni deploy-sglang-omni
 
 # ── Help ──────────────────────────────────────────────────────────────
 help:
@@ -32,13 +35,15 @@ help:
 	@echo ""
 	@echo "  make build-engine ENGINE=current    Build one engine image"
 	@echo "  make deploy-engine ENGINE=current   Build + deploy one engine"
-	@echo "  make rebuild                        Full chain rebuild (7 images)"
+	@echo "  make rebuild                        Full chain rebuild (8 images)"
 	@echo "  make sweep                          Run engine synthesis sweep"
 	@echo "  make deploy-orchestrator            Build + deploy orchestrator"
 	@echo "  make build-llm                      Build Qwen 3.6 LLM image"
 	@echo "  make deploy-llm                     Build + deploy Qwen 3.6 LLM"
+	@echo "  make build-sglang-omni              Build S2-Pro omni image (sgl-omni serve)"
+	@echo "  make deploy-sglang-omni             Build + deploy S2-Pro container"
 	@echo ""
-	@echo "  ENGINE values: current | mid | qwen | legacy | orpheus"
+	@echo "  ENGINE values: current | mid | qwen | legacy | orpheus | editx"
 
 # ── Cache Management ──────────────────────────────────────────────────
 clean-cache:
@@ -124,6 +129,7 @@ deploy-orchestrator: build-orchestrator
 		-e PARLER_URL=http://localhost:8102 \
 		-e ORPHEUS_URL=http://localhost:8002 \
 		-e S2PRO_SGLANG_URL=http://localhost:8005/v1/audio/speech \
+		-e EDITX_URL=http://localhost:8105 \
 		-e QWEN36_URL=http://localhost:8006 \
 		--restart unless-stopped \
 		tts-lab-orchestrator:latest \
@@ -149,6 +155,9 @@ rebuild: clean-cache
 		--build-arg TORCH_VERSION=$(TORCH_VER) \
 		--build-arg TORCHAUDIO_VERSION=$(TORCHAUDIO_VER) \
 		-f docker/Dockerfile.engine-qwen -t tts-lab-engine-qwen:latest .
+	@echo "=== Standalone GPU images ==="
+	docker build -f docker/Dockerfile.sglang -t tts-lab-sglang-omni:latest .
+	docker build -f docker/Dockerfile.engine-editx -t tts-lab-engine-editx:latest .
 	@echo "=== Orchestrator ==="
 	docker build -f docker/Dockerfile.orchestrator -t tts-lab-orchestrator:latest .
 	@echo "=== Done ==="
@@ -156,6 +165,28 @@ rebuild: clean-cache
 # ── Test ──────────────────────────────────────────────────────────────
 sweep:
 	python3 sweep.py
+
+# ── S2-Pro (SGLang-Omni) ────────────────────────────────────────────
+# NOTE: do NOT reuse the tts-lab-sglang tag — vibevoice/higgs POC services
+# still use that image (old launch_server entrypoint).
+build-sglang-omni: pull clean-cache
+	@echo "Building tts-lab-sglang-omni (sgl-omni serve, ~25 GB, 30-60 min)..."
+	docker build \
+		-f docker/Dockerfile.sglang \
+		-t tts-lab-sglang-omni:latest .
+
+deploy-sglang-omni: build-sglang-omni
+	-docker stop tts-lab-s2pro 2>/dev/null || true
+	-docker rm tts-lab-s2pro 2>/dev/null || true
+	docker run -d --name tts-lab-s2pro --gpus all \
+		-p 8005:8000 \
+		-v /opt/models/huggingface:/root/.cache/huggingface \
+		-v /opt/models/flashinfer-jit:/root/.cache/flashinfer \
+		-v /tmp/tts_uploads:/tmp/tts_uploads \
+		-v /opt/arthur/reference_voices:/opt/arthur/reference_voices \
+		-e HF_HOME=/opt/models/huggingface \
+		--restart unless-stopped \
+		tts-lab-sglang-omni:latest
 
 # ── LLM (Qwen 3.6) ─────────────────────────────────────────────────
 build-llm: pull clean-cache

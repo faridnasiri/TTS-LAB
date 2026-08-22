@@ -26,6 +26,12 @@ stacks:
     transformers: '>=4.46,<5.0'
     python: '3.10'
     cuda: '11.7'
+  editx:
+    torch: nightly cu130 (sm_120)
+    transformers: '>=4.57.3,<5.0'
+    python: '3.12'
+    cuda: '12.8'
+    note: Step-Audio-EditX own container (ubuntu24.04) — python 3.12 required (repo >=3.12,<3.14). vLLM dev wheel from wheels.vllm.ai overridden torch==2.9.1 pin. Lab's other images are python 3.11 — cannot be reused.
 engines:
   piper:
     status: supported
@@ -294,21 +300,36 @@ engines:
     vram_est_mb: 3000
     blocker: Needs legacy stack build (torch 1.13 + tf 4.46)
   s2pro:
-    status: blocked
+    status: experimental
     container: s2pro
     stack: sglang
     vram_est_mb: 11000
-    blocker: SGLang image bundles transformers 5.6.0 — too old for fishaudio/s2-pro architecture
     sglang_model: fishaudio/s2-pro
-    sglang_image: lmsysorg/sglang-omni:dev
+    sglang_image: tts-lab-sglang-omni:latest
+    serving: sgl-omni serve --model-path fishaudio/s2-pro --config s2pro_tts.yaml --port 8000
+    unblocked_on: 2026-08-22 (sglang-omni 0.1.3 — day-0 S2-Pro support, sm_120-validated upstream)
     requires:
-    - paged KV cache
-    - RadixAttention
-    - CUDA graph replay
-    notes: Do not attempt local inference. Do not fork model code. Wait for upstream SGLang release.
-    upstream_watch:
-    - https://github.com/sgl-project/sglang/releases
-    - https://huggingface.co/fishaudio/s2-pro
+    - flashinfer 0.6.14 JIT — sm_120 has no prebuilt kernel cache, container compiles its own (devel base = nvcc; cache persisted via /opt/models/flashinfer-jit mount)
+    - descript-audiotools 0.7.2 + descript-audio-codec 1.0.0 — installed --no-deps (audiotools pins protobuf<3.20 which would break cutlass-dsl's protobuf 6.x)
+    - torch nightly cu130 — overrides sglang-omni's torch==2.11.0 pin (no sm_120)
+    notes: Dual-AR 5B, 80+ langs. Voice clone via references [{audio_path, text}] — 10-30 s clip + transcript. Always-resident while the container runs (~11 GB) — orchestrator stops/starts it around EditX/LLM loads (Docker socket).
+    validation:
+      model_load:
+        status: pending
+        last_tested: null
+        description: sgl-omni serve /health 200 on RTX 5060 Ti (flashinfer sm_120 JIT compile)
+      synthesis:
+        status: pending
+        last_tested: null
+        description: POST /v1/audio/speech returns WAV bytes
+      voice_clone:
+        status: pending
+        last_tested: null
+        description: references[{audio_path, text}] — ref WAV + transcript
+      vram_measured:
+        status: pending
+        last_tested: null
+        description: nvidia-smi — target ≤ 11 GB
   qwen36:
     status: planned
     container: llm-qwen36
@@ -324,11 +345,11 @@ engines:
       with_tts: Manual — LLM evicts all TTS via orchestrator /evict protocol
       vram_strategy: Global cross-container eviction before LLM load
 summary:
-  total: 29
+  total: 30
   supported: 16
   deprecated: 0
-  experimental: 8
-  blocked: 4
+  experimental: 10
+  blocked: 3
   containers:
     engine-current:
       total: 21
@@ -364,8 +385,14 @@ summary:
       total: 1
       supported: 0
       deprecated: 0
-      experimental: 0
-      blocked: 1
+      experimental: 1
+      blocked: 0
+    engine-editx:
+      total: 1
+      supported: 0
+      deprecated: 0
+      experimental: 1
+      blocked: 0
     llm-qwen36:
       total: 1
       supported: 0

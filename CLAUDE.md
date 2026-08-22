@@ -1,6 +1,6 @@
 # Arthur TTS Lab
 
-> 28-engine TTS benchmark + 1 LLM (Qwen 3.6 27B) + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> 30-engine TTS benchmark + 1 LLM (Qwen 3.6 27B) + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
 > **Deployed to:** `arthur@192.168.0.87:8009` (TTS) / `:8006` (LLM) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
@@ -26,6 +26,10 @@ Base (nvidia/cuda:12.8.2-runtime-ubuntu22.04)
   │   └── Engine:mid        VibeVoice, Higgs (experimental), port 8103
   ├── Stack:legacy     torch 1.13 + transformers 4.46 + CUDA 11.7
   │   └── Engine:legacy     IndexTTS, Parler (blocked), port 8102
+  ├── Stack:editx      python 3.12 + vllm dev wheel + torch nightly cu130 (ubuntu24.04)
+  │   └── Engine:editx      Step Audio EditX (AWQ-4bit), port 8105
+  ├── SGLang-Omni      sgl-omni serve + flashinfer (devel base, nvcc for sm_120 JIT)
+  │   └── Engine:s2pro      Fish S2-Pro 5B, port 8005
   ├── LLM:qwen36       Pre-built llama.cpp server-cuda, port 8006 (Qwen 3.6 27B reasoning/coding)
   └── Orchestrator     No ML libs — pure HTTP dispatch, port 8009
 
@@ -67,7 +71,7 @@ Deploy command (on VM):
 | `tts_lab_shims.py` | 590 | **Imported FIRST** — `sys.modules` stubs, transformers compat patches, thread pinning |
 | `tts_lab_shims_legacy.py` | 50 | Minimal shims for legacy container (torch 1.13 / tf 4.46) |
 | `tts_lab_config.py` | 293 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
-| `tts_lab_engines.py` | 2,100 | All 29 `_load_X()` + `_synth_X()` pairs (28 TTS + 1 LLM), `LOADERS`/`SYNTHERS` dicts |
+| `tts_lab_engines.py` | 2,100 | All 30 `_load_X()` + `_synth_X()` pairs (29 TTS + 1 LLM), `LOADERS`/`SYNTHERS` dicts |
 | `tts_lab_dispatch.py` | 600 | Availability probing, `_ensure_loaded()`, `_do_synth()`, global TTS eviction, LLM dispatch |
 | `tts_lab_engine_server.py` | 340 | Engine-container FastAPI server with lazy-loading + VRAM eviction + `/evict` endpoint |
 | `tts_lab_orpheus_server.py` | 107 | Orpheus-specific vllm server |
@@ -109,6 +113,7 @@ docker compose up -d                         # orchestrator + engine-current + e
 docker compose --profile mid up -d           # + engine-mid (VibeVoice, Higgs)
 docker compose --profile gpu up -d           # + Orpheus (needs GPU)
 docker compose --profile sglang up -d        # + SGLang engines (vibevoice, higgs, s2pro)
+docker compose --profile editx up -d         # + Step Audio EditX (~9 GB VRAM AWQ — evicts s2pro)
 docker compose --profile llm up -d           # + Qwen 3.6 LLM (~13 GB VRAM — evicts TTS first)
 docker compose down                          # Stop all
 ```
@@ -264,4 +269,4 @@ Response differs from TTS engines:
 - **Services:** `arthur-lab.service` (port 8001), `arthur-imglab.service` (port 8002)
 - **Image Lab models:** `/opt/arthur-img-models/` (separate disk)
 - **Container registry:** `ghcr.io/farid-nasiri/tts-lab-*`
-- **Engine status:** See `docs/engine_compatibility.yaml` — 16 supported, 7 experimental, 5 blocked
+- **Engine status:** See `docs/engine_compatibility.yaml` — 16 supported, 10 experimental, 3 blocked

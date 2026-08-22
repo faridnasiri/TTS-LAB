@@ -88,17 +88,28 @@ A container exists not because an engine needs isolation, but because a **set of
 
         ┌───────────────────┐  ┌───────────────────┐  ┌───────────────────┐
         │  engine-legacy    │  │     orpheus       │  │      s2pro        │
-        │  torch 1.13       │  │  vllm + cuda 12.1 │  │  SGLang pre-built │
+        │  torch 1.13       │  │  vllm + cuda 12.1 │  │  SGLang-Omni 0.1.3│
         │  tf 4.46          │  │  port 8002        │  │  port 8005        │
         │  cuda 11.7        │  │  profile: gpu     │  │  profile: sglang  │
         │  port 8102        │  ├───────────────────┤  ├───────────────────┤
-        ├───────────────────┤  │ Orpheus    BLOCK  │  │ S2-Pro     BLOCK  │
+        ├───────────────────┤  │ Orpheus    BLOCK  │  │ S2-Pro     EXPER  │
         │ IndexTTS   BLOCK  │  └───────────────────┘  └───────────────────┘
         │ Parler     BLOCK  │
         └───────────────────┘
+
+        ┌───────────────────┐
+        │   engine-editx    │
+        │  python 3.12      │
+        │  vllm dev wheel   │
+        │  torch n. cu130   │
+        │  port 8105        │
+        │  profile: editx   │
+        ├───────────────────┤
+        │ EditX      EXPER  │
+        └───────────────────┘
 ```
 
-**7 containers — 6 custom + 1 pre-built (SGLang).**
+**8 containers — 7 custom + 1 pre-built (SGLang-Omni).**
 
 ---
 
@@ -135,6 +146,7 @@ Tier 1: tts-lab-base  (~1.5 GB)
 | **current** | `>=2.12,<2.13` | `>=5.12.1,<5.13` | 12.8 | 3.10 | torch nightly (2.12.0.dev*) — **largest risk surface: 21 engines** |
 | **mid** | `>=2.10,<2.11` | `>=4.50,<5.0` | 12.1 | 3.10 | Stable — no nightly regressions |
 | **legacy** | `>=1.13,<1.14` | `>=4.46,<5.0` | 11.7 | 3.10 | Frozen — sealed capsule |
+| **editx** | nightly cu130 (sm_120) | `>=4.57.3,<5.0` | 12.8 | 3.12 | ubuntu24.04 (repo requires py>=3.12). vLLM dev wheel from wheels.vllm.ai overrides the shipped torch==2.9.1 pin (no sm_120). |
 
 ### 3.3 Torch Nightly Risk
 
@@ -176,8 +188,9 @@ These constraints are too narrow to share with VibeVoice/Higgs in engine-mid —
 | `engine-qwen` | **1** | 0 | 1 | 0 |
 | `engine-legacy` | **2** | 0 | 0 | 2 |
 | `orpheus` | **1** | 0 | 0 | 1 |
-| `s2pro` | **1** | 0 | 0 | 1 |
-| **Total** | **28** | **16** | **8** | **4** |
+| `s2pro` | **1** | 0 | 1 | 0 |
+| `engine-editx` | **1** | 0 | 1 | 0 |
+| **Total** | **30** | **16** | **10** | **3** |
 
 ### 4.1 Per-Container Engine List
 
@@ -233,11 +246,17 @@ These constraints are too narrow to share with VibeVoice/Higgs in engine-mid —
 |--------|:------:|-------|
 | orpheus | BLOCK | vllm incompatible with torch nightly. Gated model. |
 
-**s2pro** (1 engine — SGLang pre-built)
+**s2pro** (1 engine — SGLang-Omni 0.1.3, devel base for flashinfer sm_120 JIT)
 
 | Engine | Status | Notes |
 |--------|:------:|-------|
-| s2pro | BLOCK | SGLang image tf 5.6.0 too old. Requires paged KV cache, RadixAttention, CUDA graph replay. Do not attempt local inference. |
+| s2pro | EXPER | Fish S2-Pro 5B Dual-AR, 80+ langs. Unblocked 2026-08-22 — `sgl-omni serve` + flashinfer[cu13] JIT. Always-resident ~11 GB; orchestrator stops/starts container around EditX/LLM. Clone via `references:[{audio_path, text}]`. |
+
+**engine-editx** (1 engine — python 3.12 + vLLM dev wheel + torch nightly cu130)
+
+| Engine | Status | Notes |
+|--------|:------:|-------|
+| editx | EXPER | Step Audio EditX 3B (AWQ-4bit, gated). Clone (zh/en/sichuanese/cantonese/ja/ko) + emotion(14)/style(38)/paralinguistic edits, 41.6 kHz. No REST API upstream — wrapped in-process (StepAudioTokenizer + StepAudioTTS via engine-server). |
 
 ---
 
@@ -275,6 +294,8 @@ DEPRECATED prevents conflating "cannot run" with "can run but should not receive
 | **qwen3tts** | build_import, model_load, synthesis, vram_measured |
 | **vibevoice** | config_load, model_load, inference, vram_measured |
 | **higgs** | config_load, model_load, inference, vram_measured |
+| **s2pro** | model_load, synthesis, voice_clone, vram_measured |
+| **editx** | build_import, model_load, synthesis, vram_measured |
 
 ---
 
@@ -433,8 +454,8 @@ PHASE 5 — Runtime Evidence        IN PROGRESS
 
 ```
 Supported:    16  (engine-current only)
-Experimental:  8  (engine-current: 5, engine-mid: 2, engine-qwen: 1)
-Blocked:       4  (engine-legacy: 2, orpheus: 1, s2pro: 1)
+Experimental: 10  (engine-current: 5, engine-mid: 2, engine-qwen: 1, s2pro: 1, engine-editx: 1)
+Blocked:       3  (engine-legacy: 2, orpheus: 1)
 ```
 
 ### 9.2 Target (if all 3 experimental engines pass POC)
@@ -489,6 +510,26 @@ Only ONE engine-mid engine can be loaded at a time. Only ONE engine across all c
 
 **Gated model:** Requires HF_TOKEN for `Qwen/Qwen3-TTS-12Hz-1.7B-Base` (switched from CustomVoice — Base supports voice cloning)
 
+### 10.3 S2-Pro (4 gates)
+
+| Gate | Test | Success Criteria |
+|------|------|-----------------|
+| `model_load` | `sgl-omni serve` /health 200 on RTX 5060 Ti | Container healthy after flashinfer sm_120 JIT compile (cache persisted via `/opt/models/flashinfer-jit`) |
+| `synthesis` | `POST /v1/audio/speech` plain text | Valid WAV bytes back (response is raw audio, not JSON) |
+| `voice_clone` | `references: [{audio_path, text}]` | Clone voice matches the 10-30 s ref clip |
+| `vram_measured` | `nvidia-smi` | Peak ≤ 11 GB |
+
+### 10.4 EditX (4 gates)
+
+| Gate | Test | Success Criteria |
+|------|------|-----------------|
+| `build_import` | `import vllm, torch` in Dockerfile smoke step | vLLM dev wheel imports under torch nightly cu130 (build-time) |
+| `model_load` | `StepAudioTTS` init (AWQ-4bit) on RTX 5060 Ti | Loads without OOM |
+| `synthesis` | clone + emotion/style edit via `/synthesize/editx` | Valid 41.6 kHz audio |
+| `vram_measured` | `nvidia-smi` | Peak ≤ 9 GB (AWQ-4bit) |
+
+**Gated model:** `stepfun-ai/Step-Audio-EditX-AWQ-4bit` + `stepfun-ai/Step-Audio-Tokenizer` — HF_TOKEN required.
+
 ---
 
 ## 11. Operational Contracts
@@ -505,11 +546,14 @@ docker compose --profile mid up -d
 # + Orpheus (GPU mandatory):
 docker compose --profile gpu up -d
 
-# + S2-Pro (SGLang, blocked upstream):
+# + S2-Pro (SGLang-Omni):
 docker compose --profile sglang up -d
 
+# + Step Audio EditX (evicts always-resident s2pro):
+docker compose --profile editx up -d
+
 # Everything:
-docker compose --profile mid --profile gpu --profile sglang up -d
+docker compose --profile mid --profile gpu --profile sglang --profile editx up -d
 ```
 
 ### 11.2 Engine URLs (Orchestrator → Containers)
@@ -521,7 +565,8 @@ docker compose --profile mid --profile gpu --profile sglang up -d
 | Qwen3TTS | `http://engine-qwen:8104` | engine-qwen |
 | IndexTTS, Parler | `http://engine-legacy:8102` | engine-legacy |
 | Orpheus | `http://orpheus:8002` | orpheus |
-| S2-Pro | `http://s2pro:8000/v1/audio/speech` | s2pro (SGLang) |
+| S2-Pro | `http://s2pro:8000/v1/audio/speech` | s2pro (SGLang-Omni) |
+| EditX | `http://engine-editx:8105` | engine-editx |
 
 ### 11.3 Gated Models
 
@@ -530,6 +575,7 @@ docker compose --profile mid --profile gpu --profile sglang up -d
 | qwen3tts | `Qwen/Qwen3-TTS-12Hz-1.7B-Base` | ✅ Yes |
 | orpheus | `canopylabs/orpheus-3b-0.1-ft` | ✅ Yes |
 | csm | `sesame/csm-1b` | ✅ Yes (Meta license) |
+| editx | `stepfun-ai/Step-Audio-EditX-AWQ-4bit` + `stepfun-ai/Step-Audio-Tokenizer` | ✅ Yes |
 
 Set in `.env`:
 ```bash
@@ -540,12 +586,14 @@ HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx
 
 | Container | Port | Start Period | Endpoint |
 |-----------|:----:|:------------:|----------|
-| orchestrator | 8001 | 15s | `/status` |
+| orchestrator | 8009 | 15s | `/status` |
 | engine-current | 8101 | 180s | `/health` |
 | engine-mid | 8103 | 120s | `/health` |
 | engine-qwen | 8104 | 120s | `/health` |
 | engine-legacy | 8102 | 120s | `/health` |
 | orpheus | 8002 | 120s | `/health` |
+| s2pro | 8005 | 180s | `/health` (first start: model download + flashinfer sm_120 JIT compile) |
+| engine-editx | 8105 | 120s | `/health` |
 
 ---
 
@@ -562,7 +610,10 @@ TTS-LAB/
 │   ├── Dockerfile.engine-mid        ← Tier 3: 2 engines (mid stack)
 │   ├── Dockerfile.engine-qwen       ← Tier 3: 1 engine (mid stack, pinned)
 │   ├── Dockerfile.engine-legacy     ← Tier 3: 2 engines (legacy stack)
+│   ├── Dockerfile.engine-editx      ← Tier 3: 1 engine (py 3.12 + vLLM dev wheel, own stack)
 │   ├── Dockerfile.orpheus           ← Tier 3: 1 engine (vllm, CUDA 12.1)
+│   ├── Dockerfile.sglang            ← SGLang-Omni: s2pro (sgl-omni serve, devel base)
+│   ├── s2pro_tts.yaml               ← S2-Pro pipeline config (vendored from sglang-omni)
 │   ├── Dockerfile.orchestrator      ← Orchestrator (no ML libs)
 │   ├── Dockerfile.base-py311        ← Future: CUDA 13 + Python 3.11 base
 │   ├── Dockerfile.stack-py311       ← Future: CUDA 13 + Python 3.11 stack

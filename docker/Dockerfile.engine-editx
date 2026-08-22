@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+# ═══════════════════════════════════════════════════════════════════
+# Step Audio EditX — 3B LLM audio-edit + zero-shot TTS (vLLM)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Own stack — incompatible with the lab's python 3.11 containers:
+#   python       3.12 (repo requires >=3.12,<3.14 — hence ubuntu24.04)
+#   torch        nightly cu130 (sm_120 — same as stack.current/mid)
+#   vllm         0.14.0rc2.dev125 dev wheel (wheels.vllm.ai, pinned via
+#                [tool.uv.sources] in the repo's pyproject.toml)
+#   transformers 4.57.x (repo pin <5; vllm-wheel constraint)
+#   weights      /opt/models/editx/ (Step-Audio-EditX[-AWQ-4bit] +
+#                Step-Audio-Tokenizer — HF download on first load)
+#
+# No REST API — the repo ships a CLI (tts_infer.py). The lab wraps
+# StepAudioTokenizer + StepAudioTTS in-process via the engine-server
+# pattern (tts_lab_engine_server.py), like every other engine.
+#
+# SIZE: ~12 GB · VRAM: ~9 GB (AWQ-4bit) / ~12 GB (BF16)
+# ═══════════════════════════════════════════════════════════════════
+
+FROM nvidia/cuda:12.8.2-runtime-ubuntu24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-dev python3-pip python3-venv curl git ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m pip install --no-cache-dir uv
+
+# ── Repo + dependencies (uv sync from the repo's pyproject) ─────────
+# uv re-resolves from scratch (the shipped uv.lock is deleted — it pins
+# torch 2.9.1 which lacks sm_120). The pinned vLLM dev wheel URL comes
+# from [tool.uv.sources]. NOTE: the vllm wheel itself requires
+# torch==2.9.1 + torchvision==0.24.1 — overridden in the next step.
+RUN git clone --depth 1 https://github.com/stepfun-ai/Step-Audio-EditX.git /opt/arthur/Step-Audio-EditX \
+    && cd /opt/arthur/Step-Audio-EditX \
+    && rm -f uv.lock \
+    && uv lock --refresh \
+    && uv sync --system --break-system-packages --no-install-project
+
+# ── torch nightly cu130 for sm_120 (RTX 5060 Ti) ────────────────────
+# Override torch/torchaudio/torchvision past vllm's ==2.9.1/==0.24.1
+# pins (pip warns about the stale pins and proceeds — same pattern as
+# the sglang image). torchcodec stays as uv resolved it: the inference
+# path (tts.py / tokenizer.py) never imports it, so its ABI pairing is
+# irrelevant at runtime.
+RUN pip install --no-cache-dir --force-reinstall --pre \
+    torch torchaudio torchvision \
+    --index-url https://download.pytorch.org/whl/nightly/cu130
+
+# ── Build-time smoke test — the vllm dev wheel under overridden torch ──
+# No GPU during build; engine init + kernel load validated on the VM.
+RUN python3 -c "import torch, vllm, transformers, torchaudio; print('editx smoke OK:', torch.__version__, '| transformers', transformers.__version__)"
+
+# ── Lab engine-server wrapper ───────────────────────────────────────
+ARG CACHEBUST=0
+COPY tts_lab_shims.py /opt/arthur/
+COPY tts_lab_config.py /opt/arthur/
+COPY tts_lab_engine_server.py /opt/arthur/
+COPY tts_lab_engines.py /opt/arthur/
+COPY tts_lab_dispatch.py /opt/arthur/
+
+EXPOSE 8105
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=120s \
+    CMD curl -f http://localhost:8105/health || exit 1
+CMD ["python3", "/opt/arthur/tts_lab_engine_server.py", "--port", "8105", "--stack", "current"]

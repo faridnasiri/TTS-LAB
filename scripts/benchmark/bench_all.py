@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Quick RTF benchmark — runs all 6 models via the live tts_lab API."""
+"""Quick RTF benchmark — runs the listed models via the live tts_lab API."""
 import json, base64, urllib.request, time, psutil, shutil
 
 TEXT = ("Oh my goodness, just a moment dear, let me find my reading glasses. "
@@ -29,6 +29,8 @@ MODELS = [
     ("indextts",   {},                                                                  True),
     ("zonos",      {"variant": "transformer", "speaking_rate": "13.0"},                 True),
     ("openvoice",  {"speaker": "EN-US", "speed": "0.85"},                               True),
+    ("s2pro",      {},                                                                  True),
+    ("editx",      {},                                                                  True),
 ]
 
 print(f"\n{'Model':<14} {'RTF':>6}  {'Verdict':<14} {'Synth':>8}  {'Audio':>8}  {'Load':>7}")
@@ -37,7 +39,7 @@ print("-" * 72)
 for name, params, heavy in MODELS:
     body = json.dumps({"text": TEXT, "params": params}).encode()
     req  = urllib.request.Request(
-        f"http://localhost:8001/synthesize/{name}",
+        f"http://localhost:8009/synthesize/{name}",
         data=body, headers={"Content-Type": "application/json"}, method="POST"
     )
     try:

@@ -1,0 +1,5 @@
+# S2-Pro pipeline config — vendored from sgl-project/sglang-omni
+# examples/configs/s2pro_tts.yaml (https://github.com/sgl-project/sglang-omni)
+# Used by Dockerfile.sglang: sgl-omni serve --config /opt/s2pro_tts.yaml
+config_cls: S2ProPipelineConfig
+model_path: fishaudio/s2-pro

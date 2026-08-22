@@ -658,18 +658,70 @@ def _build_params(name: str) -> str:
             '</div>'
         )
         return (
-            '<div class="alert alert-warning py-2 small mb-2">'
-            '<strong>Fish S2-Pro (5B Dual-AR)</strong> — requires SGLang server.<br>'
-            'Start: <code>python -m sglang.launch_server --model fishaudio/s2-pro</code><br>'
-            'Set env: <code>S2PRO_SGLANG_URL=http://host:port/v1/audio/speech</code></div>'
+            '<div class="alert alert-info py-2 small mb-2">'
+            '<strong>Fish S2-Pro (5B Dual-AR)</strong> — served via SGLang-Omni '
+            '(sgl-omni, sm_120-validated). 80+ languages, voice cloning from a '
+            '10-30s reference clip + transcript. Always-resident while its '
+            'container runs — evicts the LLM on load.</div>'
             + _row(
                 _grp('Voice',
                      '<input type="text" class="form-control form-control-sm" data-param="voice" '
                      'placeholder="default (or any name)">'),
             )
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice clone <span style="font-weight:400;color:#888">(optional — no ref = default voice)</span></div>'
+            + f'<div class="param-row">{_upload_widget("s2-file", "s2-status", "s2-prompt-id", "Reference WAV — 10-30s of target voice")}</div>'
+            + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(required for cloning)</span>',
+                        '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
+                        'placeholder="Exact words spoken in the reference audio…">'))
             + s2pro_tags
-            + '<p class="text-muted small mt-1">~10 GB VRAM for SGLang. RTF 0.195 on H200. '
+            + '<p class="text-muted small mt-1">~11 GB VRAM (always-resident). RTF 0.195 on H200. '
             'Dual-AR: Slow AR (4B) predicts primary semantic tokens; Fast AR (400M) generates residual codebooks.</p>'
+        )
+
+    if name == "editx":
+        editx_tags = (
+            '<div class="alert alert-info py-2 small mt-2 mb-0">'
+            '<strong>🎭 Audio edits</strong> — 14 emotions (happy, angry, fear, sad…), '
+            '33 styles (whisper, news, radio, shout…), speed (faster/slower), '
+            'paralinguistics (inline <code>[Laughter]</code> tags).<br>'
+            '<strong>Zero-shot clone:</strong> Mandarin, English, Sichuanese, '
+            'Cantonese, Japanese, Korean.<br>'
+            '<em>Emotion/style/speed edits need the ref WAV (edit source) — '
+            'without one, the first voice-library clip is used.</em>'
+            '</div>'
+        )
+        return (
+            '<div class="alert alert-info py-2 small mb-2">'
+            '<strong>Step Audio EditX (3B)</strong> — LLM-based audio-edit + '
+            'zero-shot TTS (Apache 2.0). AWQ-4bit checkpoint. vLLM backend — '
+            'first load takes a few minutes.</div>'
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Edit type</div>'
+            + _row(
+                _grp("Edit", _sel("edit_type",
+                    [("clone","Clone — zero-shot TTS"),
+                     ("emotion","Emotion edit"),
+                     ("style","Style edit"),
+                     ("speed","Speed edit"),
+                     ("paralinguistic","Paralinguistic (inline tags)")], "clone")),
+                _grp('Edit info <span style="font-size:.7rem;color:#aaa">(emotion/style/speed)</span>',
+                     '<input type="text" class="form-control form-control-sm" data-param="edit_info" '
+                     'placeholder="e.g. happy · whisper · more faster">'),
+            )
+            + _row(
+                _grp('Edit iterations <span class="range-val">1</span>',
+                     _rng("n_edit_iter", "1", "5", "1", "1", "re-feed output for stronger edits")),
+                _grp("Language", _sel("language",
+                    [("en","English"),("zh","Mandarin"),("sichuanese","Sichuanese"),
+                     ("cantonese","Cantonese"),("ja","Japanese"),("ko","Korean")], "en")),
+            )
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice source <span style="font-weight:400;color:#888">(ref WAV + transcript)</span></div>'
+            + f'<div class="param-row">{_upload_widget("ex-file", "ex-status", "ex-prompt-id", "Reference WAV — target voice (clone) / edit source")}</div>'
+            + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(what the ref says — improves cloning)</span>',
+                        '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
+                        'placeholder="Exact words spoken in the reference audio…">'))
+            + editx_tags
+            + '<p class="text-muted small mt-1">~9 GB VRAM (AWQ-4bit). Output 41.6 kHz. '
+            'Mutually exclusive with S2-Pro / LLM — orchestrator stops them automatically.</p>'
         )
 
     if name == "qwen36":

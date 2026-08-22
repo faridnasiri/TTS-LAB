@@ -6,10 +6,11 @@
 #   orchestrator     — Web UI + HTTP dispatch (port 8001)
 #   engine-current   — 21 engines on torch 2.10 + tf 5.12 (port 8101)
 #   engine-legacy    — 3 engines on torch 1.13 + tf 4.46 (port 8102)
+#   engine-editx     — Step Audio EditX via vLLM (port 8105, GPU)
 #   orpheus          — Orpheus 3B via vllm (port 8002, GPU mandatory)
-#   vibevoice        — SGLang: VibeVoice-1.5B (port 8003, GPU)
-#   higgs            — SGLang: Higgs Audio v3 4B (port 8004, GPU)
-#   s2pro            — SGLang: Fish S2-Pro 5B (port 8005, GPU)
+#   vibevoice        — SGLang: VibeVoice-1.5B (port 8003, GPU, POC)
+#   higgs            — SGLang: Higgs Audio v3 4B (port 8004, GPU, POC)
+#   s2pro            — SGLang-Omni: Fish S2-Pro 5B (port 8005, GPU)
 #
 # Usage:
 #   Default (orchestrator + engine-current + engine-legacy):
@@ -19,13 +20,16 @@
 #     docker compose --profile gpu up -d
 #
 #   + SGLang engines (need GPU, each ~7-11 GB VRAM):
-#     docker compose --profile sglang up -d vibevoice
+#     docker compose --profile sglang up -d
+#
+#   + Step Audio EditX (needs GPU, ~9 GB VRAM AWQ):
+#     docker compose --profile editx up -d
 #
 #   Everything:
-#     docker compose --profile gpu --profile sglang up -d
+#     docker compose --profile gpu --profile sglang --profile editx up -d
 #
 #   Stop:
-#     docker compose --profile gpu --profile sglang down
+#     docker compose --profile gpu --profile sglang --profile editx down
 # ═══════════════════════════════════════════════════════════════════
 
 x-common-env: &common-env
@@ -70,7 +74,7 @@ services:
     environment:
       <<: *common-env
       ORCHESTRATOR_MODE: "1"
-      # Engine URLs — all 28 engines are remote HTTP
+      # Engine URLs — all 30 engines are remote HTTP
       PIPER_URL: http://engine-current:8101
       KOKORO_URL: http://engine-current:8101
       MELO_URL: http://engine-current:8101
@@ -106,6 +110,8 @@ services:
       QWEN36_URL: http://llm-qwen36:8006
       # SGLang engines — only S2-Pro genuinely needs SGLang
       S2PRO_SGLANG_URL: http://s2pro:8000/v1/audio/speech
+      # Step Audio EditX — dedicated vLLM container
+      EDITX_URL: http://engine-editx:8105
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/status"]
@@ -334,29 +340,33 @@ services:
       - tts-lab-net
 
   # ═══════════════════════════════════════════════════════════════
-  # Custom SGLang — built from pip (newer than lmsysorg/sglang-omni:dev)
-  # Supports S2-Pro, VibeVoice, Higgs via --model flag
+  # S2-Pro via SGLang-Omni (~11 GB VRAM, always-resident)
+  # Image: tts-lab-sglang-omni (Dockerfile.sglang) — sgl-omni serve
+  # sm_120-validated. Orchestrator stops this container before heavy
+  # engines (EditX/Bark/LLM) load, and restarts it on next S2-Pro use.
   # ═══════════════════════════════════════════════════════════════
-  sglang-runtime:
+  s2pro:
     build:
       context: .
       dockerfile: docker/Dockerfile.sglang
-    image: tts-lab-sglang:latest
-    container_name: tts-lab-sglang
+    image: tts-lab-sglang-omni:latest
+    container_name: tts-lab-s2pro
     ports:
       - "8005:8000"
     volumes:
-      - /opt/models/huggingface:/opt/models/huggingface
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - /opt/models/huggingface:/root/.cache/huggingface
+      # Persist the flashinfer sm_120 JIT kernel cache — the orchestrator
+      # stops/starts this container around heavy engines, and without the
+      # cache every restart recompiles kernels (~minutes).
+      - /opt/models/flashinfer-jit:/root/.cache/flashinfer
+      # Voice-clone ref WAVs must be visible at the same paths the
+      # orchestrator resolves (references[].audio_path in the request).
+      - /tmp/tts_uploads:/tmp/tts_uploads
+      - /opt/arthur/reference_voices:/opt/arthur/reference_voices
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /opt/models/huggingface
+    <<: *gpu-config
     restart: unless-stopped
     profiles:
       - sglang
@@ -365,33 +375,40 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 120s
+      start_period: 180s    # model download + load on first start
     networks:
       - tts-lab-net
 
   # ═══════════════════════════════════════════════════════════════
-  # S2-Pro via SGLang (~11 GB VRAM)
+  # Step Audio EditX — 3B LLM audio-edit + TTS via vLLM (~9 GB VRAM AWQ)
+  # Own stack: python 3.12 + torch 2.12 nightly cu128 (sm_120) + vLLM
   # ═══════════════════════════════════════════════════════════════
-  s2pro:
-    image: tts-lab-sglang:latest
-    container_name: tts-lab-s2pro
-    ports:
-      - "8005:8000"
-    volumes:
-      - /opt/models/huggingface:/root/.cache/huggingface
-    command:
-      - --model
-      - fishaudio/s2-pro
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "8000"
+  engine-editx:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.engine-editx
+    image: tts-lab-engine-editx:latest
+    container_name: tts-lab-engine-editx
+    <<: *model-volume
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     environment:
+      <<: *common-env
       HF_TOKEN: ${HF_TOKEN:-}
-    <<: *gpu-config
     restart: unless-stopped
     profiles:
-      - sglang
+      - editx
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8105/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - tts-lab-net
 

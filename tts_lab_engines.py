@@ -15,24 +15,11 @@ from pathlib import Path
 from tts_lab_shims  import _N_CORES, DEVICE
 from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, REFERENCE_VOICES_DIR, INDEXTTS_DIR,
-    OPENVOICE_MODELS_DIR,
+    OPENVOICE_MODELS_DIR, EDITX_REPO_DIR, EDITX_MODEL_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
-    _state, slog,
+    _ref_wav_path, _state, slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
-
-
-def _ref_wav_path(ref_id: str):
-    """Resolve a reference WAV by id — checks the permanent curated dir
-    (/opt/arthur/reference_voices) AND the uploads dir, so curated voices
-    work exactly like UI uploads. Returns None when not found."""
-    if not ref_id:
-        return None
-    for d in (REFERENCE_VOICES_DIR, UPLOAD_DIR):
-        p = d / f"{ref_id}.wav"
-        if p.exists():
-            return p
-    return None
 
 
 def _stash_builtin_conds(inst):
@@ -2142,17 +2129,17 @@ def _synth_omnivoice(inst, text, params):
 def _load_s2pro():
     """Fish Audio S2-Pro (Dual-AR 5B, 80+ languages).
 
-    S2-Pro requires SGLang for streaming inference.
-    Setup instructions:
-      1. Install SGLang: pip install sglang[all]
-      2. Launch server: python -m sglang.launch_server \\
-           --model fishaudio/s2-pro --tp 1
-      3. Then use the OpenAI-compatible /v1/audio/speech endpoint.
+    S2-Pro has no standalone inference code — it is served by SGLang-Omni:
+      1. Container: tts-lab-sglang-omni (sgl-omni serve --model-path fishaudio/s2-pro)
+      2. API: OpenAI-compatible POST /v1/audio/speech (response body is WAV
+         bytes — response_format=wav default)
+      3. Cloning: references: [{audio_path, text}] — 10-30 s clip + transcript
 
-    This stub returns a placeholder; edit _load_s2pro() and _synth_s2pro()
-    to point at your SGLang server.
+    In orchestrator mode the dispatcher routes via _do_synth_sglang(); this
+    load/synth pair is the bare-metal fallback against a local sgl-omni server.
     """
-    slog("LOAD", "s2pro", "S2-Pro loaded as stub — configure SGLang server endpoint")
+    slog("LOAD", "s2pro", "S2-Pro — remote sgl-omni server at "
+         + os.environ.get("S2PRO_SGLANG_URL", "(no S2PRO_SGLANG_URL set)"))
     return {
         "sglang_url": os.environ.get("S2PRO_SGLANG_URL", "http://localhost:8000/v1/audio/speech"),
         "sr": 44100,
@@ -2160,23 +2147,39 @@ def _load_s2pro():
 
 
 def _synth_s2pro(inst, text, params):
-    """Synthesise via S2-Pro SGLang server (OpenAI-compatible /v1/audio/speech).
+    """Synthesise via S2-Pro sgl-omni server (OpenAI-compatible /v1/audio/speech).
 
-    Set S2PRO_SGLANG_URL env var to point at your SGLang server.
+    Set S2PRO_SGLANG_URL env var to point at your server. Voice cloning when a
+    reference WAV is given: audio_prompt_id (ref id) + ref_text (transcript).
     """
-    import requests, base64 as _b64
+    import requests
     url = inst["sglang_url"]
     payload = {
         "input": text,
         "voice": params.get("voice", "default"),
     }
-    # Optional: add control tags via inline [tag] syntax in text
+    ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
+    ref_path = _ref_wav_path(ref_id) if ref_id else None
+    ref_text = (params.get("ref_text") or "").strip()
+    if ref_path:
+        payload["references"] = [{
+            "audio_path": str(ref_path),
+            "text": ref_text or "",
+        }]
     try:
         resp = requests.post(url, json=payload, timeout=float(params.get("timeout", 300)))
         resp.raise_for_status()
-        # Response is raw WAV bytes
-        wav_bytes = resp.content
-        # Parse WAV to get numpy array + sr
+        # SGLang-Omni returns raw WAV bytes; keep the base64-JSON branch
+        # as a defensive fallback for older/proxy builds.
+        try:
+            body = resp.json()
+        except Exception:
+            body = None
+        audio_b64 = body.get("audio", body.get("audio_b64", "")) if isinstance(body, dict) else ""
+        if audio_b64:
+            wav_bytes = base64.b64decode(audio_b64)
+        else:
+            wav_bytes = resp.content
         with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
             sr = wf.getframerate()
             raw = wf.readframes(wf.getnframes())
@@ -2184,13 +2187,169 @@ def _synth_s2pro(inst, text, params):
         return _to_wav(arr, sr), sr
     except Exception as e:
         raise RuntimeError(
-            f"S2-Pro synthesis failed — is SGLang server running at {url}?\n"
-            f"Start it with: python -m sglang.launch_server --model fishaudio/s2-pro\n"
+            f"S2-Pro synthesis failed — is sgl-omni running at {url}?\n"
+            f"Start it with: docker compose --profile sglang up -d s2pro\n"
             f"Error: {e}"
         )
 
 
-# ── 29. Qwen 3.6 LLM (Reasoning & Programming) ────────────────────────────
+# ── 29. Step Audio EditX (3B, vLLM) ─────────────────────────────────────────
+# LLM-based audio-edit + zero-shot TTS (Apache 2.0). Wraps the repo's
+# tts_infer.py pipeline in-process: StepAudioTokenizer + StepAudioTTS
+# (vLLM engine + CosyVoice vocoder). Weights live under /opt/models/editx/
+# with `Step-Audio-Tokenizer` + `Step-Audio-EditX` (or *-AWQ-4bit) subdirs.
+_EDITX_LANG_TAGS = {
+    "sichuanese": "[Sichuanese]",
+    "cantonese":  "[Cantonese]",
+    "japanese":   "[Japanese]",
+    "korean":     "[Korean]",
+}
+_EDITX_EMOTIONS = ["happy","angry","sad","humour","confusion","disgusted","empathy",
+                   "embarrass","fear","surprised","excited","depressed","coldness",
+                   "admiration","remove"]
+_EDITX_STYLES  = ["serious","arrogant","child","older","girl","pure","sister","sweet",
+                  "ethereal","whisper","gentle","recite","generous","act_coy","warm",
+                  "shy","comfort","authority","chat","radio","soulful","story","vivid",
+                  "program","news","advertising","roar","murmur","shout","deeply",
+                  "loudly","remove","exaggerated"]
+_EDITX_SPEEDS  = ["faster","slower","more faster","more slower"]
+
+
+def _load_editx():
+    """Load StepAudioTTS (vLLM engine + tokenizer + CosyVoice vocoder).
+
+    Requires the repo at {EDITX_REPO_DIR} and weights under
+    {EDITX_MODEL_DIR} (Step-Audio-Tokenizer + Step-Audio-EditX subdirs).
+    Defaults to the AWQ-4bit checkpoint (~8-10 GB VRAM). First load can
+    take minutes — vLLM engine warmup + CUDA graph capture.
+    """
+    if not EDITX_REPO_DIR.exists():
+        raise RuntimeError(
+            f"Step-Audio-EditX repo missing at {EDITX_REPO_DIR} — "
+            "rebuild the engine-editx image (make build-engine ENGINE=editx)")
+    if not EDITX_MODEL_DIR.exists():
+        raise RuntimeError(
+            f"EditX weights missing at {EDITX_MODEL_DIR} — expected "
+            "Step-Audio-Tokenizer + Step-Audio-EditX(-AWQ-4bit) subdirs")
+
+    import sys as _sys
+    _sys.path.insert(0, str(EDITX_REPO_DIR))
+    os.environ.setdefault("VLLM_ATTENTION_BACKEND", "TRITON_ATTN")
+
+    from tokenizer import StepAudioTokenizer       # noqa: E402  (repo root)
+    from tts import StepAudioTTS                   # noqa: E402
+
+    # Model subdir: prefer the AWQ-4bit checkpoint, fall back to full BF16.
+    model_dir = next((EDITX_MODEL_DIR / n for n in (
+        "Step-Audio-EditX-AWQ-4bit", "Step-Audio-EditX",
+    ) if (EDITX_MODEL_DIR / n).exists()), None)
+    if model_dir is None:
+        raise RuntimeError(f"No Step-Audio-EditX* subdir found in {EDITX_MODEL_DIR}")
+    quant = "awq" if model_dir.name.endswith("AWQ-4bit") else None
+
+    tokenizer_dir = EDITX_MODEL_DIR / "Step-Audio-Tokenizer"
+    if not tokenizer_dir.exists():
+        raise RuntimeError(f"Step-Audio-Tokenizer subdir missing in {EDITX_MODEL_DIR}")
+
+    slog("LOAD", "editx", f"Loading tokenizer + {model_dir.name} (quant={quant})…")
+    t0 = time.perf_counter()
+    step_audio_tokenizer = StepAudioTokenizer(
+        str(tokenizer_dir), model_source="local")
+    tts = StepAudioTTS(
+        model_source="local",
+        tts_model_id=str(model_dir),
+        quantization=quant,
+        tensor_parallel_size=1,
+        gpu_memory_utilization=0.5,
+        max_model_len=3072,
+        enforce_eager=False,
+        dtype="bfloat16",
+        cosyvoice_dtype="bfloat16",
+        cosyvoice_cuda_graph=True,
+    )
+    slog("LOAD", "editx", f"EditX loaded in {time.perf_counter()-t0:.1f} s")
+    return {"tokenizer": step_audio_tokenizer, "tts": tts, "sr": 41600}
+
+
+def _synth_editx(inst, text, params):
+    """Synthesise via StepAudioTTS.
+
+    edit_type (default "clone"):
+      clone          — zero-shot TTS: ref WAV + transcript → target voice
+      emotion/style  — generate in target voice, then edit emotion/style
+      speed          — generate, then speed edit (faster/slower)
+      paralinguistic — inline tags ([Laughter] etc.) pass through as text
+    clone REQUIRES a reference WAV (falls back to the first voice-library
+    wav, like qwen3tts). language ∈ zh|en|sichuanese|cantonese|ja|ko gets a
+    tag prefix where the model supports one. n_edit_iter re-feeds output.
+    """
+    import torch as _torch
+    tts = inst["tts"]
+    edit_type = params.get("edit_type", "clone").strip() or "clone"
+    edit_info = params.get("edit_info", "").strip()
+    try:
+        n_iter = max(1, int(params.get("n_edit_iter", 1)))
+    except (TypeError, ValueError):
+        n_iter = 1
+
+    lang = (params.get("language", "en") or "en").strip().lower()
+    tag = _EDITX_LANG_TAGS.get(lang)
+    target_text = f"{tag} {text}" if tag else text
+
+    # Reference WAV — required for clone, used as the edit source otherwise.
+    ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
+    ref_path = _ref_wav_path(ref_id)
+    if ref_path is None:
+        defaults = sorted(REFERENCE_VOICES_DIR.glob("*.wav")) or sorted(UPLOAD_DIR.glob("*.wav"))
+        if defaults:
+            ref_path = defaults[0]
+    if ref_path is None:
+        raise RuntimeError("EditX requires a reference WAV — upload one or pick a voice-library voice.")
+    prompt_text = (params.get("ref_text") or "").strip() or target_text
+
+    if edit_type == "clone":
+        out, sr = tts.clone(prompt_wav_path=str(ref_path),
+                            prompt_text=prompt_text,
+                            target_text=target_text)
+    elif edit_type in ("emotion", "style", "speed"):
+        # Step 1: speak the text in the target voice, then edit the clip.
+        out, sr = tts.clone(prompt_wav_path=str(ref_path),
+                            prompt_text=prompt_text,
+                            target_text=target_text)
+        for i in range(n_iter):
+            out, sr = tts.edit(prompt_wav_path=_tensor_to_wav(out, sr),
+                               prompt_text=prompt_text,
+                               edit_type=edit_type,
+                               edit_info=edit_info)
+    elif edit_type == "paralinguistic":
+        # Tags live in the text itself ([Laughter], [Uhm], …) — route via
+        # the edit pipeline with the tagged text as the generation target.
+        out, sr = tts.clone(prompt_wav_path=str(ref_path),
+                            prompt_text=prompt_text,
+                            target_text=target_text)
+    else:
+        raise RuntimeError(f"Unknown edit_type {edit_type!r} — use clone|emotion|style|speed|paralinguistic")
+
+    return _to_wav(out.cpu().numpy(), sr), sr
+
+
+def _tensor_to_wav(tensor, sr):
+    """Persist a model output tensor to a temp WAV so it can be re-fed as
+    the prompt for iterative edits (the repo's edit() takes a file path)."""
+    import tempfile as _tmp, wave as _wav
+    arr = tensor.cpu().numpy().flatten().astype(np.float32)
+    pcm = (np.clip(arr, -1, 1) * 32767).astype(np.int16)
+    fd, path = _tmp.mkstemp(suffix=".wav")
+    with os.fdopen(fd, "wb") as f:
+        with _wav.open(f, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sr)
+            wf.writeframes(pcm.tobytes())
+    return path
+
+
+# ── 30. Qwen 3.6 LLM (Reasoning & Programming) ────────────────────────────
 # Text→text LLM via llama.cpp. No audio generation — returns text responses.
 # Load/synth are stubs: in orchestrator mode, dispatch routes via
 # _do_synth_llm() which evicts all TTS engines then POSTs to llama-server.
@@ -2250,6 +2409,7 @@ LOADERS: dict = {
     "zonos":      _load_zonos,    "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
     "omnivoice":  _load_omnivoice,"s2pro":     _load_s2pro,
+    "editx":      _load_editx,
     "qwen36":     _load_qwen36,
 }
 SYNTHERS: dict = {
@@ -2269,5 +2429,6 @@ SYNTHERS: dict = {
     "openvoice":  _synth_openvoice,
     "vibevoice":  _synth_vibevoice,"higgs":     _synth_higgs,
     "omnivoice":  _synth_omnivoice,"s2pro":     _synth_s2pro,
+    "editx":      _synth_editx,
     "qwen36":     _synth_qwen36,
 }

@@ -1,7 +1,7 @@
 # Arthur TTS Lab
 
-> 28-engine TTS benchmark + 5-engine Image/Video lab | FastAPI | Docker 7-container | Bare-metal fallback
-> **Deployed to:** `arthur@192.168.0.87:8001` | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
+> 30-engine TTS benchmark + 6-engine Image/Video lab | FastAPI | Docker multi-container | Bare-metal fallback
+> **Deployed to:** `arthur@192.168.0.87:8009` (orchestrator) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an Image/Video generation lab (FLUX.2, SD 3.5, Ideogram 4, Wan2.2).
 
@@ -11,8 +11,8 @@ Originally built for an Android scam-baiting app ("SpamBlocker") that uses a cha
 
 ## Features
 
-- **28 TTS engines** — every major open-source TTS model, 16 validated + 8 experimental + 4 blocked
-- **5 Image & Video engines** — FLUX.2, SD 3.5, Ideogram 4, Wan2.2, FLUX.2 Klein
+- **30 TTS engines** — every major open-source TTS model, 16 validated + 10 experimental + 3 blocked
+- **6 Image & Video engines** — FLUX.2, SD 3.5, Ideogram 4, Wan2.2, FLUX.2 Klein, FLUX.2 Klein 9B-KV
 - **Side-by-side comparison** — switch engines instantly, compare voices, measure quality
 - **Voice cloning** — zero-shot cloning on 8 engines (F5-TTS, Chatterbox, Zonos, Fish Speech, StyleTTS2, XTTS, CosyVoice2, IndexTTS-2)
 - **Voice Library** — browse, play, download Persian reference voices from Common Voice
@@ -41,14 +41,17 @@ docker compose --profile gpu up -d
 # + SGLang engines (S2-Pro, VibeVoice-SGLang, Higgs-SGLang):
 docker compose --profile sglang up -d
 
+# + Step Audio EditX (~9 GB VRAM AWQ — evicts the always-resident s2pro):
+docker compose --profile editx up -d
+
 # + LLM (Qwen 3.6):
 docker compose --profile llm up -d
 
 # Everything:
-docker compose --profile mid --profile gpu --profile sglang --profile llm --profile legacy up -d
+docker compose --profile mid --profile gpu --profile sglang --profile editx --profile llm --profile legacy up -d
 
 # Open in browser:
-# http://192.168.0.87:8001
+# http://192.168.0.87:8009
 ```
 
 ---
@@ -105,26 +108,36 @@ Duplicated ML stacks on disk            Base shared once, stacks shared
 │   boxturbo        │  │ indextts   BLOCK  │
 │ fishspeech SUPP   │  │ parler     BLOCK  │  ┌───────────────────┐
 │ omnivoice  SUPP   │  └───────────────────┘  │      s2pro        │
-│ zonos      SUPP   │                         │  SGLang pre-built │
+│ zonos      SUPP   │                         │ SGLang-Omni serve│
 │ xtts       SUPP   │                         │  port 8005        │
 │ cosyvoice  EXPER  │                         │  profile: sglang  │
 │ csm        EXPER  │                         ├───────────────────┤
-│ manatts    EXPER  │                         │ s2pro      BLOCK  │
+│ manatts    EXPER  │                         │ s2pro      EXPER  │
 │ neutts     EXPER  │                         └───────────────────┘
 │ openvoice  EXPER  │
 └───────────────────┘
 
 ┌───────────────────┐
+│   engine-editx    │
+│   python 3.12     │
+│   vllm + torch n. │
+│   port 8105       │
+│   profile: editx  │
+├───────────────────┤
+│ editx      EXPER  │
+└───────────────────┘
+
+┌───────────────────┐
 │   llm-qwen36      │  (optional)
-│   Qwen 3.6 35B    │
+│   Qwen 3.6 27B    │
 │   llama.cpp GGUF  │
-│   Q3_K_S 4-bit    │
+│   Q3_K_M 4-bit    │
 │   port 8006       │
 │   profile: llm    │
 └───────────────────┘
 ```
 
-**7 containers — 6 custom + 1 pre-built (SGLang).** 4 deployed by default; 3 on-demand via profiles.
+**8 containers — 7 custom + 1 pre-built (SGLang-Omni).** 4 deployed by default; 4 on-demand via profiles.
 
 ### Tiered Image Inheritance
 
@@ -178,7 +191,8 @@ orchestrator:/synthesize/{engine}
     ├── HTTP POST → engine-mid:8103/synthesize        (vibevoice, higgs)
     ├── HTTP POST → engine-legacy:8102/synthesize     (indextts, parler — not deployed)
     ├── HTTP POST → orpheus:8002/synthesize            (orpheus — not deployed)
-    └── HTTP POST → s2pro:8000/v1/audio/speech        (s2pro — not deployed)
+    ├── HTTP POST → s2pro:8000/v1/audio/speech        (s2pro — SGLang-Omni)
+    └── HTTP POST → engine-editx:8105/synthesize      (editx — vLLM in-process)
 ```
 
 ---
@@ -194,8 +208,9 @@ orchestrator:/synthesize/{engine}
 | `engine-qwen` | **1** | 1 | 0 | 0 | ✅ |
 | `engine-legacy` | **2** | 0 | 0 | 2 | ❌ |
 | `orpheus` | **1** | 0 | 0 | 1 | ❌ |
-| `s2pro` | **1** | 0 | 0 | 1 | ❌ |
-| **Total** | **28** | **17** | **7** | **4** | 4/7 |
+| `s2pro` | **1** | 0 | 1 | 0 | ✅ (profile) |
+| `engine-editx` | **1** | 0 | 1 | 0 | ✅ (profile) |
+| **Total** | **30** | **16** | **10** | **3** | 5/8 |
 
 ### Per-Container Engine List
 
@@ -251,11 +266,17 @@ orchestrator:/synthesize/{engine}
 |---|--------|:------:|-------|
 | 27 | `orpheus` | BLOCK | vllm incompatible with torch nightly. Gated model (HF_TOKEN). |
 
-**s2pro** — SGLang pre-built (1 engine, profile: `sglang`, not deployed)
+**s2pro** — SGLang-Omni 0.1.3 (1 engine, profile: `sglang`, deployed)
 
-| # | Engine | Status | Notes |
-|---|--------|:------:|-------|
-| 28 | `s2pro` | BLOCK | SGLang image tf 5.6.0 too old. Requires paged KV cache + RadixAttention. |
+| # | Engine | Status | VRAM | Voice Clone | Notes |
+|---|--------|:------:|:----:|:-----------:|-------|
+| 28 | `s2pro` | EXPER | ~11 GB | ✅ | Fish S2-Pro 5B Dual-AR, 80+ langs. `sgl-omni serve`, flashinfer sm_120 JIT. Always-resident — orchestrator stops/starts container around EditX/LLM. Cloning via `references:[{audio_path, text}]` (10-30 s clip + transcript). |
+
+**engine-editx** — python 3.12 + vLLM dev wheel + torch nightly cu130 (1 engine, profile: `editx`, deployed)
+
+| # | Engine | Status | VRAM | Voice Clone | Notes |
+|---|--------|:------:|:----:|:-----------:|-------|
+| 29 | `editx` | EXPER | ~9 GB | ✅ | Step Audio EditX 3B (AWQ-4bit). Clone (zh/en/sichuanese/cantonese/ja/ko) + emotion(14)/style(38)/paralinguistic edits, 41.6 kHz. Gated weights (HF_TOKEN). In-process wrap of the repo's tts_infer.py (no REST API upstream). |
 
 ---
 
@@ -291,10 +312,11 @@ Promotion from EXPERIMENTAL to SUPPORTED is **deterministic** — every promotio
 | *(default)* | orchestrator, engine-current, engine-qwen | 17 SUPP/EXPER | `docker compose up -d` |
 | `mid` | + engine-mid | + 2 EXPER | `docker compose --profile mid up -d` |
 | `gpu` | + orpheus | + 1 BLOCKED | `docker compose --profile gpu up -d` |
-| `sglang` | + s2pro, vibevoice (SGLang), higgs (SGLang) | + 3 BLOCKED | `docker compose --profile sglang up -d` |
+| `sglang` | + s2pro (SGLang-Omni) | + 1 EXPER (vibevoice/higgs POC images share the tag) | `docker compose --profile sglang up -d` |
+| `editx` | + engine-editx | + 1 EXPER | `docker compose --profile editx up -d` |
 | `legacy` | + engine-legacy | + 2 BLOCKED | `docker compose --profile legacy up -d` |
 | `llm` | + llm-qwen36 | Qwen 3.6 LLM | `docker compose --profile llm up -d` |
-| *(all)* | All 7 + LLM | All 28 + LLM | `docker compose --profile mid --profile gpu --profile sglang --profile legacy --profile llm up -d` |
+| *(all)* | All 8 + LLM | All 30 + LLM | `docker compose --profile mid --profile gpu --profile sglang --profile editx --profile legacy --profile llm up -d` |
 
 ### Startup Order
 
@@ -324,11 +346,14 @@ Base (nvidia/cuda:12.8.2-runtime-ubuntu22.04)
   │   └── Engine:mid        VibeVoice, Higgs (experimental), port 8103
   ├── Stack:legacy     torch 1.13 + transformers 4.46 + CUDA 11.7
   │   └── Engine:legacy     IndexTTS, Parler (blocked — not deployed), port 8102
-  └── Orchestrator     No ML libs — pure HTTP dispatch, port 8001
+  ├── Stack:editx      python 3.12 + vllm dev wheel + torch nightly cu130 (ubuntu24.04)
+  │   └── Engine:editx      Step Audio EditX (AWQ-4bit), port 8105
+  └── Orchestrator     No ML libs — pure HTTP dispatch, port 8009
 
-GPU containers (profiles: gpu, sglang):
+GPU containers (profiles: gpu, sglang, editx):
   ├── Orpheus   vllm + CUDA 12.1, port 8002 (blocked)
-  └── SGLang    Custom pip-built SGLang, port 8005 (S2-Pro/VibeVoice/Higgs — blocked)
+  └── S2-Pro    SGLang-Omni 0.1.3 (devel base), port 8005 — unblocked 2026-08-22
+
 ```
 
 **Orchestrator mode** (`ORCHESTRATOR_MODE=1`): the orchestrator loads zero ML libraries. All engine requests route via HTTP to engine containers. The web UI is served by the orchestrator.
@@ -423,12 +448,12 @@ Image Lab deploys separately: `.\scripts\deploy\deploy_image_lab.ps1` — see [`
 | `tts_lab.py` | 188 | FastAPI app entry-point, lifespan, route wiring |
 | `tts_lab_shims.py` | 590 | **Imported FIRST** — `sys.modules` stubs, transformers compat patches, thread pinning |
 | `tts_lab_shims_legacy.py` | 50 | Minimal shims for legacy container (torch 1.13 / tf 4.46) |
-| `tts_lab_config.py` | 292 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
-| `tts_lab_engines.py` | 1,930 | All 28 `_load_X()` + `_synth_X()` pairs, `LOADERS`/`SYNTHERS` dicts |
-| `tts_lab_dispatch.py` | 513 | Availability probing, `_ensure_loaded()`, `_do_synth()`, local + remote dispatch |
-| `tts_lab_engine_server.py` | 295 | Engine-container FastAPI server with lazy-loading + VRAM eviction |
+| `tts_lab_config.py` | 293 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
+| `tts_lab_engines.py` | 2,100 | All 30 `_load_X()` + `_synth_X()` pairs, `LOADERS`/`SYNTHERS` dicts |
+| `tts_lab_dispatch.py` | 600 | Availability probing, `_ensure_loaded()`, `_do_synth()`, local + remote dispatch, container eviction helpers |
+| `tts_lab_engine_server.py` | 340 | Engine-container FastAPI server with lazy-loading + VRAM eviction |
 | `tts_lab_orpheus_server.py` | 107 | Orpheus-specific vllm server |
-| `tts_lab_ui.py` | 1,793 | Full HTML/JS web UI inlined as Python strings |
+| `tts_lab_ui.py` | 1,900 | Full HTML/JS web UI inlined as Python strings |
 | `tts_lab_utils.py` | 103 | `_to_wav()`, `_wav_dur()`, `_safe_del()`, `_ram_mb()`, `_require_gpu()` |
 | `voice_library.py` | 593 | Persian Voice Library — Common Voice download, speaker embeddings |
 | `image_lab.py` | 188 | Image Lab FastAPI entry-point (port 8002) |
@@ -456,7 +481,9 @@ docker compose down                                               # stop all
 
 # Engine rebuild
 make build-engine ENGINE=current                                  # single engine
-make rebuild                                                      # full chain (7 images, ~35 min)
+make build-engine ENGINE=editx                                    # Step Audio EditX (~12 GB image)
+docker build -f docker/Dockerfile.sglang -t tts-lab-sglang-omni:latest .   # S2-Pro omni image (~25 GB)
+make rebuild                                                      # full chain (8 images, ~1-2 hrs)
 ```
 
 ### PowerShell Deploy (legacy bare-metal)
@@ -542,8 +569,8 @@ The project applies patches to bridge API gaps between engine requirements and i
 | **GPU** | RTX 5060 Ti 16 GB GDDR7, Blackwell sm_120 |
 | **Torch nightly required** | sm_120 needs torch >= 2.12 nightly with CUDA 12.8+ |
 | **Single-engine VRAM** | One engine at a time per container, evicted on switch |
-| **Gated models** | qwen3tts, orpheus, csm require `HF_TOKEN` in `.env` |
-| **Blocked engines** | indextts, parler (legacy stack not built), orpheus (vllm incompat), s2pro (SGLang too old) |
+| **Gated models** | qwen3tts, orpheus, csm, editx (AWQ-4bit + tokenizer) require `HF_TOKEN` in `.env` |
+| **Blocked engines** | indextts, parler (legacy stack not built), orpheus (vllm incompat with torch nightly) |
 | **Maximum concurrent** | 4 containers deployed; bark (12 GB) precludes loading anything else |
 
 ---

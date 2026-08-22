@@ -18,16 +18,17 @@ from typing import Dict, Tuple
 
 from tts_lab_config import (
     MODEL_ORDER, MODEL_INFO, HEAVY, _state,
-    slog,
+    _ref_wav_path, slog,
 )
 from tts_lab_utils import _wav_dur
 
-# ── LLM Container Management (Docker socket) ─────────────────────
-# The LLM (Qwen 3.6) uses ~13 GB VRAM. Heavy TTS engines need that VRAM,
-# so we stop the LLM container before heavy TTS synthesis, and restart it
-# when the LLM is called. Requires /var/run/docker.sock mounted in the
-# orchestrator container.
+# ── Container Management (Docker socket) ─────────────────────────
+# The LLM (Qwen 3.6) uses ~13 GB VRAM, S2-Pro ~11 GB (always-resident).
+# Heavy TTS engines need that VRAM, so we stop these containers before
+# heavy synthesis and restart them when the engine is called again.
+# Requires /var/run/docker.sock mounted in the orchestrator container.
 _LLM_CONTAINER_NAME = "tts-lab-llm-qwen36"
+_S2PRO_CONTAINER_NAME = "tts-lab-s2pro"
 _DOCKER_SOCK = "/var/run/docker.sock"
 _HAS_DOCKER_SOCK = os.path.exists(_DOCKER_SOCK)
 
@@ -41,12 +42,12 @@ def _docker_api(method: str, path: str, timeout: float = 10.0) -> tuple[int, str
         return r.status_code, r.text
 
 
-def _llm_container_running() -> bool:
-    """Check if the LLM container is currently running."""
+def _container_running(name: str) -> bool:
+    """Check if a named container is currently running."""
     if not _HAS_DOCKER_SOCK:
         return False
     try:
-        code, body = _docker_api("GET", "/v1.49/containers/tts-lab-llm-qwen36/json")
+        code, body = _docker_api("GET", f"/v1.49/containers/{name}/json")
         if code == 200:
             import json as _j
             state = _j.loads(body).get("State", {})
@@ -56,22 +57,53 @@ def _llm_container_running() -> bool:
     return False
 
 
-def _stop_llm_container() -> bool:
-    """Stop the LLM container to free VRAM for heavy TTS engines."""
+def _container_stop(name: str, label: str = "container") -> bool:
+    """Stop a named container to free VRAM."""
     if not _HAS_DOCKER_SOCK:
-        slog("LLM", "evict", "No Docker socket — cannot stop LLM container")
+        slog("VRAM", "evict", f"No Docker socket — cannot stop {name}")
         return False
     try:
-        if not _llm_container_running():
-            slog("LLM", "evict", "LLM container already stopped")
+        if not _container_running(name):
+            slog("VRAM", "evict", f"{label} container already stopped ({name})")
             return True
-        code, _ = _docker_api("POST", f"/v1.49/containers/{_LLM_CONTAINER_NAME}/stop")
+        code, _ = _docker_api("POST", f"/v1.49/containers/{name}/stop")
         ok = code in (204, 304)
-        slog("LLM", "evict", f"Stop LLM container → HTTP {code} {'✓' if ok else '✗'}")
+        slog("VRAM", "evict", f"Stop {label} container ({name}) → HTTP {code} {'✓' if ok else '✗'}")
         return ok
     except Exception as e:
-        slog("LLM", "evict", f"Failed to stop LLM container: {e}")
+        slog("VRAM", "evict", f"Failed to stop {name}: {e}")
         return False
+
+
+def _container_start(name: str, label: str = "container") -> bool:
+    """Start a named container (called before its engine is used)."""
+    if not _HAS_DOCKER_SOCK:
+        return False
+    try:
+        if _container_running(name):
+            return True
+        code, _ = _docker_api("POST", f"/v1.49/containers/{name}/start")
+        ok = code in (204, 304)
+        slog("VRAM", "start", f"Start {label} container ({name}) → HTTP {code} {'✓' if ok else '✗'}")
+        return ok
+    except Exception as e:
+        slog("VRAM", "start", f"Failed to start {name}: {e}")
+        return False
+
+
+def _llm_container_running() -> bool:
+    """Check if the LLM container is currently running."""
+    return _container_running(_LLM_CONTAINER_NAME)
+
+
+def _stop_llm_container() -> bool:
+    """Stop the LLM container to free VRAM for heavy TTS engines."""
+    return _container_stop(_LLM_CONTAINER_NAME, label="LLM")
+
+
+def _start_llm_container() -> bool:
+    """Start the LLM container (called before LLM inference)."""
+    return _container_start(_LLM_CONTAINER_NAME, label="LLM")
 
 
 def _start_llm_container() -> bool:
@@ -117,18 +149,20 @@ def _build_remote_urls() -> Dict[str, str]:
     # (multiple engines share the same container URL, e.g. piper + kokoro both
     # point to http://engine-current:8101 — we only evict ONCE per container.)
     # Skip SGLang URLs — those containers don't have /evict endpoint.
-    sglang_urls = {os.environ[k] for k in os.environ if k.endswith("_SGLANG_URL")}
     global _ENGINE_CONTAINER_URLS
     _ENGINE_CONTAINER_URLS = set()
     for url in urls.values():
         stripped = url.rstrip("/")
-        if stripped in sglang_urls:
+        if stripped in _SGLANG_URLS:
             continue
         _ENGINE_CONTAINER_URLS.add(stripped)
 
     return urls
 
 
+_SGLANG_URLS: set[str] = {
+    os.environ[k].rstrip("/") for k in os.environ if k.endswith("_SGLANG_URL")
+}
 _ENGINE_CONTAINER_URLS: set[str] = set()  # populated by _build_remote_urls
 _REMOTE_ENGINES: Dict[str, str] = _build_remote_urls()
 _REMOTE_MODE = len(_REMOTE_ENGINES) > 0
@@ -165,6 +199,14 @@ def _check_available_remote(name: str) -> Tuple[bool, str]:
     url = _REMOTE_ENGINES[name]
     try:
         import httpx
+        # SGLang-style containers (s2pro via sgl-omni) return a bare ok on
+        # /health with no `engines` map and no `model_loaded` — any HTTP 200
+        # while serving counts as available.
+        if url.rstrip("/") in _SGLANG_URLS:
+            r = httpx.get(f"{url}/health", timeout=10.0)
+            if r.status_code == 200:
+                return True, ""
+            return False, f"HTTP {r.status_code}"
         r = httpx.get(f"{url}/health", timeout=10.0)
         if r.status_code == 200:
             data = r.json()
@@ -225,6 +267,7 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         "higgs":      "transformers",
         "omnivoice":  "omnivoice",
         "s2pro":      None,
+        "editx":      "vllm",
     }
 
     # 1. Quick package-present check
@@ -258,7 +301,7 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
             pass
 
     # 4. Engine-specific file / directory checks
-    from tts_lab_config import MODELS_DIR, COSYVOICE_DIR, OPENVOICE_MODELS_DIR, MANATTS_REPO_DIR, INDEXTTS_DIR
+    from tts_lab_config import MODELS_DIR, COSYVOICE_DIR, OPENVOICE_MODELS_DIR, MANATTS_REPO_DIR, INDEXTTS_DIR, EDITX_REPO_DIR, EDITX_MODEL_DIR
     if name == "piper":
         if not _piper_voices():
             return False, "No .onnx voice found in models/"
@@ -319,6 +362,14 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
     elif name == "matcha":
         if not ilu.find_spec("sherpa_onnx"):
             return False, "pip install sherpa-onnx"
+    elif name == "editx":
+        if not EDITX_REPO_DIR.exists():
+            return False, f"Clone stepfun-ai/Step-Audio-EditX to {EDITX_REPO_DIR}"
+        if not any((EDITX_MODEL_DIR / n).exists()
+                   for n in ("Step-Audio-EditX", "Step-Audio-EditX-AWQ-4bit")):
+            return False, f"EditX weights missing at {EDITX_MODEL_DIR}"
+        if not (EDITX_MODEL_DIR / "Step-Audio-Tokenizer").exists():
+            return False, "Step-Audio-Tokenizer missing under " + str(EDITX_MODEL_DIR)
     elif name == "manatts":
         if not MANATTS_REPO_DIR.exists():
             return False, (
@@ -512,6 +563,10 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
     # Heavy engines need significant VRAM — evict LLM first if it's running
     if name in HEAVY and _HAS_DOCKER_SOCK:
         _stop_llm_container()
+        # S2-Pro is always-resident (~11 GB) — stop its container so heavy
+        # engines (EditX, Bark, ...) fit in 16 GB. Restarted on next s2pro call.
+        if _container_running(_S2PRO_CONTAINER_NAME):
+            _container_stop(_S2PRO_CONTAINER_NAME, label="S2-Pro")
 
     # Standard engine server API
     t0 = time.perf_counter()
@@ -554,13 +609,56 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
 
 
 def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
-    """Synthesize via SGLang OpenAI-compatible API."""
+    """Synthesize via SGLang OpenAI-compatible API (/v1/audio/speech).
+
+    Mirrors _do_synth_llm's eviction protocol: SGLang engines are
+    always-resident (~11 GB for S2-Pro), so the LLM and all in-process
+    engine containers are evicted first. If the s2pro container was
+    stopped to free VRAM for another heavy engine, it is started again
+    and we wait for it to serve before POSTing.
+    """
     import httpx
+
+    if name == "s2pro" and _HAS_DOCKER_SOCK:
+        _stop_llm_container()
+        _evict_all_tts_engines()
+        if not _container_running(_S2PRO_CONTAINER_NAME):
+            _container_start(_S2PRO_CONTAINER_NAME, label="S2-Pro")
+            # Model load after container start takes minutes — poll health.
+            # 600 s covers first boot: ~10 GB model download + the one-time
+            # flashinfer sm_120 JIT kernel compile.
+            deadline = time.monotonic() + 600.0
+            while time.monotonic() < deadline:
+                try:
+                    if httpx.get(f"{url}/health", timeout=5.0).status_code == 200:
+                        break
+                except Exception:
+                    pass
+                time.sleep(5.0)
+            else:
+                raise RuntimeError("S2-Pro container started but /health never returned 200 — check docker logs tts-lab-s2pro")
+
+    # Voice cloning: map the lab's ref-id params to SGLang's references
+    # array ({audio_path, text}). Paths must be valid inside the container —
+    # the s2pro service mounts /opt/arthur/reference_voices + /tmp/tts_uploads.
+    payload: dict = {"input": text}
+    for k, v in params.items():
+        if k in ("audio_prompt_id", "ref_audio", "ref_text"):
+            continue
+        payload[k] = v
+    ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
+    if ref_id:
+        ref_path = _ref_wav_path(ref_id)
+        if ref_path:
+            payload["references"] = [{
+                "audio_path": str(ref_path),
+                "text":       (params.get("ref_text") or "").strip(),
+            }]
 
     t0 = time.perf_counter()
     r = httpx.post(
         url,
-        json={"input": text, **params},
+        json=payload,
         timeout=600.0,
     )
     r.raise_for_status()

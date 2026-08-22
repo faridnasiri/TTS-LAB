@@ -3,9 +3,32 @@
 > **Model:** fishaudio/s2-pro (Dual-AR 5B, 80+ languages)
 > **Approach:** Custom SGLang container built from pip (tts-lab-sglang:latest)
 > **Target hardware:** RTX 5060 Ti, 16 GB VRAM
-> **Verdict:** BLOCKED — double upstream dependency, no local fallback
+> **Verdict:** ~~BLOCKED~~ **UNBLOCKED 2026-08-22** — sglang-omni 0.1.3 (PyPI) ships day-0 S2-Pro support, sm_120-validated upstream
+
+## 0. Resolution (2026-08-22) — supersedes the BLOCKED verdict below
+
+Upstream released **SGLang-Omni 0.1.3** (`pip install --pre sglang-omni==0.1.3`), which has first-class S2-Pro support (`config_cls: S2ProPipelineConfig`, served via `sgl-omni serve`). The whole dependency graph is **CUDA-13-aligned by design** (flashinfer[cu13], nixl-cu13, mooncake-cuda13, cutlass-dsl 4.6 → protobuf 6.30.2) — the same cu130 world as the lab's torch nightly. The old two-step force-reinstall (torch nightly onto a cu128 sglang[all] image) is dead; the new image installs sglang-omni in **one pip invocation** and then force-reinstalls torch nightly cu130 (pip proceeds past the stale `torch==2.11.0` pin with a warning).
+
+Key facts for the current deployment:
+
+| Item | Detail |
+|---|---|
+| Serving | `sgl-omni serve --model-path fishaudio/s2-pro --config /opt/s2pro_tts.yaml --port 8000` (ENTRYPOINT/CMD in `docker/Dockerfile.sglang`) |
+| API | OpenAI-compatible `POST /v1/audio/speech`; **response body is raw WAV bytes** (not base64 JSON) |
+| Cloning | `references: [{audio_path, text}]` — 10-30 s clip + transcript (ref_audio/ref_text shorthand also works) |
+| Image | `tts-lab-sglang-omni:latest` (NOT `tts-lab-sglang:latest` — that tag is still the vibevoice/higgs POC `launch_server` image) |
+| Base | `nvidia/cuda:12.8.2-devel-ubuntu22.04` — devel because flashinfer 0.6.14 JIT-compiles sm_120 kernels at first start (no prebuilt cache) and flash-attn-4 beta has no wheels; nvcc needed for both |
+| Codec | `descript-audiotools 0.7.2` + `descript-audio-codec 1.0.0` installed `--no-deps` (audiotools pins protobuf<3.20 metadata-only — would break cutlass-dsl's protobuf 6.x) |
+| JIT cache | First start compiles sm_120 kernels (~minutes). Persisted via `/opt/models/flashinfer-jit` bind mount so orchestrator stop/start cycles don't recompile |
+| VRAM | ~11 GB always-resident while container runs — orchestrator stops/starts the container around EditX/LLM loads |
+
+Deploy status: container built and validated on the VM 2026-08-22 — see `docs/engine_compatibility.yaml` (s2pro → `experimental`, validation checks currently pending).
 
 ---
+
+## 1. Why S2-Pro Cannot Run Locally (original analysis — kept for history)
+
+
 
 ## 1. Why S2-Pro Cannot Run Locally
 
