@@ -35,7 +35,7 @@ RUN git clone --depth 1 https://github.com/stepfun-ai/Step-Audio-EditX.git /opt/
     && cd /opt/arthur/Step-Audio-EditX \
     && rm -f uv.lock \
     && uv lock --refresh \
-    && uv sync --system --break-system-packages --no-install-project
+    && UV_BREAK_SYSTEM_PACKAGES=1 uv sync --python /usr/bin/python3 --no-install-project
 
 # ── torch nightly cu130 for sm_120 (RTX 5060 Ti) ────────────────────
 # Override torch/torchaudio/torchvision past vllm's ==2.9.1/==0.24.1
