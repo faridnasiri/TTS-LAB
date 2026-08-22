@@ -67,6 +67,19 @@ RUN pip install --no-cache-dir --force-reinstall \
         --index-url https://download.pytorch.org/whl/cu130 \
     && pip install --no-cache-dir --force-reinstall torchcodec==0.11.1
 
+# ── flashinfer JIT link: lib64 alias + unversioned libcudart ────────
+# flashinfer's ninja ldflags hardcode "-L$cuda_home/lib64 -lcudart"
+# (jit/cpp_ext.py) but pip nvidia-* wheels install into nvidia/cu13/lib/
+# and ship only the versioned libcudart.so.13 — no lib64/ dir, no
+# libcudart.so. The JIT kernel link died on "cannot find -lcudart"
+# (2026-08-22, after the CCCL fix let compilation pass). Symlinks make
+# the cu13 layout look like a classic CUDA install; the link flags then
+# resolve without touching flashinfer or torch.
+RUN ln -s /usr/local/lib/python3.10/dist-packages/nvidia/cu13/lib \
+          /usr/local/lib/python3.10/dist-packages/nvidia/cu13/lib64 \
+    && ln -s libcudart.so.13 \
+          /usr/local/lib/python3.10/dist-packages/nvidia/cu13/lib/libcudart.so
+
 # ── pip nvcc 13.4 on PATH — flashinfer's SM-12.x gate reads nvcc ────
 # flashinfer's is_cuda_version_at_least("12.9") runs `nvcc --version`
 # (pytorch cpp_extension pattern) to decide if SM-12.x kernels can be
