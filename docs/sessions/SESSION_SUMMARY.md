@@ -51,6 +51,20 @@ Dispatch fixes: binary-body handling with stdlib wave parse (orchestrator has no
 
 ---
 
+## Session 2026-08-23 (evening) — UI fixes: qwen36 DNS, flat menu-clone, dark text; neutts removed
+
+Three UI issues reported by the user, all fixed and deployed (commits `d503619`, `9a0a3e7`):
+
+1. **`⚠ [Errno -3] Temporary failure in name resolution` in every engine panel.** The qwen36 LLM (retired earlier that day) was still in `MODEL_ORDER` + compose `QWEN36_URL`, so `/status` probed `http://llm-qwen36:8006`, which no longer resolves inside the compose network. Removed the qwen36 entry (catalog + order), deleted the compose service/env, and hardened `_check_available_remote` — any dead container now collapses to a clean `offline — engine container not running` instead of leaking the raw errno.
+2. **Clone from the menu generated a flat robotic voice.** The curated ref voices' sidecars carry NO transcript, and `_synth_editx` fell back to the *target* text as the prompt transcript when `ref_text` was empty (measured earlier: 62 s degenerate ramble). Fixes: new `_ref_transcript()` helper (stdlib, orchestrator-safe) reads the sidecar `transcription`; `_synth_editx`, `_synth_s2pro`, and the dispatch SGLang path all use it before the target-text fallback. The 6 curated en-* voices were **transcribed with whisper** (base model, `/opt/arthur-extra-env/bin/whisper` — CPU) and their sidecars now carry real transcripts (e.g. en-leo: "Hey there, I'm Leo. Bring your stories to life…"). fa-* transcripts were deliberately NOT written — whisper base mangles Persian; those keep the ⚠ no-transcript hint in the dropdown. Voice-library `use-ref` also writes a transcription sidecar.
+3. **Dark text on dark UI.** `.desc-input` referenced the never-defined `var(--fg)` → browser-default (dark) text on the dark textarea. → `var(--text)`; added `.form-select option` rule (native options don't inherit); fixed `var(--ok)` → `--accent2`.
+
+Also: editx panel + notes said "41.6 kHz" — actual output is 24 kHz (fixed). **neutts (NeuTTS Air) removed completely** per user request — it was an unimplemented stub surfacing a red "not configured" warning; all code, catalog, UI, dispatch entries and doc counts removed (28 total / 7 experimental).
+
+The voice-library endpoints (`/voice-library/*`) are still orchestrator-mode-dead (`voice_library_mod = None` by design, `tts_lab.py:68`) — the Browse Voices tab 404s in container mode. The refs dropdown (en-*/fa-* curated voices + uploads) is the working path; the sidebar "Browse Voices" item is cosmetic until the orchestrator ships `voice_library.py` + a `VOICES_DIR` mount.
+
+---
+
 ## Session 2026-07-01 — Engine-Current Rebuild, Missing Deps, Final Verification
 
 ### Engine-Current Image Rebuild
