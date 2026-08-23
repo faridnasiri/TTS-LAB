@@ -2234,10 +2234,22 @@ def _load_editx():
 
     import sys as _sys
     _sys.path.insert(0, str(EDITX_REPO_DIR))
-    os.environ.setdefault("VLLM_ATTENTION_BACKEND", "TRITON_ATTN")
 
     from tokenizer import StepAudioTokenizer       # noqa: E402  (repo root)
     from tts import StepAudioTTS                   # noqa: E402
+    from model_loader import model_loader as _ml   # noqa: E402
+
+    # vllm 0.26 removed the VLLM_ATTENTION_BACKEND env var, and the repo's
+    # StepAudioTTS has no kwargs passthrough to LLM(). The Step model sets
+    # use_alibi_sqrt=True, which FLASH_ATTN (the default) rejects — force
+    # the TRITON_ATTN backend via attention_config in load_model instead.
+    _orig_load_model = _ml.load_model
+
+    def _load_model_attn(model_path, *args, **kwargs):
+        kwargs.setdefault("attention_config", {"backend": "TRITON_ATTN"})
+        return _orig_load_model(model_path, *args, **kwargs)
+
+    _ml.load_model = _load_model_attn
 
     # Model subdir: prefer the AWQ-4bit checkpoint, fall back to full BF16.
     model_dir = next((EDITX_MODEL_DIR / n for n in (
@@ -2245,7 +2257,10 @@ def _load_editx():
     ) if (EDITX_MODEL_DIR / n).exists()), None)
     if model_dir is None:
         raise RuntimeError(f"No Step-Audio-EditX* subdir found in {EDITX_MODEL_DIR}")
-    quant = "awq" if model_dir.name.endswith("AWQ-4bit") else None
+    # NOTE: no quantization override — the AWQ-4bit config declares
+    # `compressed-tensors`, and vllm 0.26's ModelConfig validator rejects
+    # quantization="awq" as a mismatch (it must auto-detect from config).
+    quant = None
 
     tokenizer_dir = EDITX_MODEL_DIR / "Step-Audio-Tokenizer"
     if not tokenizer_dir.exists():
@@ -2256,6 +2271,8 @@ def _load_editx():
     step_audio_tokenizer = StepAudioTokenizer(
         str(tokenizer_dir), model_source="local")
     tts = StepAudioTTS(
+        model_path=str(model_dir),
+        audio_tokenizer=step_audio_tokenizer,
         model_source="local",
         tts_model_id=str(model_dir),
         quantization=quant,
@@ -2268,7 +2285,7 @@ def _load_editx():
         cosyvoice_cuda_graph=True,
     )
     slog("LOAD", "editx", f"EditX loaded in {time.perf_counter()-t0:.1f} s")
-    return {"tokenizer": step_audio_tokenizer, "tts": tts, "sr": 41600}
+    return {"tokenizer": step_audio_tokenizer, "tts": tts, "sr": 24000}
 
 
 def _synth_editx(inst, text, params):

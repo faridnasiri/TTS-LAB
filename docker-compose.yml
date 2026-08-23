@@ -405,6 +405,13 @@ services:
     environment:
       <<: *common-env
       HF_TOKEN: ${HF_TOKEN:-}
+      # FlashInfer JIT (sampling module) needs ninja + nvcc — the runtime
+      # base has neither; pip toolkit lives in the venv (nvcc 13.3).
+      CUDA_HOME: /opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13
+      PATH: /opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      # Persist the JIT-compiled kernels on /opt/models so container
+      # recreates don't recompile (like s2pro's flashinfer-jit mount).
+      FLASHINFER_WORKSPACE_BASE: /opt/models/flashinfer-editx-jit
     restart: unless-stopped
     profiles:
       - editx

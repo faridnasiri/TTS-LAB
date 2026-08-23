@@ -27,11 +27,11 @@ stacks:
     python: '3.10'
     cuda: '11.7'
   editx:
-    torch: nightly cu130 (sm_120)
+    torch: 2.13.0+cu130 (stable — sm_120)
     transformers: '>=4.57.3,<5.0'
     python: '3.12'
     cuda: '12.8'
-    note: Step-Audio-EditX own container (ubuntu24.04) — python 3.12 required (repo >=3.12,<3.14). vLLM dev wheel from wheels.vllm.ai overridden torch==2.9.1 pin. Lab's other images are python 3.11 — cannot be reused.
+    note: Step-Audio-EditX own container (ubuntu24.04) — python 3.12 required (repo >=3.12,<3.14). vLLM 0.26 nightly wheel from wheels.vllm.ai (commit 30b34171b) + torch 2.13.0 stable — the repo's pinned wheel (torch-2.9.1-era) links c10_cuda_check_implementation, REMOVED from every sm_120-capable torch. Lab's other images are python 3.11 — cannot be reused. All 4 fix layers baked into Dockerfile.engine-editx (step1 intermediate_tensors default, CCCL version-gate, pip cu13 layout symlinks, tts.py BatchEncoding coercion).
 engines:
   piper:
     status: supported
@@ -300,7 +300,7 @@ engines:
     vram_est_mb: 3000
     blocker: Needs legacy stack build (torch 1.13 + tf 4.46)
   s2pro:
-    status: experimental
+    status: supported
     container: s2pro
     stack: sglang
     vram_est_mb: 11000
@@ -315,21 +315,44 @@ engines:
     notes: Dual-AR 5B, 80+ langs. Voice clone via references [{audio_path, text}] — 10-30 s clip + transcript. Always-resident while the container runs (~11 GB) — orchestrator stops/starts it around EditX/LLM loads (Docker socket).
     validation:
       model_load:
-        status: pending
-        last_tested: null
+        status: verified
+        last_tested: 2026-08-22
         description: sgl-omni serve /health 200 on RTX 5060 Ti (flashinfer sm_120 JIT compile)
       synthesis:
-        status: pending
-        last_tested: null
-        description: POST /v1/audio/speech returns WAV bytes
+        status: verified
+        last_tested: 2026-08-22
+        description: POST /v1/audio/speech returns WAV bytes — 4.6 s synth, 44.1 kHz
       voice_clone:
-        status: pending
-        last_tested: null
-        description: references[{audio_path, text}] — ref WAV + transcript
+        status: verified
+        last_tested: 2026-08-23
+        description: references[{audio_path, text}] — en-leo + transcript → 3.8 s / 44.1 kHz WAV, error=None (full stop/start protocol round-trip)
       vram_measured:
-        status: pending
-        last_tested: null
-        description: nvidia-smi — target ≤ 11 GB
+        status: verified
+        last_tested: 2026-08-22
+        description: nvidia-smi — ~11.75 GB pipeline, 15,540 MiB peak (vocoder codec on CPU)
+  editx:
+    status: supported
+    container: engine-editx
+    stack: editx
+    vram_est_mb: 12800
+    notes: Step Audio EditX 3B AWQ-4bit — audio edit + zero-shot TTS. clone/emotion/style/speed/paralinguistic edit types; needs ref WAV + transcript for cloning. 24 kHz output. HEAVY (~12.8 GB resident) — orchestrator stops s2pro/LLM before load.
+    validation:
+      model_load:
+        status: verified
+        last_tested: 2026-08-23
+        description: Engine load 174 s — vllm 0.26 nightly + torch 2.13.0+cu130 (sm_120); all 4 fix layers baked (step1 default, CCCL gate, cu13 symlinks, BatchEncoding coercion)
+      synthesis:
+        status: verified
+        last_tested: 2026-08-23
+        description: POST /synthesize/editx — 200 OK, valid 24 kHz WAV, ~5 s generate (load-dominated RTF 26)
+      edit_types:
+        status: verified
+        last_tested: 2026-08-23
+        description: emotion (8.0 s, RTF 2.26), style (6.2 s, RTF 1.93), speed (10.4 s, RTF 1.70) — all error=None
+      voice_clone:
+        status: verified
+        last_tested: 2026-08-23
+        description: audio_prompt_id + ref_text → 6.5 s sane output. No ref_text → fallback target-text transcript rambles (62 s)
   qwen36:
     status: planned
     container: llm-qwen36
@@ -346,9 +369,9 @@ engines:
       vram_strategy: Global cross-container eviction before LLM load
 summary:
   total: 30
-  supported: 16
+  supported: 18
   deprecated: 0
-  experimental: 10
+  experimental: 8
   blocked: 3
   containers:
     engine-current:
@@ -383,15 +406,15 @@ summary:
       blocked: 1
     s2pro:
       total: 1
-      supported: 0
+      supported: 1
       deprecated: 0
-      experimental: 1
+      experimental: 0
       blocked: 0
     engine-editx:
       total: 1
-      supported: 0
+      supported: 1
       deprecated: 0
-      experimental: 1
+      experimental: 0
       blocked: 0
     llm-qwen36:
       total: 1

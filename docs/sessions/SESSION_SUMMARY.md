@@ -1,6 +1,53 @@
 # Arthur Server — Session Summary
-> Chat sessions: 2026-03-23 → 2026-08-14
+> Chat sessions: 2026-03-23 → 2026-08-22
 > Branch: `main`
+
+---
+
+## Session 2026-08-22/23 — S2-Pro Unblocked (sglang-omni) + Step Audio EditX Deployed
+
+Deployed and validated the two newest engines on the VM (container-only mode, ports 8009/8105/8005). Working tree at `2f44718` (all pushes on `main`).
+
+### S2-Pro (Fish Speech) — UNBLOCKED after 2 months
+
+`docs/issues/s2pro-investigation.md` verdict flipped BLOCKED → UNBLOCKED 2026-08-22. The old pip-built SGLang image (cu128 world, nvjitlink pin conflict) was replaced by an **SGLang-Omni 0.1.3** image (`docker/Dockerfile.sglang` rewritten; new tag `tts-lab-sglang-omni`; served via `sgl-omni serve`).
+
+VRAM fit on the 16 GB card took four rounds (all committed): decode CUDA graphs off (capture OOM), `max_running_requests 2`, `mem_fraction_static 0.85`, and finally **vocoder codec moved to CPU** (`gpu: null` in `s2pro_tts.yaml` — frees ~3.4 GiB; codec is descript-audio-codec, output stays 44.1 kHz). Boot now healthy: one ~11.75 GB pipeline process, 15,540 MiB peak.
+
+| Fact | Detail |
+|---|---|
+| First synth | 182 s — flashinfer sm_120 decode kernels JIT-compiled on first request (nvcc; no prebuilt kernels) |
+| Steady state | 4.6 s for 3.3 s audio via orchestrator (RTF ~11.5; per-step latency from CPU-vocoder IPC) |
+| API quirk | `POST /v1/audio/speech` returns **raw WAV bytes**, not base64 JSON; `/health` lives at server ROOT, not under /v1/ |
+| Cache | 11 G s2-pro cache moved onto `/opt/models` host mount (was in container writable layer — would re-download); flashinfer JIT persisted at `/opt/models/flashinfer-jit` |
+| Orchestrator | s2pro is always-resident ~11 GB → orchestrator stops its container before EditX/LLM loads (`HEAVY` branch), restarts on next s2pro call |
+
+Dispatch fixes: binary-body handling with stdlib wave parse (orchestrator has no numpy), health URL stripping `/v1/`, `SYNTH_TIMEOUT["s2pro"] = 600` (JIT allowance).
+
+### Step Audio EditX — deployed + fully verified (AWQ-4bit)
+
+- `docker/Dockerfile.engine-editx`: ubuntu24.04 base (python 3.12) + **torch 2.13.0+cu130 stable** + **vLLM 0.26 nightly wheel** (wheels.vllm.ai commit 30b34171b) via `uv sync` into `/opt/arthur/Step-Audio-EditX/.venv`. The repo's pinned wheel (torch-2.9.1-era) can never run here — its `_C` links `c10_cuda_check_implementation`, removed from every sm_120-capable torch.
+- Crash loop fixed: image was missing `tts_lab_utils.py` (`COPY` added, 8d432d1).
+- **Weights are NOT downloaded at load** — `_load_editx` requires them pre-present under `/opt/models/editx/{Step-Audio-EditX-AWQ-4bit, Step-Audio-Tokenizer}`. The engine-server's startup availability probe 503s `/synthesize` when absent ("EditX weights missing at /opt/models/editx") and the lazy-load never runs — restart the container after adding weights so the probe re-runs.
+- Weights download (~9 GB AWQ + ~1.5 GB tokenizer, public repos) was kicked off inside the container venv to `/opt/models/editx/` (host mount persists).
+- Orchestrator: `EDITX_URL=http://engine-editx:8105`, `SYNTH_TIMEOUT["editx"] = 600` (vLLM warmup), `HEAVY` branch stops LLM + s2pro containers first; engine-server POST timeout now follows `SYNTH_TIMEOUT` (2f44718).
+- 503 saga: first synth via orchestrator refused with "EditX weights missing" — the availability probe gates `/synthesize` before the lazy-load path (see above).
+- **Four fix layers** baked into the Dockerfile (2026-08-23): `step1.py` `intermediate_tensors = None` default (vllm 0.26 CUDA-graph capture), CCCL version-gate `#if 0` (torch-pinned cudart 13.0 vs pip nvcc 13.3 skew), pip cu13 layout symlinks (`lib64→lib`, `libcudart.so`, stubs `libcuda.so`), and `tts.py` `_generate` BatchEncoding coercion (`apply_chat_template` returns dict-like). Engine-server wrapper injects `CUDA_HOME`/`PATH`/`FLASHINFER_WORKSPACE_BASE` before any ML import. ⚠️ Module-caching trap: patching `tts.py` on disk needs a `docker restart` — the running server keeps `sys.modules` copies.
+
+### Verification (2026-08-22/23)
+
+- **s2pro:** synth verified end-to-end; **voice clone verified 2026-08-23** — `audio_prompt_id=en-leo` + ref_text → 3.8 s / 44.1 kHz WAV, error=None, full orchestrator stop/start round-trip (116 s incl. container start + model load).
+- **editx first synth** (03:32): 7.2 s / 24 kHz WAV, generate alone ~5 s, resident ~12.8 GiB.
+- **editx edit-type tests** (03:40): emotion (8.0 s, RTF 2.26), style (6.2 s, RTF 1.93), speed (10.4 s, RTF 1.70) — all 200 OK, error=None, engine resident (no reload).
+- **editx clone tests** (03:42): clone + ref_text → 6.5 s sane output (RTF 1.66); clone WITHOUT ref_text falls back to target text as prompt transcript → **62 s degenerate ramble** — faithful clones need a real transcript.
+- **2026-08-23 continuation session:** editx image rebuild on VM in progress (`make build-engine ENGINE=editx` — bakes all four fix layers; container recreate + re-verify follow).
+
+### State at close
+
+- s2pro: SUPPORTED, available in orchestrator, synth + clone verified.
+- editx: SUPPORTED, available in orchestrator, first synth + edit types + clone verified; image rebuilt with baked patches.
+- LLM qwen36: stopped while editx resident (eviction protocol) — restart via orchestrator on next LLM call.
+- Counts updated in `docs/engine_compatibility.yaml`: 30 engines — 18 supported, 8 experimental, 3 blocked (+1 planned LLM).
 
 ---
 

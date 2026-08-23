@@ -5,12 +5,19 @@
 #
 # Own stack — incompatible with the lab's python 3.11 containers:
 #   python       3.12 (repo requires >=3.12,<3.14 — hence ubuntu24.04)
-#   torch        nightly cu130 (sm_120 — same as stack.current/mid)
-#   vllm         0.14.0rc2.dev125 dev wheel (wheels.vllm.ai, pinned via
-#                [tool.uv.sources] in the repo's pyproject.toml)
+#   torch        2.13.0+cu130 (stable — sm_120; first torch with a
+#                vllm-pairwise wheel that runs on Blackwell)
+#   vllm         0.26.1rc1.dev1117+g30b34171b nightly wheel
+#                (wheels.vllm.ai commit 30b34171b — pinned below; the
+#                repo's own [tool.uv.sources] wheel is torch-2.9.1-era
+#                and its `c10_cuda_check_implementation` symbol was
+#                REMOVED from every sm_120-capable torch — unusable)
 #   transformers 4.57.x (repo pin <5; vllm-wheel constraint)
 #   weights      /opt/models/editx/ (Step-Audio-EditX[-AWQ-4bit] +
 #                Step-Audio-Tokenizer — HF download on first load)
+#   build-essential — TRITON_ATTN (required by the Step model's
+#                use_alibi_sqrt) JIT-compiles its launchers with the
+#                system C compiler; the runtime base ships none.
 #
 # No REST API — the repo ships a CLI (tts_infer.py). The lab wraps
 # StepAudioTokenizer + StepAudioTTS in-process via the engine-server
@@ -23,6 +30,7 @@ FROM nvidia/cuda:12.8.2-runtime-ubuntu24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-dev python3-pip python3-venv curl git ffmpeg \
+    build-essential ninja-build \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m pip install --no-cache-dir --break-system-packages uv
 
@@ -37,22 +45,110 @@ RUN git clone --depth 1 https://github.com/stepfun-ai/Step-Audio-EditX.git /opt/
     && uv lock --refresh \
     && UV_BREAK_SYSTEM_PACKAGES=1 uv sync --python /usr/bin/python3 --no-install-project
 
-# ── torch nightly cu130 for sm_120 (RTX 5060 Ti) ────────────────────
-# Override torch/torchaudio/torchvision past vllm's ==2.9.1/==0.24.1
-# pins. uv sync installs into the project venv (modern uv has no
-# --system), so the override targets the same venv via uv pip.
-# torchcodec stays as uv resolved it: the inference path (tts.py /
-# tokenizer.py) never imports it, so its ABI pairing is irrelevant.
+# ── vllm 0.26 nightly wheel + torch 2.13.0 (sm_120) ──────────────────
+# The repo's uv.lock pins vllm 0.14.0rc2.dev125, which is built against
+# torch 2.9.1 — its _C extension links the `c10_cuda_check_implementation`
+# symbol, REMOVED from torch after 2.9.1. Every sm_120-capable torch
+# (2.11.0+cu130 stable through the 2.12/2.14/2.15 nightlies) lacks it,
+# so that wheel can never run on this GPU. Use the current main-build
+# wheel from wheels.vllm.ai instead — METADATA: torch==2.13.0,
+# torchaudio==2.11.0, torchvision==0.28.0 (torch 2.13.0 stable HAS
+# sm_120). --extra-index-url (NOT --index-url, which would drop PyPI
+# and break outlines-core resolution). uv sync installs into the
+# project venv (modern uv has no --system), so the override targets
+# the same venv via uv pip.
 RUN uv pip install --python /opt/arthur/Step-Audio-EditX/.venv/bin/python \
-        --pre --reinstall-package torch --reinstall-package torchaudio \
-        --reinstall-package torchvision \
-        torch torchaudio torchvision \
-        --index-url https://download.pytorch.org/whl/nightly/cu130
+        "https://wheels.vllm.ai/30b34171b113887e0e08d7f6d06e2e5a5c33b9d2/vllm-0.26.1rc1.dev1117%2Bg30b34171b-cp38-abi3-manylinux_2_28_x86_64.whl" \
+        torch==2.13.0+cu130 torchaudio==2.11.0+cu130 torchvision==0.28.0+cu130 \
+        --extra-index-url https://download.pytorch.org/whl/cu130
 
-# ── Build-time smoke test — the vllm dev wheel under overridden torch ──
-# No GPU during build; engine init + kernel load validated on the VM.
+# ── vllm 0.26 Step1 model upstream bug ───────────────────────────────
+# Step1ForCausalLM.forward() declares intermediate_tensors WITHOUT a
+# default (all other PP-capable models default it). CUDA-graph capture
+# calls model(**model_inputs) without that key → TypeError at load.
+# One-line sed: give it the default; the body already handles None
+# (only the non-first-PP-rank branch asserts it non-None).
+RUN sed -i "s/        intermediate_tensors: IntermediateTensors | None,\$/        intermediate_tensors: IntermediateTensors | None = None,/" \
+        /opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/vllm/model_executor/models/step1.py
+
+# ── FlashInfer sampling-module JIT toolchain ─────────────────────────
+# vllm 0.26's flashinfer dep JIT-compiles top_k_mask_logits at engine
+# init via ninja + nvcc — neither ships in the runtime base (and the
+# venv's python is uv-managed). pip nvidia-cuda-nvcc-cu12 installs a
+# self-contained CUDA 13.3 toolkit under nvidia/cu13. FLASHINFER_*
+# workspace lands on /opt/models (host mount) so recreates don't
+# recompile (~2-5 min first JIT).
+RUN uv pip install --python /opt/arthur/Step-Audio-EditX/.venv/bin/python \
+        nvidia-cuda-nvcc-cu12 cuda-cccl nvidia-cuda-runtime-cu12
+
+# ── FlashInfer bundled-CCCL version-gate patch ─────────────────────
+# torch 2.13.0+cu130 pins nvidia-cuda-runtime-cu12==13.0.88 (headers
+# report CUDART_VERSION 13000) while the unpinned nvcc install above
+# lands 13.3 — mixed toolkit inside nvidia/cu13. The bundled CCCL's
+# cuda_toolkit.h gate compares nvcc (13,3) against CUDART (13,0) and
+# fires #error — but the sampling/renorm kernels only touch cudart
+# APIs stable across 13.x, so the skew is ABI-benign. Disable the
+# gate (validated 2026-08-23; compile clean + kernels verified).
+RUN sed -i 's|^#[[:space:]]*if !_CCCL_CUDACC_EQUAL((CUDART_VERSION.*|#    if 0 // patched: nvcc 13.3 vs CUDART 13.0 skew (torch pin)|' \
+        /opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/flashinfer/data/cccl/libcudacxx/include/cuda/std/__cccl/cuda_toolkit.h
+
+# ── pip cu13 toolkit layout fixes for the flashinfer JIT link step ──
+# flashinfer's generated build.ninja links with -L$CUDA_HOME/lib64
+# (-lcudart) and -L$CUDA_HOME/lib64/stubs (-lcuda), but pip's CUDA-13
+# packages install under lib/ and ship only versioned sonames. Symlink
+# the linker names so the link succeeds (validated 2026-08-23).
+# libcuda.so.1 is the driver lib the nvidia runtime mounts at run
+# time — absent during build, so fall back to an empty stub (fine:
+# ld -shared resolves no symbols from it; the sampler never calls the
+# driver API).
+RUN cd /opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13 \
+    && ln -sfn lib lib64 \
+    && ln -sfn libcudart.so.13 lib/libcudart.so \
+    && mkdir -p lib/stubs \
+    && { ln -sfn /usr/lib/x86_64-linux-gnu/libcuda.so.1 lib/stubs/libcuda.so 2>/dev/null || touch lib/stubs/libcuda.so; }
+
+# ── tts.py _generate BatchEncoding coercion (upstream bug) ───────────
+# model_loader.load_model returns a raw AutoTokenizer; this checkpoint's
+# apply_chat_template(tokenize=True) returns a BatchEncoding (dict-like)
+# for custom templates; the repo's _generate iterates it as a plain
+# list → its string keys ('input_ids'/'attention_mask') → TypeError
+# '<=' between 'int' and 'str' at the <audio_N> filter (tts.py:278).
+# Coerce to list[int] at the top of _generate (2026-08-23, validated).
+RUN /opt/arthur/Step-Audio-EditX/.venv/bin/python - <<'EOF'
+import sys
+p = '/opt/arthur/Step-Audio-EditX/tts.py'
+src = open(p).read()
+marker = '        # Debug: analyze INPUT token distribution'
+n = src.count(marker)
+if n != 1:
+    print(f'MARKER_COUNT={n} — aborting')
+    sys.exit(1)
+ins = ('        # Coerce BatchEncoding -> list[int]: this checkpoint tokenizer\'s\n'
+       '        # apply_chat_template returns a dict-like for custom templates;\n'
+       '        # iterating it yields its string keys (2026-08-23 patch).\n'
+       '        if hasattr(token_ids, "input_ids"):\n'
+       '            token_ids = list(token_ids["input_ids"])\n')
+src = src.replace(marker, ins + marker, 1)
+open(p, 'w').write(src)
+print('PATCHED_OK')
+EOF
+
+ENV CUDA_HOME=/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13 \
+    PATH=/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    FLASHINFER_WORKSPACE_BASE=/opt/models/flashinfer-editx-jit
+
+# ── Build-time smoke test — the vllm nightly wheel under torch 2.13 ──
+# No GPU during build, and vllm's CUDA platform only resolves on a GPU
+# host — the true ABI pair check (NvmlCudaPlatform + cuda.is_available)
+# runs on the VM (validated 2026-08-23). Here: force the platform
+# resolution path (vllm 0.26 renamed the C ext away from vllm._C) and
+# pin-check the torch version — catches wrong-wheel classes at build.
 # Must use the project venv's python — uv sync installs there (no --system).
-RUN /opt/arthur/Step-Audio-EditX/.venv/bin/python -c "import torch, vllm, transformers, torchaudio; print('editx smoke OK:', torch.__version__, '| transformers', transformers.__version__)"
+RUN /opt/arthur/Step-Audio-EditX/.venv/bin/python -c "\
+import torch, vllm, transformers, torchaudio;\
+from vllm.platforms import current_platform;\
+assert torch.__version__.startswith('2.13'), torch.__version__;\
+print('editx smoke OK: torch', torch.__version__, '| vllm', vllm.__version__, '| platform', current_platform)"
 
 # ── Lab engine-server wrapper ───────────────────────────────────────
 # NOTE: unlike engine-current/qwen (which inherit tts-lab-base and its

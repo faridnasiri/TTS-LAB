@@ -19,6 +19,18 @@ import time
 import traceback
 import threading
 
+# ── FlashInfer JIT toolchain (editx container only) ──────────────
+# The runtime base image ships no ninja/nvcc; the pip CUDA 13.3
+# toolkit lives under nvidia/cu13 in the editx venv. Set the env
+# BEFORE any ML import: spawn'd EngineCore children inherit os.environ,
+# so the flashinfer sampling-module JIT (top_k_mask_logits) finds
+# nvcc + ninja. Matches Dockerfile.engine-editx ENV on the next build.
+_EDITX_CUDA = "/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13"
+if os.path.isdir(_EDITX_CUDA):
+    os.environ.setdefault("CUDA_HOME", _EDITX_CUDA)
+    os.environ["PATH"] = os.path.join(_EDITX_CUDA, "bin") + os.pathsep + os.environ.get("PATH", "")
+os.environ.setdefault("FLASHINFER_WORKSPACE_BASE", "/opt/models/flashinfer-editx-jit")
+
 # ── Shims MUST be imported before any ML library ────────────────
 import sys as _sys
 

@@ -26,7 +26,7 @@ Base (nvidia/cuda:12.8.2-runtime-ubuntu22.04)
   │   └── Engine:mid        VibeVoice, Higgs (experimental), port 8103
   ├── Stack:legacy     torch 1.13 + transformers 4.46 + CUDA 11.7
   │   └── Engine:legacy     IndexTTS, Parler (blocked), port 8102
-  ├── Stack:editx      python 3.12 + vllm dev wheel + torch nightly cu130 (ubuntu24.04)
+  ├── Stack:editx      python 3.12 + vllm 0.26 nightly wheel + torch 2.13.0 stable cu130 (ubuntu24.04)
   │   └── Engine:editx      Step Audio EditX (AWQ-4bit), port 8105
   ├── SGLang-Omni      sgl-omni serve + flashinfer (devel base, nvcc for sm_120 JIT)
   │   └── Engine:s2pro      Fish S2-Pro 5B, port 8005
@@ -71,7 +71,7 @@ Deploy command (on VM):
 | `tts_lab_shims.py` | 590 | **Imported FIRST** — `sys.modules` stubs, transformers compat patches, thread pinning |
 | `tts_lab_shims_legacy.py` | 50 | Minimal shims for legacy container (torch 1.13 / tf 4.46) |
 | `tts_lab_config.py` | 293 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
-| `tts_lab_engines.py` | 2,100 | All 30 `_load_X()` + `_synth_X()` pairs (29 TTS + 1 LLM), `LOADERS`/`SYNTHERS` dicts |
+| `tts_lab_engines.py` | 2,350 | All 30 `_load_X()` + `_synth_X()` pairs (29 TTS + 1 LLM), `LOADERS`/`SYNTHERS` dicts |
 | `tts_lab_dispatch.py` | 600 | Availability probing, `_ensure_loaded()`, `_do_synth()`, global TTS eviction, LLM dispatch |
 | `tts_lab_engine_server.py` | 340 | Engine-container FastAPI server with lazy-loading + VRAM eviction + `/evict` endpoint |
 | `tts_lab_orpheus_server.py` | 107 | Orpheus-specific vllm server |
@@ -218,7 +218,7 @@ Response differs from TTS engines:
 ## Common Gotchas
 
 - **numpy<2.0 requirement:** `vllm` pulls in numpy 2.x which breaks `numpy.core.multiarray`. Pinned as `numpy>=1.24,<2.0` and `protobuf>=3.20,<4.0` in `requirements.txt`.
-- **torch nightly for sm_120:** RTX 5060 Ti (Blackwell) needs torch >= 2.12 nightly builds with CUDA 12.8+. Stable torch releases before 2.12 lack sm_120 support. Current: `2.12.0.dev20260408+cu128`.
+- **torch nightly for sm_120:** RTX 5060 Ti (Blackwell) needs torch >= 2.12 nightly builds with CUDA 12.8+. Stable torch releases before 2.12 lack sm_120 support. Current (stack current/mid): `2.12.0.dev20260408+cu128`. **Exception — Stack:editx:** torch **2.13.0+cu130 stable** (the first stable torch with sm_120) + vllm 0.26 nightly wheel; the repo's pinned vllm wheel (torch-2.9.1-era) links a symbol removed from every sm_120-capable torch.
 - **torchcodec metadata stub:** Must create a dummy `torchcodec-99.0.0.dist-info/METADATA` in site-packages (see `Dockerfile.stack.current` line 12). If missing, Chatterbox and Zonos fail.
 - **transformers version conflicts:** Engine-current uses tf 5.12.1; engine-mid uses tf 4.51.3; engine-legacy uses tf 4.46. `ROPE_INIT_FUNCTIONS` removed in 5.x. `TransformGetItemToIndex` added in 4.54.
 - **inspect.getsourcefile crash:** `torch._dynamo` import chain corrupts module `__file__` attributes on Python 3.11. Fixed by patching `inspect.getsourcefile` in `tts_lab_shims.py`.
@@ -269,4 +269,4 @@ Response differs from TTS engines:
 - **Services:** `arthur-lab.service` (port 8001), `arthur-imglab.service` (port 8002)
 - **Image Lab models:** `/opt/arthur-img-models/` (separate disk)
 - **Container registry:** `ghcr.io/farid-nasiri/tts-lab-*`
-- **Engine status:** See `docs/engine_compatibility.yaml` — 16 supported, 10 experimental, 3 blocked
+- **Engine status:** See `docs/engine_compatibility.yaml` — 18 supported, 8 experimental, 3 blocked (+1 planned LLM)
