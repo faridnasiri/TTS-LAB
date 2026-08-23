@@ -17,7 +17,7 @@ import base64, json, os, threading, time
 from typing import Dict, Tuple
 
 from tts_lab_config import (
-    MODEL_ORDER, MODEL_INFO, HEAVY, _state,
+    MODEL_ORDER, MODEL_INFO, HEAVY, SYNTH_TIMEOUT, _state,
     _ref_wav_path, slog,
 )
 from tts_lab_utils import _wav_dur
@@ -571,12 +571,14 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
         if _container_running(_S2PRO_CONTAINER_NAME):
             _container_stop(_S2PRO_CONTAINER_NAME, label="S2-Pro")
 
-    # Standard engine server API
+    # Standard engine server API. Timeout follows SYNTH_TIMEOUT (tts_lab.py
+    # waits at least this long on its side): editx's first load pays a
+    # ~9 GB HF download + vLLM init and needs the 600 s allowance.
     t0 = time.perf_counter()
     r = httpx.post(
         f"{url}/synthesize",
         json={"engine": name, "text": text, "params": params},
-        timeout=300.0,
+        timeout=SYNTH_TIMEOUT.get(name, 300.0),
     )
     try:
         r.raise_for_status()
