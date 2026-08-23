@@ -1008,6 +1008,10 @@ def _synth_qwen3tts(inst, text, params):
     ref_id  = params.get("audio_prompt_id", "")
     ref_wav = str(_ref_wav_path(ref_id)) if ref_id else None
     ref_txt = params.get("ref_text", "").strip() or None
+    if not ref_txt and ref_wav:
+        # Faithful clone prompt: curated refs carry their real transcript in
+        # the sidecar json — without it, x-vector-only loses speaker fidelity.
+        ref_txt = _ref_transcript(ref_wav) or None
 
     def _float(key, default):
         try:
@@ -2050,6 +2054,11 @@ def _synth_omnivoice(inst, text, params):
     ref_id = params.get("audio_prompt_id", "")
     ref_wav = str(_ref_wav_path(ref_id)) if ref_id else None
     ref_txt = params.get("ref_text", "").strip() or None
+    if not ref_txt and ref_wav:
+        # Sidecar transcript fallback — same as editx/s2pro: curated refs
+        # carry their real transcript in {stem}.json, and cloning without a
+        # faithful prompt transcript reads flat/robotic.
+        ref_txt = _ref_transcript(ref_wav) or None
 
     if ref_wav:
         gen_kw["ref_audio"] = ref_wav
