@@ -242,7 +242,7 @@ Response differs from TTS engines:
 | `docs/reference/VM_SETUP_REFERENCE.md` | Proxmox VM setup, disk expansion |
 | `docs/reference/GPU_QA_REFERENCE.md` | Blackwell sm_120 library compatibility |
 | `docs/reference/GPU_UPGRADE_ANALYSIS.md` | GPU selection analysis |
-| `docs/benchmarks/*.md` | RTF benchmark results by date |
+| `docs/benchmarks/*.md` | RTF benchmark results by date — latest: `BENCHMARK_RESULTS_2026-08-23_EDITX-S2PRO.md` (VRAM + RTF for the two HEAVY engines) |
 | `docs/containerization/07-QWEN36-LLM-PLAN.md` | Qwen 3.6 LLM integration plan — model selection, VRAM strategy, eviction protocol |
 | `docs/containerization/08-QWEN36-DEPLOYMENT.md` | **Qwen 3.6 LLM deployment reference** — full deploy guide, API, VRAM budget, troubleshooting |
 | `docs/image-lab/FLUX2_KLEIN_9B_KV.md` | **FLUX.2 Klein 9B-KV engine** — GGUF config derivation, Qwen3-8B encoder, VRAM budget |

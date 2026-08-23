@@ -617,6 +617,12 @@ The engine server starts with **0 engines loaded**. On synthesis:
 | dia | ~4 GB | Light engines only |
 | bark | ~12 GB | Alone |
 | qwen3tts | ~4.2 GB | Light engines only |
+| s2pro (Fish S2-Pro 5B, sglang-omni) | ~11.75 GB (peak 15,540 MiB) | Alone — orchestrator stops/starts around EditX/LLM |
+| editx (Step Audio EditX AWQ-4bit) | ~12.8 GB | Alone — orchestrator stops s2pro/LLM before load |
+
+> HEAVY engines (s2pro / editx): measured 2026-08-23 — full RTF + latency tables in
+> [docs/benchmarks/BENCHMARK_RESULTS_2026-08-23_EDITX-S2PRO.md](../benchmarks/BENCHMARK_RESULTS_2026-08-23_EDITX-S2PRO.md).
+> LLM qwen36 retired 2026-08-23 (container + images removed from VM).
 
 ### 14.3 Budget Scenarios (16 GB Total)
 
