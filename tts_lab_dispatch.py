@@ -776,6 +776,126 @@ def _evict_all_tts_engines() -> dict:
     return results
 
 
+# ── Loaded-model probing (for orchestrator /status) ────────────────
+# Engine containers keep AT MOST ONE model resident (lazy-load + evict).
+# /health exposes which one via `engines.<name>.loaded` + `current_engine`
+# + device-wide GPU stats. Cache briefly — /status gets polled.
+
+_loaded_probe_cache: dict = {}
+_loaded_probe_ts: float = 0.0
+_LOADED_PROBE_TTL = 2.0  # seconds
+
+
+def _probe_containers_loaded() -> dict:
+    """Query every engine container's /health; return per-container info.
+
+    Result shape: {base_url: {"engines": {name: {"loaded": bool, ...}},
+                              "current_engine": str | None,
+                              "gpu": {...} | None}}
+    SGLang servers (s2pro/vibevoice/higgs — always-resident models, no
+    /evict endpoint) are probed at their server root and reported under
+    `sglang_up` instead.
+    """
+    global _loaded_probe_cache, _loaded_probe_ts
+    import httpx
+    now = time.time()
+    with _import_cache_lock:
+        if _loaded_probe_cache and now - _loaded_probe_ts < _LOADED_PROBE_TTL:
+            return _loaded_probe_cache
+
+    out: dict = {}
+    for base in sorted(_ENGINE_CONTAINER_URLS):
+        try:
+            r = httpx.get(f"{base}/health", timeout=3.0)
+            if r.status_code == 200:
+                data = r.json()
+                out[base] = {
+                    "engines":         data.get("engines", {}),
+                    "current_engine":  data.get("current_engine"),
+                    "gpu":             data.get("gpu"),
+                }
+            else:
+                out[base] = {"engines": {}, "current_engine": None, "gpu": None,
+                             "error": f"HTTP {r.status_code}"}
+        except Exception as e:
+            out[base] = {"engines": {}, "current_engine": None, "gpu": None,
+                         "error": str(e)}
+
+    # SGLang servers: no `engines` map — model(s) resident iff server up.
+    for sgl_url in sorted(_SGLANG_URLS):
+        base = sgl_url.split("/v1/")[0]
+        try:
+            r = httpx.get(f"{base}/health", timeout=3.0)
+            out[base] = {
+                "engines": {}, "current_engine": None, "gpu": None,
+                "sglang_up": r.status_code == 200,
+            }
+        except Exception:
+            out[base] = {"engines": {}, "current_engine": None, "gpu": None,
+                         "sglang_up": False}
+
+    with _import_cache_lock:
+        _loaded_probe_cache = out
+        _loaded_probe_ts = now
+    return out
+
+
+def _evict_engine(name: str) -> dict:
+    """Evict ONE engine from VRAM.
+
+    Local mode: unload the in-process instance + empty CUDA cache.
+    Remote mode: POST /evict on the engine's container (standard engine
+    servers). SGLang servers have no /evict — their models are
+    always-resident, so stop the container itself (restarted lazily on
+    next synthesis).
+    """
+    if name not in MODEL_ORDER:
+        return {"model": name, "error": f"Unknown engine: {name}"}
+
+    url = _REMOTE_ENGINES.get(name)
+    if url is None:
+        # ── Local (bare-metal) — in-process unload ──
+        st = _state[name]
+        with st["lock"]:
+            if st["instance"] is not None:
+                from tts_lab_utils import _safe_del
+                slog("VRAM", name, "Evicting …")
+                _safe_del(st["instance"])
+                st["instance"] = None
+                st["status"] = "unloaded"
+                st["loaded_model"] = None
+                st["loaded_voice"] = None
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
+        return {"model": name, "evicted": True, "mode": "local"}
+
+    import httpx
+    stripped = url.rstrip("/")
+    if stripped in _SGLANG_URLS:
+        base = stripped.split("/v1/")[0]
+        if _HAS_DOCKER_SOCK and _container_stop(_S2PRO_CONTAINER_NAME, label="S2-Pro"):
+            return {"model": name, "evicted": True, "mode": "remote-sglang",
+                    "container": base}
+        return {"model": name, "evicted": False, "mode": "remote-sglang",
+                "container": base,
+                "note": "SGLang server holds its model always-resident — no "
+                        "/evict endpoint (and no Docker socket to stop it)"}
+    try:
+        r = httpx.post(f"{stripped}/evict", timeout=10.0)
+        if r.status_code == 200:
+            data = r.json()
+            return {"model": name, "evicted": bool(data.get("evicted")),
+                    "container": stripped}
+        return {"model": name, "evicted": False, "container": stripped,
+                "error": f"HTTP {r.status_code}", "detail": r.text[:200]}
+    except Exception as e:
+        return {"model": name, "evicted": False, "container": stripped,
+                "error": str(e)}
+
+
 def _do_synth_llm(name: str, text: str, params: dict) -> dict:
     """LLM text-generation dispatch with global TTS eviction.
 

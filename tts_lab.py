@@ -64,7 +64,23 @@ from tts_lab_ui import build_page
 if _ORCHESTRATOR_MODE:
     _process_persian_text = None
     _piper_voices_fn = None
-    _ram_mb = lambda: (0, 0, 0)
+
+    def _ram_mb():
+        """Host RAM via /proc/meminfo — no psutil/torch in the orchestrator.
+        /proc/meminfo inside a container reports HOST totals, which is what
+        the 'RAM' bar in the UI means here. Returns (total, used, avail) MB."""
+        try:
+            mem = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, _, v = line.partition(":")
+                    mem[k] = int(v.strip().split()[0]) // 1024  # kB → MB
+            total = mem.get("MemTotal", 0)
+            avail = mem.get("MemAvailable", mem.get("MemFree", 0))
+            return total, max(0, total - avail), avail
+        except Exception:
+            return 0, 0, 0
+
     voice_library_mod = None
 else:
     from tts_lab_engines import _process_persian_text
@@ -133,20 +149,37 @@ async def status():
         except Exception:
             gpu_info = {"name": DEVICE_NAME, "vram_total": VRAM_TOTAL_MB}
     elif DEVICE == "remote":
-        # Query engine server for GPU info (it has torch + CUDA)
-        try:
-            import httpx
-            # Any engine URL points to the same engine server — use PIPER_URL as canonical
-            engine_url = _os.environ.get("PIPER_URL", "http://engine-current:8101")
-            engine_health_url = engine_url + "/health"
-            r = httpx.get(engine_health_url, timeout=5.0)
-            if r.status_code == 200:
-                eng_data = r.json()
-                if eng_data.get("gpu"):
-                    gpu_info = eng_data["gpu"]
-        except Exception:
-            pass
-        if not gpu_info:
+        # Merge live loaded-state from every engine container so the UI can
+        # show which model(s) are resident in VRAM (and evict them one at a
+        # time). Containers report engines.<name>.loaded + current_engine;
+        # SGLang servers keep models always-resident while the server runs.
+        from tts_lab_dispatch import _REMOTE_ENGINES, _SGLANG_URLS, _probe_containers_loaded
+        probes = _probe_containers_loaded()
+        best_gpu = None
+        for n in MODEL_ORDER:
+            url = _REMOTE_ENGINES.get(n)
+            if not url:
+                continue
+            stripped = url.rstrip("/")
+            if stripped in _SGLANG_URLS:
+                base = stripped.split("/v1/")[0]
+                probe = probes.get(base, {})
+                if probe.get("sglang_up"):
+                    models[n]["status"] = "loaded"  # resident while server runs
+                if probe.get("gpu"):
+                    best_gpu = probe["gpu"]
+                continue
+            probe = probes.get(stripped, {})
+            eng_info = probe.get("engines", {}).get(n, {})
+            if eng_info.get("loaded"):
+                models[n]["status"]       = "loaded"
+                models[n]["loaded_model"] = probe.get("current_engine")
+                models[n]["container"]    = stripped
+            if probe.get("gpu"):
+                best_gpu = probe["gpu"]
+        if best_gpu:
+            gpu_info = best_gpu
+        else:
             gpu_info = {"mode": "orchestrator — engines served by remote containers"}
     return JSONResponse({
         "models": models,
@@ -233,6 +266,19 @@ async def unload_model(model: str):
         st["instance"] = None
         st["status"]   = "unloaded"
     return {"unloaded": model}
+
+
+@app.post("/models/{model}/evict")
+async def evict_model(model: str):
+    """Evict ONE engine from VRAM — routes to the engine's container /evict
+    (standard engine servers) or stops the SGLang server container
+    (s2pro/vibevoice/higgs — always-resident). Local mode unloads the
+    in-process instance. Mirrors /evict-all but for a single engine.
+    """
+    if model not in MODEL_ORDER:
+        raise HTTPException(404, f"Unknown engine: {model}")
+    from tts_lab_dispatch import _evict_engine
+    return JSONResponse(_evict_engine(model))
 
 
 @app.post("/models/{model}/load")

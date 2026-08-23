@@ -644,8 +644,10 @@ def _build_params(name: str) -> str:
             '<code>[pitch up]</code> '
             '<code>[slowly]</code><br>'
             '<strong>80+ languages</strong> (auto-detected): '
-            'Persian/Farsi, English, Chinese, Japanese, Korean, '
-            'Arabic, French, German, Spanish, and many more.<br>'
+            'English, Chinese, Japanese, Korean, Arabic, French, German, '
+            'Spanish, and many more.<br>'
+            '<em>⚠ Persian/Farsi accent is weak on S2-Pro — for Persian '
+            'use <strong>OmniVoice</strong> (fa) instead.</em><br>'
             '<em>Place tags inline in your text.</em>'
             '</div>'
         )
@@ -659,6 +661,12 @@ def _build_params(name: str) -> str:
                 _grp('Voice',
                      '<input type="text" class="form-control form-control-sm" data-param="voice" '
                      'placeholder="default (or any name)">'),
+                _grp('Language <span style="font-size:.7rem;color:#aaa">(server enum)</span>',
+                     _sel("language",
+                          [("auto","Auto (detect)"),("chinese","Chinese"),("english","English"),
+                           ("french","French"),("german","German"),("italian","Italian"),
+                           ("japanese","Japanese"),("korean","Korean"),("portuguese","Portuguese"),
+                           ("russian","Russian"),("spanish","Spanish")], "auto")),
             )
             + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice clone <span style="font-weight:400;color:#888">(optional — no ref = default voice)</span></div>'
             + f'<div class="param-row">{_upload_widget("s2-file", "s2-status", "s2-prompt-id", "Reference WAV — 10-30s of target voice")}</div>'
@@ -678,6 +686,10 @@ def _build_params(name: str) -> str:
             'paralinguistics (inline <code>[Laughter]</code> tags).<br>'
             '<strong>Zero-shot clone:</strong> Mandarin, English, Sichuanese, '
             'Cantonese, Japanese, Korean.<br>'
+            '<em>⚠ Persian is not a native language — clones follow the ref '
+            'voice anyway and mostly work, but very deep male refs '
+            '(fa-ryan, fa-adam) ramble — use <strong>OmniVoice</strong> (fa) '
+            'for those.</em><br>'
             '<em>Emotion/style/speed edits need the ref WAV (edit source) — '
             'without one, the first voice-library clip is used.</em>'
             '</div>'
@@ -784,6 +796,14 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .gpu-badge.ok{background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;}
 .gpu-badge.cpu{background:#3a1e1e;color:#f44336;border:1px solid #f44336;}
 .gpu-badge.remote{background:#1e2e3a;color:#4c9faf;border:1px solid #4c9faf;}
+.loaded-wrap{display:flex;align-items:center;gap:6px;flex-wrap:wrap;max-width:520px;}
+.loaded-label{font-size:.68rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;}
+.chip{display:inline-flex;align-items:center;gap:5px;background:#1e3a1e;color:#4caf50;border:1px solid #4caf50;
+      border-radius:20px;padding:2px 6px 2px 10px;font-size:.72rem;font-weight:700;white-space:nowrap;}
+.chip-x{background:none;border:none;color:inherit;cursor:pointer;font-size:.85rem;line-height:1;
+        padding:0 2px;opacity:.7;border-radius:50%;}
+.chip-x:hover{opacity:1;background:rgba(76,175,80,.2);}
+.chip-idle{background:transparent;color:var(--muted);border:1px dashed #3a4160;font-weight:400;}
 .main-wrap{display:flex;flex:1;min-height:0;}
 .sidebar{width:240px;min-width:200px;background:var(--panel);border-right:1px solid var(--border);
          overflow-y:auto;display:flex;flex-direction:column;flex-shrink:0;}
@@ -793,6 +813,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
             border:none;background:transparent;color:var(--text);width:100%;text-align:left;
             border-bottom:1px solid #1e2235;transition:background .12s;}
 .engine-btn:hover{background:#22253a;}
+.engine-btn.loaded{border-left:3px solid #4caf50;background:rgba(76,175,80,.10);}
 .engine-btn.active{background:#2d3561;border-left:3px solid var(--accent);}
 .engine-btn .eng-name{font-size:.82rem;font-weight:600;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .engine-btn .eng-rtf{font-size:.65rem;color:var(--muted);white-space:nowrap;}
@@ -1121,6 +1142,23 @@ document.addEventListener('change', e => {
   }
 });
 
+// When a reference voice is picked, auto-select the pane's language
+// dropdown to the ref's language code when the engine supports it
+// (e.g. picking fa-ryan in OmniVoice → language jumps to "fa")
+document.addEventListener('change', e => {
+  const sel = e.target;
+  if (sel.tagName !== 'SELECT' || !/(prompt-id|ref-select)$/.test(sel.id)) return;
+  const opt = sel.selectedOptions[0];
+  const lang = opt ? opt.dataset.lang : '';
+  if (!lang) return;
+  const langSel = sel.closest('.engine-pane') && sel.closest('.engine-pane').querySelector('[data-param="language"]');
+  if (!langSel) return;
+  if (Array.from(langSel.options).some(o => o.value === lang)) {
+    langSel.value = lang;
+    showToast('🎙 ' + (opt.textContent.split(' — ')[0] || 'ref voice') + ' → language set to "' + lang + '"');
+  }
+});
+
 // Live preview as user types
 document.addEventListener('input', e => {
   if (e.target.id === 'text-input') schedulePreview();
@@ -1236,6 +1274,8 @@ async function synth(model) {
     hideChatLoading(model);
     if (btn)  btn.disabled = false;
     if (spin) spin.style.display = 'none';
+    // Refresh loaded-in-VRAM chips + dots — the model may now be resident
+    refreshStatus();
   }
 }
 
@@ -1434,12 +1474,33 @@ async function preload(model) {
 }
 
 async function unload(model) {
-  dbg('LOAD',    model, `⏏ Unload requested`);
-  dbg('REQUEST', model, `DELETE /models/${model}`);
-  const res = await fetch(`${API}/models/${model}`, {method:'DELETE'});
-  dbg('REQUEST', model, `← HTTP ${res.status}`);
-  dbg('LOAD',    model, `Model unloaded`);
-  refreshStatus();
+  await evictModel(model, false);
+}
+
+/* Evict a single engine from VRAM — POST /models/{model}/evict
+   (orchestrator routes to the container's /evict; SGLang servers get their
+   container stopped). Works in both remote and bare-metal modes. */
+async function evictModel(model, ask = true) {
+  const label = (document.querySelector(`[data-engine="${model}"]`)?.dataset.label) || model;
+  if (ask && !confirm(`Evict ${label} from VRAM?\n\nThe model will reload lazily on the next synthesis.`)) return;
+  dbg('VRAM',    model, `⏏ Evict requested`);
+  dbg('REQUEST', model, `POST /models/${model}/evict`);
+  try {
+    const res = await fetch(`${API}/models/${model}/evict`, {method:'POST'});
+    const data = await res.json();
+    dbg('REQUEST', model, `← HTTP ${res.status}: ` + JSON.stringify(data));
+    await refreshStatus();
+    if (data.evicted) {
+      dbg('VRAM', model, 'Evicted from VRAM');
+      showToast(`Evicted ${label} from VRAM`);
+    } else {
+      dbg('VRAM', model, 'Not evicted — ' + (data.note || data.error || 'unknown'));
+      showToast(`⚠ ${label}: ${data.note || data.error || 'not evicted'}`);
+    }
+  } catch(e) {
+    dbg('ERROR', model, 'Evict failed: ' + e);
+    showToast('Evict failed: ' + e);
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1495,13 +1556,22 @@ function playRefPreview(selectId) {
    ═══════════════════════════════════════════════════════════════ */
 let _lastModelStatus = {};
 let _firstPoll = true;
+/* Sidebar dot: 🟢 ready (available or loaded), 🟡 loading, 🔴 error, ⚫ offline.
+   Loaded engines are additionally highlighted via the .loaded button class
+   and the '🧠 In VRAM' chips. */
+function dotIcon(m) {
+  return m.status==='loading' ? '🟡' : m.status==='error' ? '🔴'
+       : (m.status==='loaded' || m.available) ? '🟢' : '⚫';
+}
 async function refreshStatus() {
   try {
     const d = await (await fetch(`${API}/status`)).json();
     const {total, used} = d.system;
-    const pct = (used/total*100).toFixed(1);
-    document.getElementById('ram-bar').style.width = pct + '%';
-    document.getElementById('ram-text').textContent = `RAM ${used}/${total} MB  (${pct}%)`;
+    const ramPct = total > 0 ? (used/total*100).toFixed(1) : '—';
+    document.getElementById('ram-bar').style.width = (total > 0 ? ramPct : 0) + '%';
+    document.getElementById('ram-text').textContent = total > 0
+      ? `RAM ${used}/${total} MB  (${ramPct}%)`
+      : 'RAM — (host stats unavailable)';
     if (d.gpu && d.gpu.vram_total) {
       const gUsed = d.gpu.vram_used || 0, gTot = d.gpu.vram_total;
       const gPct  = (gUsed/gTot*100).toFixed(1);
@@ -1514,20 +1584,37 @@ async function refreshStatus() {
         badge.textContent = `🟢 ${d.gpu.name} · ${gTot} MB VRAM`;
       }
     }
+    // ── Loaded-in-VRAM chips (one per resident model, ✕ to evict) ──
+    const loaded = Object.entries(d.models).filter(([,m]) => m.status === 'loaded');
+    const wrap = document.getElementById('loaded-wrap');
+    const chips = document.getElementById('loaded-chips');
+    if (loaded.length) {
+      wrap.style.display = 'flex';
+      chips.innerHTML = loaded.map(([n, m]) => {
+        const label = m.label || n;
+        const host  = m.container ? m.container.replace(/^https?:\/\//, '') : '';
+        return `<span class="chip" title="${host ? 'Resident in ' + host : 'Resident in VRAM'} — ✕ evicts it">🧠 ${label}` +
+               `<button class="chip-x" onclick="evictModel('${n}')" title="Evict ${label} from VRAM">✕</button></span>`;
+      }).join('');
+    } else {
+      // Keep the row visible so it's clear the feature is live — show idle state
+      wrap.style.display = 'flex';
+      chips.innerHTML = '<span class="chip chip-idle">nothing loaded</span>';
+    }
     if (_firstPoll) {
       _firstPoll = false;
       const gpu = d.gpu ? `  VRAM ${d.gpu.vram_used}/${d.gpu.vram_total} MB` : '';
       dbg('STATUS','—',`Server up — RAM ${used}/${total} MB${gpu}`);
       Object.entries(d.models).forEach(([n, m]) => {
         _lastModelStatus[n] = m.status;
-        const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
+        const icon = dotIcon(m);
         dbg('STATUS', n, `${icon} initial state: ${m.status}` + (m.error ? `  — ${m.error}` : ''));
       });
     } else {
       Object.entries(d.models).forEach(([n, m]) => {
         const prev = _lastModelStatus[n];
         if (prev !== m.status) {
-          const icon = m.status==='loaded'?'🟢':m.status==='loading'?'🟡':m.status==='error'?'🔴':'⚫';
+          const icon = dotIcon(m);
           const mdl  = m.loaded_model ? `  model=${m.loaded_model.split('/').pop()}` : '';
           dbg('STATUS', n, `${icon} ${prev} → ${m.status}${mdl}` + (m.error ? `  error: ${m.error}` : '') + (m.status==='loaded'?`  load_time ${m.load_time_s}s`:''));
         }
@@ -1536,7 +1623,9 @@ async function refreshStatus() {
     }
     Object.entries(d.models).forEach(([n, m]) => {
       const dot = document.getElementById('dot-' + n);
-      if (dot) dot.textContent = m.status==='loaded' ? '🟢' : m.status==='loading' ? '🟡' : m.status==='error' ? '🔴' : '⚫';
+      if (dot) dot.textContent = dotIcon(m);
+      const btn = document.querySelector(`.engine-btn[data-engine="${n}"]`);
+      if (btn) btn.classList.toggle('loaded', m.status === 'loaded');
     });
   } catch(e) {
     dbg('ERROR','—','refreshStatus failed: ' + e.toString());
@@ -1610,8 +1699,9 @@ async function pollServerLog() {
   } catch(_) {}
 }
 
-// Auto-refresh DISABLED — uncomment to re-enable:
-// setInterval(refreshStatus, 6000);
+// Auto-refresh — /status probes are TTL-cached server-side (2 s), so a
+// 6 s poll keeps loaded-in-VRAM chips + dots current at near-zero cost.
+setInterval(refreshStatus, 6000);
 // setInterval(pollServerLog, 2000);
 
 /* ── Engine description notes (persisted in localStorage) ── */
@@ -1724,6 +1814,7 @@ async function refreshRefDropdowns(selectId) {
           + ' (' + (ref.size/1024).toFixed(0) + 'KB)';
         opt.title = (ref.original_name ? ref.original_name + (ref.lang ? ' · lang=' + ref.lang : '') : ref.id)
           + (hasT ? '\nTranscript: ' + ref.transcription : '\n⚠ No transcript — clone quality will degrade. Type the ref transcript in "Ref transcript" or upload a ref with text.');
+        opt.dataset.lang = ref.lang || '';
         sel.appendChild(opt);
       });
       // Restore previous selection if still present
@@ -1931,7 +2022,7 @@ def build_page() -> str:
             + f'<div class="synth-bar">'
             + f"  <button id=\"btn-{n}\" class=\"btn-synth\" onclick=\"synth('{n}')\">▶ Synthesise</button>"
             + f"  <button class=\"btn-action\" onclick=\"preload('{n}')\" title=\"Load model into VRAM\">⬇ Preload</button>"
-            + f"  <button class=\"btn-action\" onclick=\"unload('{n}')\">⏏ Unload</button>"
+            + f"  <button class=\"btn-action\" onclick=\"unload('{n}')\" title=\"Evict this engine from VRAM (remote: container /evict)\">⏏ Evict</button>"
             + f'  <span id="spin-{n}" class="spinner"></span>'
             + f'</div>'
             + _result_card(n)
@@ -1981,6 +2072,10 @@ def build_page() -> str:
     </div>
   </div>
   {gpu_badge}
+  <div class="loaded-wrap" id="loaded-wrap" style="display:none">
+    <span class="loaded-label">🧠 In VRAM:</span>
+    <span id="loaded-chips"></span>
+  </div>
   <button id="btn-evict" class="btn-action" onclick="evictAllVRAM()" style="white-space:nowrap" title="Evict all TTS engines from VRAM">Evict VRAM</button>
 	  <button id="btn-refresh" class="btn-action" onclick="refreshAvailability()" style="white-space:nowrap">🔄 Refresh</button>
 </div>

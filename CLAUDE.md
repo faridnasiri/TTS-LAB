@@ -158,6 +158,7 @@ ansible-playbook -i ansible/inventory.yml ansible/site.yml --tags deploy
 | `POST` | `/refresh` | Re-probe all engine availability without restart |
 | `GET` | `/models/{engine}` | Engine metadata |
 | `POST` | `/models/{engine}/load` | Force-load an engine into memory |
+| `POST` | `/models/{engine}/evict` | Evict ONE engine from VRAM (container `/evict`; SGLang → stop server container) |
 
 ### LLM Container (port 8006) — OpenAI-compatible
 
