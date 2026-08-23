@@ -16,6 +16,7 @@ from tts_lab_shims  import _N_CORES, DEVICE
 from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, REFERENCE_VOICES_DIR, INDEXTTS_DIR,
     OPENVOICE_MODELS_DIR, EDITX_REPO_DIR, EDITX_MODEL_DIR,
+    S1MINI_REPO_DIR, S1MINI_MODEL_ID,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
     _ref_wav_path, _ref_transcript, _state, slog,
 )
@@ -888,8 +889,26 @@ def _synth_chatterbox(inst, text, params):
 
 
 # ── 14. Fish Speech ───────────────────────────────────────────────────────────
+def _purge_fish_speech_modules() -> None:
+    """Drop cached fish_speech* modules so the right checkout wins on import.
+
+    The lab runs TWO fish-speech checkouts side by side: v1.5.1
+    (/opt/models/fish-speech, fishspeech engine) and main
+    (/opt/models/fish-speech-s1, s1mini engine). Both expose the same
+    `fish_speech` package name and Python caches the first import in
+    sys.modules — without purging, the second engine silently inherits the
+    first one's API (no modded_dac_vq codec, no TTSInferenceEngine) and
+    crashes. Safe because the engine server evicts before every load, and
+    every synth re-imports lazily after the loader has set sys.path.
+    """
+    for _m in [m for m in list(sys.modules)
+               if m == "fish_speech" or m.startswith("fish_speech.")]:
+        del sys.modules[_m]
+
+
 def _load_fishspeech(model_id="fishaudio/fish-speech-1.5"):
     import torch
+    _purge_fish_speech_modules()
     _fs_root = "/opt/models/fish-speech"
     if _fs_root not in sys.path:
         sys.path.insert(0, _fs_root)
@@ -947,6 +966,105 @@ def _synth_fishspeech(inst, text, params):
     audio = audio_tensor[0, 0].cpu().float().numpy()
     sr = getattr(getattr(decoder, "spec_transform", None), "sample_rate", 24000)
     return _to_wav(audio.astype(np.float32), int(sr)), int(sr)
+
+
+# ── 14b. OpenAudio S1-Mini (0.5B distilled — the LIGHT Fish model) ──────────
+# Fish Audio's distilled 0.5B DualAR + DAC codec (~5 GB VRAM vs S2-Pro's
+# ~11 GB). Runs in-process via the fish-speech MAIN inference machinery
+# (launch_thread_safe_queue + TTSInferenceEngine + modded_dac_vq) — none of
+# which exists in the v1.5.1 checkout used by the fishspeech engine.
+#
+# ⚠ Weights are GATED (request access at huggingface.co/fishaudio/s1-mini)
+# and CC-BY-NC-SA-4.0 (non-commercial). Requires HF_TOKEN in the container.
+
+def _load_s1mini():
+    """Load OpenAudio S1-Mini via fish-speech MAIN (0.5B, ~5 GB VRAM)."""
+    import torch
+    if not S1MINI_REPO_DIR.exists():
+        raise RuntimeError(
+            f"fish-speech (main) checkout missing at {S1MINI_REPO_DIR} — run:\n"
+            "  sudo git clone https://github.com/fishaudio/fish-speech "
+            "/opt/models/fish-speech-s1\n"
+            "(main, NOT the v1.5.1 branch — S1-Mini needs modded_dac_vq + "
+            "TTSInferenceEngine)")
+    _purge_fish_speech_modules()
+    if S1MINI_REPO_DIR not in sys.path:
+        sys.path.insert(0, str(S1MINI_REPO_DIR))
+    from fish_speech.models.text2semantic.inference import launch_thread_safe_queue
+    from fish_speech.models.dac.inference import load_model as _load_dac
+    from fish_speech.inference_engine import TTSInferenceEngine
+    from huggingface_hub import snapshot_download as _dl
+
+    try:
+        model_dir = Path(_dl(S1MINI_MODEL_ID,
+                             ignore_patterns=["*.md", "*.txt", "*.gitignore"]))
+    except Exception as _e:
+        _s = str(_e).lower()
+        if "gated" in _s or "401" in _s or "403" in _s:
+            raise RuntimeError(
+                "fishaudio/s1-mini is GATED — accept the license at "
+                "https://huggingface.co/fishaudio/s1-mini and set HF_TOKEN") from _e
+        raise
+    codec_pth = model_dir / "codec.pth"
+    if not codec_pth.exists():
+        raise FileNotFoundError(f"codec.pth missing in {model_dir} — "
+                                "S1-Mini weights incomplete")
+
+    _precision = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+    llama_queue = launch_thread_safe_queue(
+        checkpoint_path=str(model_dir), device=DEVICE,
+        precision=_precision, compile=False)
+    decoder = _load_dac(config_name="modded_dac_vq",
+                        checkpoint_path=str(codec_pth), device=DEVICE)
+    engine = TTSInferenceEngine(llama_queue=llama_queue, decoder_model=decoder,
+                                compile=False, precision=_precision)
+    sr = int(getattr(decoder, "sample_rate", 44100))
+    slog("LOAD", "s1mini", f"S1-Mini loaded ({model_dir.name}, {_precision}) "
+         f"— {sr} Hz, ~5 GB VRAM")
+    return {"engine": engine, "sr": sr}
+
+
+def _synth_s1mini(inst, text, params):
+    """Synthesise via fish-speech TTSInferenceEngine (S1-Mini).
+
+    Voice cloning when a reference WAV is given: ServeReferenceAudio(raw
+    WAV bytes + transcript) — the engine extracts prompt tokens internally.
+    Without a ref, S1-Mini uses its default voice; a ref WAV + faithful
+    transcript is strongly recommended for this model.
+    """
+    from fish_speech.utils.schema import ServeTTSRequest, ServeReferenceAudio
+    engine = inst["engine"]
+    refs = []
+    ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
+    ref_path = _ref_wav_path(ref_id) if ref_id else None
+    ref_text = (params.get("ref_text") or "").strip()
+    if ref_path:
+        if not ref_text:
+            # Voice-library refs carry their real transcript in the sidecar
+            # json — a clone without a faithful prompt transcript reads flat.
+            ref_text = _ref_transcript(ref_path) or ""
+        refs.append(ServeReferenceAudio(audio=ref_path.read_bytes(),
+                                        text=ref_text))
+
+    # Clamp to ServeTTSRequest's schema constraints (chunk 100-1000, floats
+    # 0.1-1.0) so remote API callers can't trip a pydantic ValidationError.
+    req = ServeTTSRequest(
+        text=text,
+        references=refs,
+        max_new_tokens=int(float(params.get("max_new_tokens", 1024))),
+        chunk_length=max(100, min(1000, int(float(params.get("chunk_length", 200))))),
+        top_p=max(0.1, min(1.0, float(params.get("top_p", 0.8)))),
+        repetition_penalty=max(0.9, min(2.0, float(params.get("rep_penalty", 1.1)))),
+        temperature=max(0.1, min(1.0, float(params.get("temperature", 0.8)))),
+        format="wav",
+    )
+    audio_np, sr = None, inst["sr"]
+    for result in engine.inference(req):
+        if getattr(result, "code", None) == "final" and getattr(result, "audio", None) is not None:
+            sr, audio_np = result.audio
+    if audio_np is None:
+        raise RuntimeError("S1-Mini produced no audio (final result missing)")
+    return _to_wav(np.asarray(audio_np, dtype=np.float32), int(sr)), int(sr)
 
 
 # ── 15. Sesame CSM 1B ─────────────────────────────────────────────────────────
@@ -2427,7 +2545,8 @@ LOADERS: dict = {
     "xtts":       _load_xtts,     "cosyvoice": _load_cosyvoice,
     "parler":     _load_parler,   "chatterbox":_load_chatterbox,
     "chatterboxturbo": _load_chatterboxturbo,
-    "fishspeech": _load_fishspeech,"csm":      _load_csm,
+    "fishspeech": _load_fishspeech,"s1mini":   _load_s1mini,
+    "csm":      _load_csm,
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
     "indextts":   _load_indextts,
     "manatts":    _load_manatts,  "mmsfas":    _load_mmsfas,
@@ -2446,7 +2565,8 @@ SYNTHERS: dict = {
     "xtts":       _synth_xtts,     "cosyvoice": _synth_cosyvoice,
     "parler":     _synth_parler,   "chatterbox":_synth_chatterbox,
     "chatterboxturbo": _synth_chatterboxturbo,
-    "fishspeech": _synth_fishspeech,"csm":      _synth_csm,
+    "fishspeech": _synth_fishspeech,"s1mini":  _synth_s1mini,
+    "csm":      _synth_csm,
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
     "indextts":   _synth_indextts,
     "manatts":    _synth_manatts,  "mmsfas":    _synth_mmsfas,

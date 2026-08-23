@@ -1,6 +1,6 @@
 # Arthur TTS Lab
 
-> 29-engine TTS benchmark + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> 30-engine TTS benchmark + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
 > **Deployed to:** `arthur@192.168.0.87:8009` (TTS) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
@@ -67,7 +67,7 @@ API:        OpenAI-compatible POST /v1/chat/completions on port 8006
 | `tts_lab_shims.py` | 590 | **Imported FIRST** — `sys.modules` stubs, transformers compat patches, thread pinning |
 | `tts_lab_shims_legacy.py` | 50 | Minimal shims for legacy container (torch 1.13 / tf 4.46) |
 | `tts_lab_config.py` | 293 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
-| `tts_lab_engines.py` | 2,350 | All 29 `_load_X()` + `_synth_X()` pairs (qwen36 LLM pair kept as dead code), `LOADERS`/`SYNTHERS` dicts |
+| `tts_lab_engines.py` | 2,400 | All 30 `_load_X()` + `_synth_X()` pairs (qwen36 LLM pair kept as dead code), `LOADERS`/`SYNTHERS` dicts |
 | `tts_lab_dispatch.py` | 600 | Availability probing, `_ensure_loaded()`, `_do_synth()`, global TTS eviction, LLM dispatch |
 | `tts_lab_engine_server.py` | 340 | Engine-container FastAPI server with lazy-loading + VRAM eviction + `/evict` endpoint |
 | `tts_lab_orpheus_server.py` | 107 | Orpheus-specific vllm server |
@@ -213,6 +213,7 @@ Response differs from TTS engines:
 - **inspect.getsourcefile crash:** `torch._dynamo` import chain corrupts module `__file__` attributes on Python 3.11. Fixed by patching `inspect.getsourcefile` in `tts_lab_shims.py`.
 - **ChatTTS narrow() bug:** PyTorch 2.10 strict validation rejects `narrow(1, -n, n)` when n=0. Patched in VM's gpt.py.
 - **OpenVoice device mismatch:** Speaker SE tensors load on CPU while model is on CUDA. Fix: `map_location=DEVICE`.
+- **Two fish-speech checkouts (fishspeech + s1mini):** The fishspeech engine runs fish-speech **v1.5.1** (`/opt/models/fish-speech`); s1mini needs **main** (`/opt/models/fish-speech-s1`, for `modded_dac_vq` + `TTSInferenceEngine`). Both expose the `fish_speech` package, so both loaders call `_purge_fish_speech_modules()` (sys.modules purge) before importing — never remove it, or the second engine inherits the first checkout's API.
 - **OuteTTS max_length:** HF backend encodes any text as ~15K tokens. Use GGUF + LLAMACPP backend instead.
 - **Piper/Kokoro GPU EP slower:** Tiny ONNX models are slower via GPU due to memory transfer overhead. Keep CPU ONNX execution provider.
 
@@ -258,4 +259,4 @@ Response differs from TTS engines:
 - **Services:** `arthur-lab.service` (port 8001), `arthur-imglab.service` (port 8002)
 - **Image Lab models:** `/opt/arthur-img-models/` (separate disk)
 - **Container registry:** `ghcr.io/farid-nasiri/tts-lab-*`
-- **Engine status:** See `docs/engine_compatibility.yaml` — 18 supported, 8 experimental, 3 blocked (+1 planned LLM)
+- **Engine status:** See `docs/engine_compatibility.yaml` — 18 supported, 9 experimental, 3 blocked (+1 planned LLM)

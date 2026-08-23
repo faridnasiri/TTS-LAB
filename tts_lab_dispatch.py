@@ -265,6 +265,7 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         "chatterbox": "chatterbox",
         "chatterboxturbo": "chatterbox",
         "fishspeech": "fish_speech",
+        "s1mini":     None,   # same package as fishspeech — dir-checked below
         "csm":        None,
         "qwen3tts":   "qwen_tts",
         "orpheus":    "orpheus_tts",
@@ -311,7 +312,7 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
             pass
 
     # 4. Engine-specific file / directory checks
-    from tts_lab_config import MODELS_DIR, COSYVOICE_DIR, OPENVOICE_MODELS_DIR, MANATTS_REPO_DIR, INDEXTTS_DIR, EDITX_REPO_DIR, EDITX_MODEL_DIR
+    from tts_lab_config import MODELS_DIR, COSYVOICE_DIR, OPENVOICE_MODELS_DIR, MANATTS_REPO_DIR, INDEXTTS_DIR, EDITX_REPO_DIR, EDITX_MODEL_DIR, S1MINI_REPO_DIR
     if name == "piper":
         if not _piper_voices():
             return False, "No .onnx voice found in models/"
@@ -334,6 +335,28 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
                 "Clone v1.5.1: git clone --branch v1.5.1 https://github.com/fishaudio/fish-speech /tmp/fish-speech\n"
                 "Install: pip install /tmp/fish-speech --no-build-isolation"
             )
+    elif name == "s1mini":
+        # fish-speech MAIN checkout (the v1.5.1 branch has no modded_dac_vq
+        # codec / TTSInferenceEngine). sys.path gets it at load time — here
+        # we only verify the checkout + gated weights are reachable.
+        if not S1MINI_REPO_DIR.exists():
+            return False, ("Clone fish-speech MAIN for S1-Mini:\n"
+                           "  git clone https://github.com/fishaudio/fish-speech "
+                           "/opt/models/fish-speech-s1")
+        if not (S1MINI_REPO_DIR / "fish_speech" / "inference_engine").exists():
+            return False, f"fish_speech package missing in {S1MINI_REPO_DIR} (stale checkout?)"
+        hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN", "")
+        _hdrs = {"Authorization": "Bearer " + hf_token} if hf_token else {}
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                "https://huggingface.co/api/models/fishaudio/s1-mini",
+                headers=_hdrs)
+            with urllib.request.urlopen(req, timeout=5): pass
+        except Exception as _e:
+            if "401" in str(_e) or "403" in str(_e):
+                return False, ("fishaudio/s1-mini is gated — accept the license at "
+                               "https://huggingface.co/fishaudio/s1-mini then set HF_TOKEN")
     elif name == "openvoice":
         if not (OPENVOICE_MODELS_DIR / "converter" / "config.json").exists():
             return False, f"Checkpoints missing at {OPENVOICE_MODELS_DIR}"

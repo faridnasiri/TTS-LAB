@@ -111,6 +111,12 @@ engines:
     stack: current
     vram_est_mb: 3000
     notes: Voice cloning. Needs lightning (not pytorch_lightning).
+  s1mini:
+    status: experimental
+    container: engine-current
+    stack: current
+    vram_est_mb: 5000
+    notes: OpenAudio S1-Mini 0.5B distilled DualAR + DAC (modded_dac_vq) — the LIGHT Fish model (~5 GB VRAM vs s2pro 11 GB). Runs on fish-speech MAIN checkout at /opt/models/fish-speech-s1 (v1.5.1 has no modded_dac_vq/TTSInferenceEngine). Gated weights (fishaudio/s1-mini, CC-BY-NC-SA-4.0 non-commercial — personal lab OK). fish_speech sys.modules purged on load to avoid checkout collision with fishspeech. transformers 5.12.1 exceeds the repo's <=4.57.3 pin — status experimental until validated on the VM.
   omnivoice:
     status: supported
     container: engine-current
