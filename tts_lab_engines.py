@@ -17,7 +17,7 @@ from tts_lab_config import (
     MODELS_DIR, COSYVOICE_DIR, UPLOAD_DIR, REFERENCE_VOICES_DIR, INDEXTTS_DIR,
     OPENVOICE_MODELS_DIR, EDITX_REPO_DIR, EDITX_MODEL_DIR,
     OUTETTS_DEFAULT_GGUF, OUTETTS_DEFAULT_TOKENIZER, QWEN3TTS_MODEL_ID,
-    _ref_wav_path, _state, slog,
+    _ref_wav_path, _ref_transcript, _state, slog,
 )
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
 
@@ -2161,6 +2161,10 @@ def _synth_s2pro(inst, text, params):
     ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
     ref_path = _ref_wav_path(ref_id) if ref_id else None
     ref_text = (params.get("ref_text") or "").strip()
+    if not ref_text:
+        # Voice-library refs carry their real transcript in the sidecar json —
+        # a clone without a faithful prompt transcript reads flat/robotic.
+        ref_text = _ref_transcript(ref_path) if ref_path else ""
     if ref_path:
         payload["references"] = [{
             "audio_path": str(ref_path),
@@ -2322,7 +2326,13 @@ def _synth_editx(inst, text, params):
             ref_path = defaults[0]
     if ref_path is None:
         raise RuntimeError("EditX requires a reference WAV — upload one or pick a voice-library voice.")
-    prompt_text = (params.get("ref_text") or "").strip() or target_text
+    prompt_text = (params.get("ref_text") or "").strip()
+    if not prompt_text:
+        # Faithful clone prompt: voice-library refs carry their real
+        # transcript in the sidecar json (written by /voice-library/*/use-ref).
+        # Falling straight back to the target text makes the prompt transcript
+        # mismatch the ref audio → flat robotic output.
+        prompt_text = _ref_transcript(ref_path) or target_text
 
     if edit_type == "clone":
         out, sr = tts.clone(prompt_wav_path=str(ref_path),

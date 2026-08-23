@@ -720,8 +720,8 @@ def _build_params(name: str) -> str:
                         '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
                         'placeholder="Exact words spoken in the reference audio…">'))
             + editx_tags
-            + '<p class="text-muted small mt-1">~9 GB VRAM (AWQ-4bit). Output 41.6 kHz. '
-            'Mutually exclusive with S2-Pro / LLM — orchestrator stops them automatically.</p>'
+            + '<p class="text-muted small mt-1">~12.8 GB VRAM (AWQ-4bit). Output 24 kHz. '
+            'Mutually exclusive with S2-Pro — orchestrator stops it automatically.</p>'
         )
 
     if name == "qwen36":
@@ -831,7 +831,7 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .avail-badge.missing{background:#3a1e1e;color:#f44336;border:1px solid #5a2a2a;}
 .engine-meta{font-size:.75rem;color:var(--muted);margin-bottom:8px;}
 .engine-meta span{margin-right:14px;}
-.desc-input{width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:.75rem;resize:vertical;margin-bottom:8px;font-family:inherit;}
+.desc-input{width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:.75rem;resize:vertical;margin-bottom:8px;font-family:inherit;}
 .desc-input:focus{outline:none;border-color:var(--accent);}
 .desc-input::placeholder{color:var(--muted);}
 .params-area{display:flex;flex-direction:column;gap:10px;margin-bottom:16px;}
@@ -843,6 +843,9 @@ body{background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;mar
 .form-control,.form-select{background:#0f0f1c !important;color:var(--text) !important;
   border-color:var(--border) !important;font-size:.82rem;}
 .form-control:focus,.form-select:focus{outline:none;border-color:var(--accent) !important;box-shadow:none !important;}
+/* Native <option> list items don't inherit from .form-select — without this
+   they render with the OS default (dark text on dark UI in dark themes). */
+.form-select option{background:#0f0f1c;color:var(--text);}
 .synth-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:4px;}
 .btn-synth{background:#3d5af1;border:none;color:#fff;font-weight:700;padding:9px 22px;
            border-radius:8px;font-size:.9rem;cursor:pointer;transition:background .15s;}
@@ -1685,7 +1688,7 @@ function renderVoiceCards(voices) {
   if (!voices.length) { grid.innerHTML = '<div class="text-muted small p-3">No voices found. Click "Download Voices" to add Persian voices from Common Voice.</div>'; return; }
   grid.innerHTML = voices.map(v => {
     const gIcon = v.speaker_gender === 'female' ? '👩' : v.speaker_gender === 'male' ? '👨' : '🎤';
-    const qColor = v.quality_score > 0.8 ? 'var(--ok)' : v.quality_score > 0.5 ? 'var(--warn,#c90)' : 'var(--err,#c44)';
+    const qColor = v.quality_score > 0.8 ? 'var(--accent2)' : v.quality_score > 0.5 ? 'var(--warn,#c90)' : 'var(--err,#c44)';
     const embBadges = [];
     if (v.has_ge2e_embedding) embBadges.push('<span class="badge bg-success" style="font-size:.65rem">GE2E</span>');
     if (v.has_campp_embedding) embBadges.push('<span class="badge bg-info" style="font-size:.65rem">CAM++</span>');
@@ -1720,11 +1723,15 @@ async function refreshRefDropdowns(selectId) {
       refs.forEach(ref => {
         const opt = document.createElement('option');
         opt.value = ref.id;
-        // e.g. "arash_fa.wav — فارسی (FA) (124KB)" — lang_label omitted when unknown
+        // e.g. "arash_fa.wav — فارسی (FA) 📝 (124KB)" — lang_label omitted
+        // when unknown; 📝 = transcript available, ⚠ = none (clone degrades)
+        const hasT = !!(ref.transcription || '').trim();
         opt.textContent = ref.name
           + (ref.lang_label ? ' — ' + ref.lang_label : '')
+          + (hasT ? ' 📝' : ' ⚠')
           + ' (' + (ref.size/1024).toFixed(0) + 'KB)';
-        opt.title = ref.original_name ? (ref.original_name + (ref.lang ? ' · lang=' + ref.lang : '')) : ref.id;
+        opt.title = (ref.original_name ? ref.original_name + (ref.lang ? ' · lang=' + ref.lang : '') : ref.id)
+          + (hasT ? '\nTranscript: ' + ref.transcription : '\n⚠ No transcript — clone quality will degrade. Type the ref transcript in "Ref transcript" or upload a ref with text.');
         sel.appendChild(opt);
       });
       // Restore previous selection if still present

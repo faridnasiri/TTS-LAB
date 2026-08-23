@@ -106,8 +106,8 @@ services:
       PARLER_URL: http://engine-legacy:8102
       # Orpheus
       ORPHEUS_URL: http://orpheus:8002
-      # LLM — reasoning & coding (Qwen 3.6)
-      QWEN36_URL: http://llm-qwen36:8006
+      # LLM (qwen36) RETIRED 2026-08-23 — container + images removed per user
+      # decision; no QWEN36_URL. Probes would DNS-fail inside the compose net.
       # SGLang engines — only S2-Pro genuinely needs SGLang
       S2PRO_SGLANG_URL: http://s2pro:8000/v1/audio/speech
       # Step Audio EditX — dedicated vLLM container
@@ -421,41 +421,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 120s
-    networks:
-      - tts-lab-net
-
-  # ═══════════════════════════════════════════════════════════════
-  # Qwen 3.6 LLM — Reasoning & Programming (llama.cpp, GPU required)
-  # ═══════════════════════════════════════════════════════════════
-  llm-qwen36:
-    build:
-      context: .
-      dockerfile: docker/Dockerfile.llm-qwen36
-    image: tts-lab-llm-qwen36:latest
-    container_name: tts-lab-llm-qwen36
-    ports:
-      - "8006:8006"
-    volumes:
-      - /opt/models:/opt/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    environment:
-      MODEL_PATH: /opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf
-      CTX_SIZE: "32768"
-    restart: unless-stopped
-    profiles:
-      - llm
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8006/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
     networks:
       - tts-lab-net
 

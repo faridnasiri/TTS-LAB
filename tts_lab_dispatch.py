@@ -18,7 +18,7 @@ from typing import Dict, Tuple
 
 from tts_lab_config import (
     MODEL_ORDER, MODEL_INFO, HEAVY, SYNTH_TIMEOUT, _state,
-    _ref_wav_path, slog,
+    _ref_wav_path, _ref_transcript, slog,
 )
 from tts_lab_utils import _wav_dur
 
@@ -235,6 +235,14 @@ def _check_available_remote(name: str) -> Tuple[bool, str]:
             return False, data.get("detail", f"status: {status}")
         return False, f"HTTP {r.status_code}"
     except Exception as e:
+        # A stopped/removed container surfaces as a Docker-DNS gaierror
+        # ("Temporary failure in name resolution") or a connect refusal —
+        # collapse those into one clean line instead of leaking the raw
+        # errno into the UI status panel.
+        if "name resolution" in str(e) or type(e).__name__ in (
+            "gaierror", "ConnectError", "ConnectTimeout", "ConnectFail",
+        ):
+            return False, "offline — engine container not running"
         return False, str(e)
 
 
@@ -657,9 +665,15 @@ def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
     if ref_id:
         ref_path = _ref_wav_path(ref_id)
         if ref_path:
+            ref_text = (params.get("ref_text") or "").strip()
+            if not ref_text:
+                # Voice-library voices carry a real transcript in their
+                # sidecar (written by /use-ref) — a clone without a faithful
+                # prompt transcript reads flat/robotic.
+                ref_text = _ref_transcript(ref_path)
             payload["references"] = [{
                 "audio_path": str(ref_path),
-                "text":       (params.get("ref_text") or "").strip(),
+                "text":       ref_text,
             }]
 
     t0 = time.perf_counter()

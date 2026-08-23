@@ -317,7 +317,9 @@ _LANG_LABELS = {"fa": "فارسی (FA)", "en": "English (EN)", "other": "Other"}
 def _scan_refs():
     """Scan reference + uploaded WAVs with sidecar metadata (original_name/lang).
 
-    Sidecars are `{stem}.json` files written next to each WAV by /upload.
+    Sidecars are `{stem}.json` files written next to each WAV by /upload and
+    /voice-library/*/use-ref. transcription is present for voice-library
+    voices; curated en-* voices carry none (clone quality degrades without it).
     """
     refs = []
     for d, source in ((REFERENCE_VOICES_DIR, "reference"), (UPLOAD_DIR, "uploaded")):
@@ -336,6 +338,7 @@ def _scan_refs():
                 "path": p,
                 "original_name": str(meta.get("original_name", "") or ""),
                 "lang": str(meta.get("lang", "") or ""),
+                "transcription": str(meta.get("transcription", "") or ""),
                 "source": source,
             })
     return refs
@@ -356,6 +359,7 @@ async def list_refs():
             "original_name": r["original_name"],
             "lang": r["lang"],
             "lang_label": _LANG_LABELS.get(r["lang"], ""),
+            "transcription": r["transcription"],
             "size": r["path"].stat().st_size,
             "source": r["source"],
         })
@@ -423,6 +427,18 @@ if voice_library_mod:
         dest = UPLOAD_DIR / f"{voice_id}.wav"
         shutil.copy2(path, dest)
         v = get_voice(voice_id)
+        # Sidecar metadata — clone engines (editx, s2pro) read the
+        # transcription from here when ref_text isn't typed. Without a
+        # faithful prompt transcript the clone reads flat/robotic.
+        try:
+            (UPLOAD_DIR / f"{voice_id}.json").write_text(json.dumps({
+                "original_name": v.get("speaker_name", "") or f"{voice_id}.wav",
+                "lang": v.get("language", v.get("lang", "")),
+                "transcription": v.get("transcription", ""),
+                "source": "voice-library",
+            }, ensure_ascii=False))
+        except Exception:
+            pass
         return JSONResponse({"ok": True, "audio_prompt_id": voice_id, "voice": v,
                              "url": f"/voice-library/{voice_id}/audio"})
 

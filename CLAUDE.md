@@ -1,7 +1,7 @@
 # Arthur TTS Lab
 
-> 30-engine TTS benchmark + 1 LLM (Qwen 3.6 27B) + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
-> **Deployed to:** `arthur@192.168.0.87:8009` (TTS) / `:8006` (LLM) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
+> 29-engine TTS benchmark + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> **Deployed to:** `arthur@192.168.0.87:8009` (TTS) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
 
@@ -39,7 +39,13 @@ GPU containers (profiles: gpu, sglang, llm):
   └── LLM       Pre-built ghcr.io/ggml-org/llama.cpp:server-cuda (Qwen 3.6 27B Q3_K_M, ~14 GB VRAM)
 ```
 
-### LLM Deployment (Actual)
+### LLM Deployment (Actual) — ⚠️ RETIRED 2026-08-23
+
+The Qwen 3.6 LLM was **removed permanently** (user decision: never wanted).
+Container `tts-lab-llm-qwen36` + both llama.cpp images deleted; compose service,
+`QWEN36_URL`, and the `MODEL_ORDER` entry dropped — no `/status` probe remains
+(dead LLM probes DNS-failed inside the compose network → `[Errno -3]` in the UI).
+The `_load/_synth_qwen36` code and chat UI are left as dead code. Historical record:
 
 ```
 Container:  tts-lab-llm-qwen36
@@ -48,17 +54,7 @@ Model:      batiai/Qwen3.6-27B-GGUF → Qwen-Qwen3.6-27B-Q3_K_M.gguf (~13 GB)
 VRAM:       ~13.6 GB (model + 32K KV cache on GPU)
 Speed:      ~23 tok/s (all 99 layers on GPU)
 Context:    32768 tokens (q4_0 KV cache, ~1.5 GB)
-Thinking:   Enabled (<think> tags — reasoning_content in API response)
 API:        OpenAI-compatible POST /v1/chat/completions on port 8006
-
-Deploy command (on VM):
-  docker run -d --name tts-lab-llm-qwen36 --gpus all --network host \
-    -v /opt/models:/opt/models --restart unless-stopped \
-    ghcr.io/ggml-org/llama.cpp:server-cuda \
-    --model /opt/models/llm/Qwen-Qwen3.6-27B-Q3_K_M.gguf \
-    --host 0.0.0.0 --port 8006 --n-gpu-layers 99 --ctx-size 32768 \
-    --parallel 1 --cache-type-k q4_0 --cache-type-v q4_0 \
-    --flash-attn on --jinja --threads 4 --threads-batch 8
 ```
 
 **Orchestrator mode** (`ORCHESTRATOR_MODE=1`): the orchestrator loads zero ML libraries. All engine requests route via HTTP to engine containers using `{ENGINE_NAME}_URL` environment variables. The web UI is served by the orchestrator.
@@ -71,7 +67,7 @@ Deploy command (on VM):
 | `tts_lab_shims.py` | 590 | **Imported FIRST** — `sys.modules` stubs, transformers compat patches, thread pinning |
 | `tts_lab_shims_legacy.py` | 50 | Minimal shims for legacy container (torch 1.13 / tf 4.46) |
 | `tts_lab_config.py` | 293 | `MODEL_INFO` catalogue, `MODEL_ORDER`, voice lists, per-engine `_state`, paths |
-| `tts_lab_engines.py` | 2,350 | All 30 `_load_X()` + `_synth_X()` pairs (29 TTS + 1 LLM), `LOADERS`/`SYNTHERS` dicts |
+| `tts_lab_engines.py` | 2,350 | All 29 `_load_X()` + `_synth_X()` pairs (qwen36 LLM pair kept as dead code), `LOADERS`/`SYNTHERS` dicts |
 | `tts_lab_dispatch.py` | 600 | Availability probing, `_ensure_loaded()`, `_do_synth()`, global TTS eviction, LLM dispatch |
 | `tts_lab_engine_server.py` | 340 | Engine-container FastAPI server with lazy-loading + VRAM eviction + `/evict` endpoint |
 | `tts_lab_orpheus_server.py` | 107 | Orpheus-specific vllm server |
@@ -113,9 +109,8 @@ docker compose up -d                         # orchestrator + engine-current + e
 docker compose --profile mid up -d           # + engine-mid (VibeVoice, Higgs)
 docker compose --profile gpu up -d           # + Orpheus (needs GPU)
 docker compose --profile sglang up -d        # + SGLang engines (vibevoice, higgs, s2pro)
-docker compose --profile editx up -d         # + Step Audio EditX (~9 GB VRAM AWQ — evicts s2pro)
-docker compose --profile llm up -d           # + Qwen 3.6 LLM (~13 GB VRAM — evicts TTS first)
-docker compose down                          # Stop all
+docker compose --profile editx up -d         # + Step Audio EditX (~12.8 GB VRAM AWQ — evicts s2pro)
+docker compose down                          # Stop all   (llm profile removed 2026-08-23 — LLM retired)
 ```
 
 ### Tests & Benchmarks
@@ -138,15 +133,8 @@ docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 curl -s http://192.168.0.87:8009/status       # Engine status JSON
 curl -s http://localhost:8009/                # Web UI
 
-# LLM (Qwen 3.6)
-curl -s http://localhost:8006/health           # LLM health
-curl -s http://localhost:8006/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  --data-raw '{"messages":[{"role":"user","content":"hello"}],"max_tokens":50}'  # Direct LLM test
-
 # VRAM
-docker exec tts-lab-llm-qwen36 nvidia-smi      # Or: nvidia-smi on host
-docker logs tts-lab-llm-qwen36                 # LLM container logs
+nvidia-smi                                    # Or: docker exec <container> nvidia-smi
 docker logs tts-lab-orchestrator               # Orchestrator logs
 ```
 
@@ -162,7 +150,7 @@ ansible-playbook -i ansible/inventory.yml ansible/site.yml --tags deploy
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Web UI (TTS + LLM chat) |
+| `GET` | `/` | Web UI (TTS) |
 | `GET` | `/status` | JSON: all engines, availability, RAM estimates |
 | `POST` | `/synthesize/{engine}` | Synthesize audio (TTS) or generate text (LLM) |
 | `POST` | `/synthesize/{engine}` (multipart) | With reference WAV upload for voice cloning |

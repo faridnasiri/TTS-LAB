@@ -5,6 +5,7 @@ Imports: tts_lab_shims (for _N_CORES, DEVICE, DEVICE_NAME, VRAM_TOTAL_MB)
 Exports: all catalogues, MODEL_INFO, MODEL_ORDER, HEAVY, _state, paths
 """
 from __future__ import annotations
+import json
 import threading
 from pathlib import Path
 # In orchestrator mode, torch isn't available. tts_lab_shims won't import.
@@ -50,6 +51,28 @@ def _ref_wav_path(ref_id: str):
         if p.exists():
             return p
     return None
+
+
+def _ref_transcript(ref_path) -> str:
+    """Read the sidecar transcription for a reference WAV, if any.
+
+    Voice-library voices (/voice-library/*/use-ref) carry a real transcript
+    in their sidecar; curated en-* reference voices may not. Clone engines
+    (editx, s2pro) use this when the user doesn't type ref_text — a missing
+    or mismatched prompt transcript degrades clones to a flat robotic read.
+
+    Pure stdlib (json + pathlib) so the orchestrator container can use it.
+    Returns "" when unknown.
+    """
+    if not ref_path:
+        return ""
+    sc = Path(ref_path).with_suffix(".json")
+    if not sc.exists():
+        return ""
+    try:
+        return str(json.loads(sc.read_text()).get("transcription", "") or "")
+    except Exception:
+        return ""
 
 
 # ── Kokoro voice catalogue (54 voices) ────────────────────────────────────────
@@ -262,8 +285,7 @@ MODEL_INFO = {
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "omnivoice":  {"label":"OmniVoice",     "size":"~1.2 GB (BF16)",       "rtf_est":"RTF 0.67× ⚡",          "ram_est_mb":2000, "heavy":True, "notes":"0.6B diffusion LM. 600+ languages. Real-time!","arthur_fit":4},
     "s2pro":      {"label":"Fish S2-Pro",   "size":"~10 GB (BF16, 5B)",   "rtf_est":"SGLang-Omni (RTF 0.195)", "ram_est_mb":11000,"heavy":True,"notes":"Dual-AR 5B, 80+ langs. Voice cloning via ref WAV + transcript. Always-resident while container runs — orchestrator stops/starts it around EditX/LLM. 15k inline control tags.","arthur_fit":3},
-    "editx":      {"label":"Step Audio EditX","size":"~5 GB (AWQ-4bit)",  "rtf_est":"LLM-based (vLLM)",        "ram_est_mb":9000, "heavy":True,"notes":"3B LLM audio-edit + zero-shot TTS. Clone (zh/en/sichuanese/cantonese/ja/ko) + emotion(14)/style(38)/paralinguistic edits. Needs ref WAV + transcript for cloning. 41.6 kHz.","arthur_fit":4},
-    "qwen36":     {"label":"Qwen3.6-35B-A3B","size":"~13 GB (TQ3_4S GGUF)","rtf_est":"LLM — ~107 tok/s","ram_est_mb":13000,"heavy":True,"notes":"Alibaba Qwen 3.6 MoE. 35B total, 3B active params. Reasoning + coding via llama.cpp. Evicts ALL TTS engines before loading.","arthur_fit":3,"engine_type":"llm"},
+    "editx":      {"label":"Step Audio EditX","size":"~5 GB (AWQ-4bit)",  "rtf_est":"LLM-based (vLLM)",        "ram_est_mb":9000, "heavy":True,"notes":"3B LLM audio-edit + zero-shot TTS. Clone (zh/en/sichuanese/cantonese/ja/ko) + emotion(14)/style(38)/paralinguistic edits. Needs ref WAV + transcript for cloning. 24 kHz output.","arthur_fit":4},
 }
 
 MODEL_ORDER = [
@@ -272,7 +294,6 @@ MODEL_ORDER = [
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "neutts","indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro","editx",
-    "qwen36",
 ]
 
 HEAVY = {n for n, i in MODEL_INFO.items() if i["heavy"]}
