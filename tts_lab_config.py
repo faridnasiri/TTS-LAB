@@ -31,11 +31,6 @@ OPENVOICE_MODELS_DIR = Path("/opt/models/openvoice_v2")
 # with `Step-Audio-Tokenizer` and `Step-Audio-EditX` (or *-AWQ-4bit) subfolders.
 EDITX_REPO_DIR   = Path("/opt/arthur/Step-Audio-EditX")
 EDITX_MODEL_DIR  = Path("/opt/models/editx")
-# OpenAudio S1-Mini (0.5B) — runs on fish-speech MAIN (not the v1.5.1 checkout
-# used by the fishspeech engine — main adds the `modded_dac_vq` DAC codec and
-# TTSInferenceEngine that S1-Mini needs). Weights: gated fishaudio/s1-mini.
-S1MINI_REPO_DIR  = Path("/opt/models/fish-speech-s1")
-S1MINI_MODEL_ID  = "fishaudio/s1-mini"
 MODELS_DIR.mkdir(exist_ok=True)
 UPLOAD_DIR.mkdir(exist_ok=True)
 
@@ -275,7 +270,6 @@ MODEL_INFO = {
     "parler":     {"label":"Parler-TTS",    "size":"2.5-3.3 GB",         "rtf_est":"skipped",               "ram_est_mb":1500, "heavy":True, "notes":"⚠ SKIPPED: needs legacy stack (torch 1.x + tf 4.x).","arthur_fit":4},
     "chatterbox": {"label":"Chatterbox",    "size":"3.0 GB",             "rtf_est":"RTF 2.42×",            "ram_est_mb":1800, "heavy":True, "notes":"Persian T3 (30-layer, 2454 tokens). Voice cloning. Auto-chunks long text.","arthur_fit":5},
     "fishspeech": {"label":"Fish Speech",   "size":"~1.1 GB",            "rtf_est":"RTF 3.48×",            "ram_est_mb":1500, "heavy":True, "notes":"Zero-shot voice cloning. Persian via LM tokenizer.","arthur_fit":4},
-    "s1mini":     {"label":"Fish S1-Mini",  "size":"~3.6 GB (0.5B)",     "rtf_est":"~1:7 RTF (4090)",       "ram_est_mb":5000, "heavy":True, "notes":"OpenAudio S1-Mini 0.5B distilled DualAR — the LIGHT Fish model (~5 GB VRAM vs S2-Pro 11 GB). 13 langs, voice cloning via ref WAV + transcript. ⚠ Gated weights + CC-BY-NC-SA-4.0 (non-commercial). Runs in-process on fish-speech MAIN.","arthur_fit":4},
     "csm":        {"label":"Sesame CSM 1B", "size":"~2 GB",              "rtf_est":"blocked (Meta)",        "ram_est_mb":2000, "heavy":True, "notes":"⚠ All deps ready. Blocked: meta-llama/Llama-3.2-1B gated.","arthur_fit":4},
     "qwen3tts":   {"label":"Qwen3-TTS 1.7B", "size":"~3 GB",           "rtf_est":"RTF ~3-6×",         "ram_est_mb":6000, "heavy":True, "notes":"Voice cloning 1.7B Base. 3s ref audio. x-vector-only mode. 10 languages.","arthur_fit":5},
     "orpheus":    {"label":"Orpheus 3B",    "size":"~3 GB",              "rtf_est":"needs container",       "ram_est_mb":3000, "heavy":True, "notes":"⚠ Installed but vllm vs torch nightly. Needs Dockerfile.orpheus.","arthur_fit":5},
@@ -296,7 +290,7 @@ MODEL_INFO = {
 MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
-    "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","s1mini","csm","qwen3tts","orpheus",
+    "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro","editx",
 ]
@@ -344,8 +338,6 @@ SYNTH_TIMEOUT: dict[str, int] = {
     "f5tts":    120,
     "manatts":  120,
     "fishspeech":360,
-    # s1mini first load: gated ~3.6 GB download + DualAR/codec load + JIT
-    "s1mini":    600,
     "chattts":   90,
     # vLLM engine warmup on first load can exceed the 300 s default
     "editx":     600,

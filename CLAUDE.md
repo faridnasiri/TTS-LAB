@@ -213,7 +213,7 @@ Response differs from TTS engines:
 - **inspect.getsourcefile crash:** `torch._dynamo` import chain corrupts module `__file__` attributes on Python 3.11. Fixed by patching `inspect.getsourcefile` in `tts_lab_shims.py`.
 - **ChatTTS narrow() bug:** PyTorch 2.10 strict validation rejects `narrow(1, -n, n)` when n=0. Patched in VM's gpt.py.
 - **OpenVoice device mismatch:** Speaker SE tensors load on CPU while model is on CUDA. Fix: `map_location=DEVICE`.
-- **Two fish-speech checkouts (fishspeech + s1mini):** The fishspeech engine runs fish-speech **v1.5.1** (`/opt/models/fish-speech`); s1mini needs **main** (`/opt/models/fish-speech-s1`, for `modded_dac_vq` + `TTSInferenceEngine`). Both expose the `fish_speech` package, so both loaders call `_purge_fish_speech_modules()` (sys.modules purge) before importing — never remove it, or the second engine inherits the first checkout's API.
+- **fish-speech single checkout (fishspeech):** The `fishspeech` engine runs fish-speech **v1.5.1** (`/opt/models/fish-speech`). `_load_fishspeech` calls `_purge_fish_speech_modules()` (sys.modules purge) before importing — keep it, so a stale fish_speech API can't leak between loads (the s1mini engine, which ran on a second **main** checkout at `/opt/models/fish-speech-s1`, was REMOVED 2026-08-23 — user decision, noise-only output; root cause was a missing `<|begin_of_text|>` token in the main-branch conversation builder, see `docs/sessions/HANDOFF-S1MINI-QUANT-2026-08-23.md`).
 - **OuteTTS max_length:** HF backend encodes any text as ~15K tokens. Use GGUF + LLAMACPP backend instead.
 - **Piper/Kokoro GPU EP slower:** Tiny ONNX models are slower via GPU due to memory transfer overhead. Keep CPU ONNX execution provider.
 

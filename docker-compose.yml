@@ -87,7 +87,6 @@ services:
       XTTS_URL: http://engine-current:8101
       COSYVOICE_URL: http://engine-current:8101
       FISHSPEECH_URL: http://engine-current:8101
-      S1MINI_URL: http://engine-current:8101   # OpenAudio S1-Mini (in-process, fish-speech main)
       CHATTERBOX_URL: http://engine-current:8101
       CHATTERBOXTURBO_URL: http://engine-current:8101
       OMNIVOICE_URL: http://engine-current:8101

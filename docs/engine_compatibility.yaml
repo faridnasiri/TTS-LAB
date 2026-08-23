@@ -112,11 +112,19 @@ engines:
     vram_est_mb: 3000
     notes: Voice cloning. Needs lightning (not pytorch_lightning).
   s1mini:
-    status: verified
+    status: removed
     container: engine-current
     stack: current
-    vram_est_mb: 5000
-    notes: OpenAudio S1-Mini 0.5B distilled DualAR + DAC (modded_dac_vq) — the LIGHT Fish model (~5 GB VRAM vs s2pro 11 GB). Runs on fish-speech MAIN checkout at /opt/models/fish-speech-s1 (v1.5.1 has no modded_dac_vq/TTSInferenceEngine). Gated weights (fishaudio/s1-mini, CC-BY-NC-SA-4.0 non-commercial — personal lab OK). fish_speech sys.modules purged on load to avoid checkout collision with fishspeech. VERIFIED 2026-08-23 on the VM (transformers 5.15.0): needs two checkout patches (patches/patch_fish_speech_s1.py) — FishTokenizer tiktoken fallback (5.x dropped tiktoken tokenizer classes) + idempotent OmegaConf eval resolver. HEAVY: loading stops the s2pro container (16 GB VRAM). Text-only synthesis is degenerate (~0.2 s) — a reference WAV is REQUIRED (voice clone, e.g. en-leo2).
+    removed: 2026-08-23
+    notes: "REMOVED by user decision (never wanted — output was noise-only; the
+      s1-mini checkpoint, trained 2025-05-31, expects a leading <|begin_of_text|>
+      token that the post-June-2025 fish-speech main-branch conversation builder
+      omits, so every position sits off-by-one → degenerate all-1023 VQ codes →
+      noise. Root cause was diagnosed (BOS prepend lifted next-token accuracy
+      5.6%→42.1%) but the user chose removal over the one-line fix. Checkout
+      /opt/models/fish-speech-s1 deleted, weights cache purged, code removed —
+      fishspeech engine (v1.5.1 checkout) is unaffected. See
+      docs/sessions/HANDOFF-S1MINI-QUANT-2026-08-23.md (kept as record)."
   omnivoice:
     status: supported
     container: engine-current
@@ -363,9 +371,9 @@ engines:
     notes: LLM RETIRED per user decision (never wanted) — container + llama.cpp images deleted 2026-08-23, compose service and QWEN36_URL removed 2026-08-23, entry dropped from MODEL_ORDER so no dead probe in /status. Dead code (_load/_synth_qwen36, chat UI) left in place.
 summary:
   total: 28
-  supported: 18
+  supported: 19
   deprecated: 0
-  experimental: 7  # neutts removed 2026-08-23 (user: never configured, remove)
+  experimental: 6
   blocked: 3
   containers:
     engine-current:
@@ -388,9 +396,9 @@ summary:
       blocked: 0
     engine-qwen:
       total: 1
-      supported: 0
+      supported: 1
       deprecated: 0
-      experimental: 1
+      experimental: 0
       blocked: 0
     orpheus:
       total: 1

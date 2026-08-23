@@ -635,50 +635,6 @@ def _build_params(name: str) -> str:
             + ov_hint
         )
 
-    if name == "s1mini":
-        s1mini_tags = (
-            '<div class="alert alert-info py-2 small mt-2 mb-0">'
-            '<strong>🗣 13 languages</strong> — English, Chinese, Japanese, Korean, '
-            'German, French, Spanish, Arabic, Russian, Dutch, Italian, Polish, '
-            'Portuguese (auto-detected).<br>'
-            '<em>⚠ Gated weights — accept the license on HuggingFace '
-            '(fishaudio/s1-mini) · CC-BY-NC-SA-4.0 non-commercial.</em><br>'
-            '<em>⚠ Quality is below S2-Pro — this is the LIGHT 0.5B alternative '
-            'for ~5 GB VRAM. A ref WAV + faithful transcript is strongly '
-            'recommended for a usable voice.</em>'
-            '</div>'
-        )
-        return (
-            '<div class="alert alert-info py-2 small mb-2">'
-            '<strong>OpenAudio S1-Mini (0.5B)</strong> — Fish Audio\'s distilled '
-            'DualAR + DAC codec. The lightweight family member: ~5 GB VRAM vs '
-            'S2-Pro\'s ~11 GB. Runs in-process on fish-speech (main).</div>'
-            + _row(
-                _grp('Max new tokens <span class="range-val">1024</span>',
-                     _rng("max_new_tokens", "128", "2048", "64", "1024")),
-                _grp('Chunk length <span class="range-val">200</span>',
-                     _rng("chunk_length", "100", "1000", "10", "200", "chars per chunk")),
-                _grp('Top-p <span class="range-val">0.8</span>',
-                     _rng("top_p", "0.1", "1.0", "0.05", "0.8")),
-            )
-            + _row(
-                _grp('Temperature <span class="range-val">0.8</span>',
-                     _rng("temperature", "0.1", "1.0", "0.05", "0.8")),
-                _grp('Repetition penalty <span class="range-val">1.1</span>',
-                     _rng("rep_penalty", "1.0", "2.0", "0.05", "1.1")),
-                _grp('', ''),
-            )
-            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice clone <span style="font-weight:400;color:#888">(recommended — no ref = default voice)</span></div>'
-            + f'<div class="param-row">{_upload_widget("s1-file", "s1-status", "s1-prompt-id", "Reference WAV — 5-30s of target voice")}</div>'
-            + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(what the ref says — improves cloning)</span>',
-                        '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
-                        'placeholder="Exact words spoken in the reference audio…">'))
-            + s1mini_tags
-            + '<p class="text-muted small mt-1">~5 GB VRAM (bf16), 44.1 kHz output. '
-            'Lightweight alternative to S2-Pro (11 GB) — the orchestrator stops '
-            'S2-Pro\'s container before loading it.</p>'
-        )
-
     if name == "s2pro":
         s2pro_tags = (
             '<div class="alert alert-info py-2 small mt-2 mb-0">'
