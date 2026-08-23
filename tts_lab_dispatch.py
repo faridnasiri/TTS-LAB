@@ -349,8 +349,10 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         _hdrs = {"Authorization": "Bearer " + hf_token} if hf_token else {}
         try:
             import urllib.request
+            # A real file URL — the api/models metadata endpoint returns 200
+            # even for gated repos, so it can't prove download access.
             req = urllib.request.Request(
-                "https://huggingface.co/api/models/fishaudio/s1-mini",
+                "https://huggingface.co/fishaudio/s1-mini/resolve/main/config.json",
                 headers=_hdrs)
             with urllib.request.urlopen(req, timeout=5): pass
         except Exception as _e:
