@@ -112,11 +112,11 @@ engines:
     vram_est_mb: 3000
     notes: Voice cloning. Needs lightning (not pytorch_lightning).
   s1mini:
-    status: experimental
+    status: verified
     container: engine-current
     stack: current
     vram_est_mb: 5000
-    notes: OpenAudio S1-Mini 0.5B distilled DualAR + DAC (modded_dac_vq) — the LIGHT Fish model (~5 GB VRAM vs s2pro 11 GB). Runs on fish-speech MAIN checkout at /opt/models/fish-speech-s1 (v1.5.1 has no modded_dac_vq/TTSInferenceEngine). Gated weights (fishaudio/s1-mini, CC-BY-NC-SA-4.0 non-commercial — personal lab OK). fish_speech sys.modules purged on load to avoid checkout collision with fishspeech. transformers 5.12.1 exceeds the repo's <=4.57.3 pin — status experimental until validated on the VM.
+    notes: OpenAudio S1-Mini 0.5B distilled DualAR + DAC (modded_dac_vq) — the LIGHT Fish model (~5 GB VRAM vs s2pro 11 GB). Runs on fish-speech MAIN checkout at /opt/models/fish-speech-s1 (v1.5.1 has no modded_dac_vq/TTSInferenceEngine). Gated weights (fishaudio/s1-mini, CC-BY-NC-SA-4.0 non-commercial — personal lab OK). fish_speech sys.modules purged on load to avoid checkout collision with fishspeech. VERIFIED 2026-08-23 on the VM (transformers 5.15.0): needs two checkout patches (patches/patch_fish_speech_s1.py) — FishTokenizer tiktoken fallback (5.x dropped tiktoken tokenizer classes) + idempotent OmegaConf eval resolver. HEAVY: loading stops the s2pro container (16 GB VRAM). Text-only synthesis is degenerate (~0.2 s) — a reference WAV is REQUIRED (voice clone, e.g. en-leo2).
   omnivoice:
     status: supported
     container: engine-current

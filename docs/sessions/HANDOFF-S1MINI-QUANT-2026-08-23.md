@@ -45,3 +45,25 @@ curl -s http://192.168.0.87:8009/status | python -m json.tool | grep -A3 s1mini
 ```
 
 First load downloads ~3.6 GB (gated) + loads; allowance 600 s.
+
+---
+
+## ✅ Deployed + verified 2026-08-23 (evening)
+
+License accepted, new HF_TOKEN persisted (`/opt/arthur-tts-lab/.env`, chmod 600 — compose reads it; `/etc/environment` updated for bare-metal SSH tests). Engine live on engine-current, `/status` available, first-load download + synthesis **SUCCESS**.
+
+### Two checkout patches (both in `patches/patch_fish_speech_s1.py`, idempotent, `sudo python3` on the VM)
+
+1. **`fish_speech/tokenizer.py` — FishTokenizer tiktoken fallback.** transformers **5.15.0** (the engine-current image has newer than the doc's 5.12.1) removed the tiktoken-reading slow tokenizer classes 4.x used. s1-mini ships only `tokenizer.tiktoken` + `special_tokens.json` (no `tokenizer_config.json`, no `tokenizer.json`) → `AutoTokenizer.from_pretrained` raises → `model.tokenizer = None` → every synth dies with `'NoneType' object has no attribute 'encode'` at `content_sequence.py:196`. Fix: try AutoTokenizer, on failure load via the `tiktoken` lib directly (`_TiktokenTokenizer` — Qwen-family pat_str, `allowed_special="all"`). Verified: semantic range 151658–155753, vocab 155754.
+2. **`fish_speech/models/dac/inference.py:20` — idempotent `OmegaConf.register_new_resolver("eval", eval)`.** Registry is global; after the sys.modules purge (engine reload after evict / switching fish checkouts) the module re-import crashes with `resolver 'eval' is already registered` → load 500. Fix: try/except ValueError.
+
+### Synthesis quirks (verified behaviour)
+
+- **Text-only input is degenerate**: no reference → ~5 semantic tokens → 0.19 s clip ("Generated 5 tokens"). S1-Mini **requires an audio prompt** — voice clone only. UI already has the ref-upload panel; API: `params: {"audio_prompt_id": "en-leo2", "ref_text": "…transcript…"}` (sidecar transcript fallback works). Verified clone: en-leo2 → 18.76 s @ 44.1 kHz in ~124 s.
+- **HEAVY eviction confirmed live**: loading s1mini SIGKILLed the s2pro container (137) — 16 GB VRAM; they cannot coexist (as designed).
+- Curl gotcha: `POST /synthesize/{engine}` needs `-H 'Content-Type: application/json'` (SynthReq JSON body); bare `-d` (urlencoded) 422s.
+- First-load timing: download ~3.6 GB (gated, cached in `/opt/models/huggingface/hub/`), load 38–113 s, then ~2 s per short synth; clone synth ~2 min.
+
+### Status
+
+`docs/engine_compatibility.yaml`: s1mini `experimental` → **`verified`**. The transformers-5.x risk that kept it experimental is resolved (patches above). VM repo `/opt/arthur-tts-lab` is current; local repo commit includes patches + this doc + yaml update.
