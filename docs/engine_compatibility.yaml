@@ -267,12 +267,6 @@ engines:
     stack: current
     vram_est_mb: 1500
     notes: Persian multi-speaker Tacotron2 — not configured
-  neutts:
-    status: experimental
-    container: engine-current
-    stack: current
-    vram_est_mb: 1000
-    notes: NeuTTS Air — not configured
   openvoice:
     status: experimental
     container: engine-current
@@ -352,7 +346,7 @@ engines:
       voice_clone:
         status: verified
         last_tested: 2026-08-23
-        description: audio_prompt_id + ref_text → 6.5 s sane output. No ref_text → fallback target-text transcript rambles (62 s)
+        description: audio_prompt_id + ref_text → 6.5 s sane output. Since the 2026-08-23 UI fix, ref_text falls back to the sidecar transcription (whisper-transcribed for curated en-* voices, real transcripts for voice-library voices) before the target-text fallback — no more flat/robotic clones from the dropdown
   qwen36:
     status: removed
     container: llm-qwen36
@@ -362,17 +356,17 @@ engines:
     removed: 2026-08-23
     notes: LLM RETIRED per user decision (never wanted) — container + llama.cpp images deleted 2026-08-23, compose service and QWEN36_URL removed 2026-08-23, entry dropped from MODEL_ORDER so no dead probe in /status. Dead code (_load/_synth_qwen36, chat UI) left in place.
 summary:
-  total: 29
+  total: 28
   supported: 18
   deprecated: 0
-  experimental: 8
+  experimental: 7  # neutts removed 2026-08-23 (user: never configured, remove)
   blocked: 3
   containers:
     engine-current:
-      total: 21
+      total: 20
       supported: 16
       deprecated: 0
-      experimental: 5
+      experimental: 4
       blocked: 0
     engine-legacy:
       total: 2

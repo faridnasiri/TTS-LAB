@@ -273,7 +273,6 @@ MODEL_INFO = {
     "csm":        {"label":"Sesame CSM 1B", "size":"~2 GB",              "rtf_est":"blocked (Meta)",        "ram_est_mb":2000, "heavy":True, "notes":"⚠ All deps ready. Blocked: meta-llama/Llama-3.2-1B gated.","arthur_fit":4},
     "qwen3tts":   {"label":"Qwen3-TTS 1.7B", "size":"~3 GB",           "rtf_est":"RTF ~3-6×",         "ram_est_mb":6000, "heavy":True, "notes":"Voice cloning 1.7B Base. 3s ref audio. x-vector-only mode. 10 languages.","arthur_fit":5},
     "orpheus":    {"label":"Orpheus 3B",    "size":"~3 GB",              "rtf_est":"needs container",       "ram_est_mb":3000, "heavy":True, "notes":"⚠ Installed but vllm vs torch nightly. Needs Dockerfile.orpheus.","arthur_fit":5},
-    "neutts":     {"label":"NeuTTS Air",    "size":"TBD",                "rtf_est":"not configured",        "ram_est_mb":1000, "heavy":True, "notes":"⚠ Not yet configured — edit _load_neutts() in engines.","arthur_fit":3},
     "indextts":   {"label":"IndexTTS-2",    "size":"~1.5 GB",            "rtf_est":"skipped",               "ram_est_mb":2000, "heavy":True, "notes":"⚠ SKIPPED: needs legacy stack.","arthur_fit":4},
     "zonos":      {"label":"Zonos v0.1",    "size":"~1.2 GB",            "rtf_est":"RTF 4.29×",            "ram_est_mb":2500, "heavy":True, "notes":"Emotion vector + speaking-rate. 44 kHz. Voice cloning.","arthur_fit":4},
     "openvoice":  {"label":"OpenVoice v2",  "size":"~600 MB",            "rtf_est":"not built",             "ram_est_mb":1500, "heavy":True, "notes":"⚠ Build failure — av package Cython.","arthur_fit":3},
@@ -292,7 +291,7 @@ MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
     "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
-    "neutts","indextts","manatts","mmsfas","zonos","openvoice",
+    "indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro","editx",
 ]
 

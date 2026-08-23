@@ -268,7 +268,6 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         "csm":        None,
         "qwen3tts":   "qwen_tts",
         "orpheus":    "orpheus_tts",
-        "neutts":     None,
         "indextts":   "indextts",
         "zonos":      "zonos",
         "openvoice":  "openvoice",
@@ -335,8 +334,6 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
                 "Clone v1.5.1: git clone --branch v1.5.1 https://github.com/fishaudio/fish-speech /tmp/fish-speech\n"
                 "Install: pip install /tmp/fish-speech --no-build-isolation"
             )
-    elif name == "neutts":
-        return False, "NeuTTS Air: not configured — edit _load_neutts() in tts_lab_engines.py"
     elif name == "openvoice":
         if not (OPENVOICE_MODELS_DIR / "converter" / "config.json").exists():
             return False, f"Checkpoints missing at {OPENVOICE_MODELS_DIR}"

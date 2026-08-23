@@ -392,14 +392,6 @@ def _build_params(name: str) -> str:
         )
         return _row(_grp("Voice", _sel("voice", ORPHEUS_VOICES, "tara"))) + emotion_hint + gpu_warn
 
-    if name == "neutts":
-        return (
-            '<div class="alert alert-warning py-2 small">'
-            '⚠ <strong>NeuTTS Air is not yet configured.</strong><br>'
-            'Edit <code>_load_neutts()</code> and <code>_synth_neutts()</code> in '
-            '<code>tts_lab_engines.py</code>.</div>'
-        )
-
     if name == "indextts":
         return (
             f'<div class="param-row">{_upload_widget("idx-file", "idx-status", "idx-prompt-id", "Reference WAV (REQUIRED — 5-30s of target voice)")}</div>'

@@ -1098,18 +1098,7 @@ def _synth_orpheus(inst, text, params):
     return _to_wav(arr, 24000), 24000
 
 
-# ── 18. NeuTTS Air ────────────────────────────────────────────────────────────
-def _load_neutts():
-    raise NotImplementedError(
-        "NeuTTS Air: package not yet configured.\n"
-        "Edit _load_neutts() in tts_lab_engines.py with the correct import after installing."
-    )
-
-def _synth_neutts(inst, text, params):
-    raise NotImplementedError("NeuTTS Air: configure _load_neutts() first.")
-
-
-# ── 19. IndexTTS-2 ────────────────────────────────────────────────────────────
+# ── 18. IndexTTS-2 ────────────────────────────────────────────────────────────
 def _load_indextts(model_dir=None):
     # Fix ExtensionsTrie removed in transformers 5.x — indextts imports it transitively
     try:
@@ -2431,7 +2420,7 @@ LOADERS: dict = {
     "chatterboxturbo": _load_chatterboxturbo,
     "fishspeech": _load_fishspeech,"csm":      _load_csm,
     "qwen3tts":   _load_qwen3tts, "orpheus":   _load_orpheus,
-    "neutts":     _load_neutts,   "indextts":  _load_indextts,
+    "indextts":   _load_indextts,
     "manatts":    _load_manatts,  "mmsfas":    _load_mmsfas,
     "zonos":      _load_zonos,    "openvoice":  _load_openvoice,
     "vibevoice":  _load_vibevoice,"higgs":     _load_higgs,
@@ -2450,7 +2439,7 @@ SYNTHERS: dict = {
     "chatterboxturbo": _synth_chatterboxturbo,
     "fishspeech": _synth_fishspeech,"csm":      _synth_csm,
     "qwen3tts":   _synth_qwen3tts, "orpheus":   _synth_orpheus,
-    "neutts":     _synth_neutts,   "indextts":  _synth_indextts,
+    "indextts":   _synth_indextts,
     "manatts":    _synth_manatts,  "mmsfas":    _synth_mmsfas,
     "zonos":      _synth_zonos,
     "openvoice":  _synth_openvoice,
