@@ -51,6 +51,18 @@ Dispatch fixes: binary-body handling with stdlib wave parse (orchestrator has no
 
 ---
 
+## Session 2026-08-23 (late) — Persian clones fixed: sidecar transcripts + sglang language enum
+
+User: "can farsi be fixed? i need it". Three layers:
+
+1. **fa-* transcripts.** The curated fa-* voices are ElevenLabs Farsi TTS output (`source: "elevenlabs-farsi"` — no dataset transcript exists; whisper base mangles Persian). The user provided the authoritative script — all 15 fa-* voices say «قشنگ ترین خاطره زندگی ام روزی بود که با ژاله و چنگیز رفتیم شمال» — written into every sidecar (`source: user-provided-2026-08-23`). A faster-whisper large-v3 cross-check (installed in /opt/arthur-extra-env; int8 CPU, 15 clips) confirmed the sentence for 13/15 (orthographic drift only); fa-charles + fa-liam were heard reading a different news sentence («عباس عراقچی وزیر امور خارجه ایران نیز… مذاکرات به خوبی پیش رفته است») by BOTH ASR models — flagged to the user, sidecars reverted to the user's sentence per their call ("these are 100% wrong scripts"). Note: the earlier `fa_diagnose.sh` had briefly rewritten charles/liam to the ASR text; `deploy_fa_fix.sh` reverted them.
+2. **s2pro 400 on every Persian clone** — the real blocker. sgl-omni's `/v1/audio/speech` validates `language` against a fixed 11-value enum (Auto|Chinese|English|French|German|Italian|Japanese|Korean|Portuguese|Russian|Spanish); the UI sent `"fa"` → `400 BadRequestError`. Fixed in `_do_synth_sglang` (tts_lab_dispatch.py): `_sglang_lang()` maps lab codes → enum names, unknown → `"Auto"` (model auto-detects fa). Deployed, verified: s2pro + fa-ryan + sidecar transcript → **6.4 s / 44.1 kHz, error=None**. This also means en-* clones via s2pro now send `"English"` instead of `"en"`.
+3. **editx fa-ryan ramble (59 s) — model limitation, documented.** With the same correct transcript, editx clones fa-alex (9.0 s), fa-mike (13.9 s), fa-ash (21.1 s borderline) but degenerates on very deep male refs: fa-ryan (f0 ≈ 84 Hz → 59 s), fa-adam (76 Hz → 55.6 s). Pitch-shifting fa-ryan up 30% collapsed instead (0.1 s — resample artifacts), so the f0 hypothesis is unproven but the trend is consistent. Verdict: EditX deep-voice OOD — use s2pro for those voices (works for all fa). Added to `docs/engine_compatibility.yaml` notes.
+
+State: all 21 ref voices (6 en + 15 fa) carry transcripts → 📝 in the dropdown, menu-clone works without typing ref_text. **Use s2pro for Persian clones** (44.1 kHz, all voices); editx for most voices except the deep-male pair. Memory: `sglang-language-enum.md`.
+
+---
+
 ## Session 2026-08-23 (evening) — UI fixes: qwen36 DNS, flat menu-clone, dark text; neutts removed
 
 Three UI issues reported by the user, all fixed and deployed (commits `d503619`, `9a0a3e7`):

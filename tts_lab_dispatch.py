@@ -618,6 +618,25 @@ def _do_synth_remote(name: str, text: str, params: dict) -> dict:
     return resp
 
 
+# sgl-omni /v1/audio/speech accepts ONLY this language enum — 2-letter codes
+# 400 ("language must be one of: Auto, Chinese, English, French, German,
+# Italian, Japanese, Korean, Portuguese, Russian, Spanish" — verified against
+# the s2pro container 2026-08-23). Persian has no enum entry; "Auto" lets the
+# model auto-detect it (S2-Pro's model-level language support includes fa).
+_SGLANG_LANG_ENUM = {
+    "auto": "Auto", "chinese": "Chinese", "english": "English",
+    "french": "French", "german": "German", "italian": "Italian",
+    "japanese": "Japanese", "korean": "Korean", "portuguese": "Portuguese",
+    "russian": "Russian", "spanish": "Spanish",
+}
+
+
+def _sglang_lang(v) -> str:
+    """Map a lab language code to the sgl-omni enum; unknown → Auto (auto-
+    detect). Lowercased comparison so 'en'/'English' both land on the enum."""
+    return _SGLANG_LANG_ENUM.get(str(v).strip().lower(), "Auto")
+
+
 def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
     """Synthesize via SGLang OpenAI-compatible API (/v1/audio/speech).
 
@@ -657,6 +676,10 @@ def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
     for k, v in params.items():
         if k in ("audio_prompt_id", "ref_audio", "ref_text"):
             continue
+        # sgl-omni's language enum rejects 2-letter codes; map them so
+        # Persian (fa → Auto) and other non-enum languages stop 400ing.
+        if name == "s2pro" and k == "language":
+            v = _sglang_lang(v)
         payload[k] = v
     ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
     if ref_id:

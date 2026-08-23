@@ -306,7 +306,7 @@ engines:
     - flashinfer 0.6.14 JIT — sm_120 has no prebuilt kernel cache, container compiles its own (devel base = nvcc; cache persisted via /opt/models/flashinfer-jit mount)
     - descript-audiotools 0.7.2 + descript-audio-codec 1.0.0 — installed --no-deps (audiotools pins protobuf<3.20 which would break cutlass-dsl's protobuf 6.x)
     - torch nightly cu130 — overrides sglang-omni's torch==2.11.0 pin (no sm_120)
-    notes: Dual-AR 5B, 80+ langs. Voice clone via references [{audio_path, text}] — 10-30 s clip + transcript. Always-resident while the container runs (~11 GB) — orchestrator stops/starts it around EditX/LLM loads (Docker socket).
+    notes: Dual-AR 5B, 80+ langs. Voice clone via references [{audio_path, text}] — 10-30 s clip + transcript. Always-resident while the container runs (~11 GB) — orchestrator stops/starts it around EditX/LLM loads (Docker socket). /v1/audio/speech `language` accepts ONLY Auto|Chinese|English|French|German|Italian|Japanese|Korean|Portuguese|Russian|Spanish — dispatcher maps 2-letter codes (fa → Auto, auto-detect); Persian clone verified 2026-08-23 (fa-ryan + sidecar transcript → 6.4 s / 44.1 kHz).
     validation:
       model_load:
         status: verified
@@ -319,7 +319,7 @@ engines:
       voice_clone:
         status: verified
         last_tested: 2026-08-23
-        description: references[{audio_path, text}] — en-leo + transcript → 3.8 s / 44.1 kHz WAV, error=None (full stop/start protocol round-trip)
+        description: references[{audio_path, text}] — en-leo + transcript → 3.8 s / 44.1 kHz WAV, error=None (full stop/start protocol round-trip). Persian: fa-ryan + sidecar transcript → 6.4 s / 44.1 kHz (language "fa" now mapped to Auto — enum-only validation otherwise 400s)
       vram_measured:
         status: verified
         last_tested: 2026-08-22
@@ -329,7 +329,7 @@ engines:
     container: engine-editx
     stack: editx
     vram_est_mb: 12800
-    notes: Step Audio EditX 3B AWQ-4bit — audio edit + zero-shot TTS. clone/emotion/style/speed/paralinguistic edit types; needs ref WAV + transcript for cloning. 24 kHz output. HEAVY (~12.8 GB resident) — orchestrator stops s2pro/LLM before load.
+    notes: Step Audio EditX 3B AWQ-4bit — audio edit + zero-shot TTS. clone/emotion/style/speed/paralinguistic edit types; needs ref WAV + transcript for cloning. 24 kHz output. HEAVY (~12.8 GB resident) — orchestrator stops s2pro/LLM before load. Persian clones verified for most fa-* voices, but VERY deep male refs (fa-ryan ~84 Hz, fa-adam ~76 Hz) degenerate to ~55-59 s rambles — model OOD, not config; use s2pro for those voices.
     validation:
       model_load:
         status: verified
