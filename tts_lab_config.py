@@ -321,5 +321,8 @@ SYNTH_TIMEOUT: dict[str, int] = {
     "chattts":   90,
     # vLLM engine warmup on first load can exceed the 300 s default
     "editx":     600,
+    # sgl-omni first request after a container start: boot + one-time
+    # flashinfer sm_120 JIT kernel compile (~3 min each, verified 2026-08-23)
+    "s2pro":     600,
 }
 DEFAULT_SYNTH_TIMEOUT = 300

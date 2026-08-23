@@ -201,9 +201,12 @@ def _check_available_remote(name: str) -> Tuple[bool, str]:
         import httpx
         # SGLang-style containers (s2pro via sgl-omni) return a bare ok on
         # /health with no `engines` map and no `model_loaded` — any HTTP 200
-        # while serving counts as available.
+        # while serving counts as available. The configured URL points at
+        # the API endpoint (…/v1/audio/speech), but /health lives at the
+        # server ROOT — strip the /v1/ path before probing.
         if url.rstrip("/") in _SGLANG_URLS:
-            r = httpx.get(f"{url}/health", timeout=10.0)
+            base = url.rstrip("/").split("/v1/")[0]
+            r = httpx.get(f"{base}/health", timeout=10.0)
             if r.status_code == 200:
                 return True, ""
             return False, f"HTTP {r.status_code}"
@@ -626,11 +629,13 @@ def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
             _container_start(_S2PRO_CONTAINER_NAME, label="S2-Pro")
             # Model load after container start takes minutes — poll health.
             # 600 s covers first boot: ~10 GB model download + the one-time
-            # flashinfer sm_120 JIT kernel compile.
+            # flashinfer sm_120 JIT kernel compile. /health lives at the
+            # server ROOT, not under the configured /v1/audio/speech path.
+            health_url = f"{url.rstrip('/').split('/v1/')[0]}/health"
             deadline = time.monotonic() + 600.0
             while time.monotonic() < deadline:
                 try:
-                    if httpx.get(f"{url}/health", timeout=5.0).status_code == 200:
+                    if httpx.get(health_url, timeout=5.0).status_code == 200:
                         break
                 except Exception:
                     pass
@@ -662,21 +667,37 @@ def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
         timeout=600.0,
     )
     r.raise_for_status()
-    result = r.json()
     synth_s = time.perf_counter() - t0
 
-    # SGLang returns audio as base64 in the response
-    audio_b64 = result.get("audio", result.get("audio_b64", ""))
-    if not audio_b64:
-        raise RuntimeError(f"SGLang response missing audio data: {list(result.keys())}")
+    # sgl-omni's /v1/audio/speech returns the audio as a BINARY body —
+    # response_format ∈ {wav, mp3, flac, pcm, aac, opus}, there is NO
+    # JSON/base64 mode (SUPPORTED_TTS_RESPONSE_FORMATS in serve/protocol.py;
+    # verified 2026-08-23 against the s2pro container, default = wav). The
+    # initial plan assumed a JSON {audio: b64} payload — wrong; keep the
+    # binary handling.
+    raw = r.content
+    if not raw:
+        raise RuntimeError("SGLang response missing audio data (empty body)")
 
-    raw = base64.b64decode(audio_b64)
-    dur_s = len(raw) / (result.get("sample_rate", 24000) * 2)  # 16-bit mono estimate
+    # Sample rate + duration from the WAV header via stdlib only — the
+    # orchestrator container has no numpy, and tts_lab_utils._wav_dur()
+    # sits behind ML imports. Fallbacks: 24000 Hz estimate by size.
+    sample_rate, n_frames = 24000, 0
+    try:
+        import io as _io
+        import wave as _wave
+        with _wave.open(_io.BytesIO(raw)) as _w:
+            sample_rate = _w.getframerate()
+            n_frames = _w.getnframes()
+    except Exception:
+        pass
+    dur_s = n_frames / sample_rate if n_frames > 0 else len(raw) / (sample_rate * 2)
 
-    slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms (SGLang)  dur ~{int(dur_s*1000)} ms  {result.get('sample_rate', 24000)} Hz")
+    audio_b64 = base64.b64encode(raw).decode()
+    slog("RESULT", name, f"✅ synth {int(synth_s*1000)} ms (SGLang)  dur {int(dur_s*1000)} ms  {sample_rate} Hz")
     return {
         "audio_b64":    audio_b64,
-        "sample_rate":  result.get("sample_rate", 24000),
+        "sample_rate":  sample_rate,
         "synth_time_ms": int(synth_s * 1000),
         "audio_dur_ms":  int(dur_s * 1000),
         "rtf":          round(synth_s / dur_s, 4) if dur_s > 0 else 0,
