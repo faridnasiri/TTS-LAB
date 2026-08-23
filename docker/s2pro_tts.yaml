@@ -26,11 +26,17 @@
 # disabled the batch validator skips the graph checks; max_running_requests
 # is capped anyway so the KV cache (sized inside the static pool) stays
 # small and the pool fits the model + eager decode activations.
+#
+# VRAM budget (2026-08-22, still OOM after graphs-off at 0.8/8):
+# 5B bf16 weights ~10 GiB + KV + vocoder/preprocessing stages (~3.4 GiB)
+# + host tenants (~0.4 GiB) = ~15.5 GiB on a 15.48 GiB card. The pool
+# ceiling must drop (0.8 -> 0.75) and KV slots must shrink (8 -> 2) —
+# a TTS engine decodes one request at a time.
 config_cls: S2ProPipelineConfig
 model_path: fishaudio/s2-pro
 runtime_overrides:
   tts_engine:
     server_args_overrides:
       disable_cuda_graph: true
-      max_running_requests: 8
-      mem_fraction_static: 0.8
+      max_running_requests: 2
+      mem_fraction_static: 0.75
