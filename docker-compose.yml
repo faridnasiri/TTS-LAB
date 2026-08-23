@@ -354,7 +354,12 @@ services:
     ports:
       - "8005:8000"
     volumes:
-      - /opt/models/huggingface:/root/.cache/huggingface
+      # /opt/models:/opt/models — HF_HOME=/opt/models/huggingface MUST land
+      # on this host mount. Until 2026-08-22 the service mounted only
+      # /opt/models/huggingface -> /root/.cache/huggingface, so the
+      # container-local /opt/models/huggingface swallowed the 11G s2-pro
+      # cache into the writable layer — lost on every recreate.
+      - /opt/models:/opt/models
       # Persist the flashinfer sm_120 JIT kernel cache — the orchestrator
       # stops/starts this container around heavy engines, and without the
       # cache every restart recompiles kernels (~minutes).
