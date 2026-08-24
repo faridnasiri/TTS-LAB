@@ -282,13 +282,16 @@ def import_from_uploads(upload_dir: Path, voice_id_prefix: str = "imported"):
         except Exception:
             pass
         wav_data = wav_path.read_bytes()
+        # Filename convention for staged refs: fa-*.wav / en-*.wav → language.
+        # Anything else keeps the Persian default (the library's primary use).
+        stem_lang = wav_path.stem.split("-")[0].lower()
         add_voice(vid, wav_data, {
             "speaker_gender": "",
             "speaker_age": "",
             "transcription": text,
             "source": "tts_uploads",
             "quality_score": 0.7,
-            "language": "fa",
+            "language": "en" if stem_lang == "en" else "fa",
         })
         print(f"  Imported: {vid}  dur={_read_wav_info(wav_path)['duration_s']}s")
         count += 1
