@@ -1,6 +1,42 @@
 # Arthur Server — Session Summary
-> Chat sessions: 2026-03-23 → 2026-08-22
+> Chat sessions: 2026-03-23 → 2026-08-24
 > Branch: `main`
+
+---
+
+## Session 2026-08-24 (late) — EditX garbage voices FIXED + two container-crash hardenings
+
+Full write-up: [EDITX-GARBAGE-2026-08-24.md](EDITX-GARBAGE-2026-08-24.md). Commits `622a039`, `436bddc`, `23ca9e4` (all local, unpushed).
+
+### Garbage voices — three independent root causes (verified with token dumps + whisper round-trip)
+
+| # | Cause | Fix |
+|---|---|---|
+| 1 | **Interleave rotation** — the model prepends spurious vq06 token(s), shifting the `[02,02,06,06,06]` frame the CosyVoice vocoder parses positionally → every frame garbles | `tts.py _generate` de-rotation (Dockerfile.engine-editx patch #3): drop the leading offset with best whole-chunk alignment, then decode only the longest fully-valid chunk prefix |
+| 2 | **No reliable EOS** — greedy argmax loops forever on a near-silent 8-token attractor (67 s ramble); unseeded (vLLM seed-0) requests always land on it | `_synth_editx` defaults: temp **0.5**, rep-pen **1.1**, text-scaled **max_tokens cap**, seed = **crc32(ref+text)** (🎲 re-rolls a bad draw) |
+| 3 | **Persian unsupported** — trained EN/ZH/JA/KO only | Documented in UI + MODEL_INFO; Persian path stays with the other engines |
+
+### Two crashes same day → two hardenings
+
+1. **21:59 death ("Server disconnected")** — a fully garbage draw (text ids in audio slots) hit the flow decoder's `ScatterGatherKernel.cu:203` **device-side assert** → poisoned the entire CUDA context → cascading 500s → onnxruntime terminate → restart. Fixed: the gate **validate-and-strips** before any CUDA — <2 valid chunks raises a clean "bad draw — retry with a different seed" error; otherwise only the valid prefix is decoded (also strips the "assistant" tail leak). Commit `436bddc`.
+2. **22:19 death (user raised temperature)** — the gate 500'd cleanly, but the engine server's generic-error path **auto-evicted + reloaded**; the old vLLM EngineCore still pinned its 12 GiB → new core init failed (0.87/15.48 GiB free) → cascade → container recycled. Fixed: `_synth_editx` converts the bad-draw error into **`SynthParamError`** → 400 **without evict/reload** (the server's own comment at `tts_lab_engine_server.py:338` already warned editx reload fails outright). Bad draws now cost a 🎲 click, never a container death. Commit `23ca9e4`.
+
+### Verified live
+
+- Cold start (first synth after container start) = engine init **196–277 s** (CUDA graph capture + JIT) — first-request curl timeouts must be ≥ 600 s.
+- Determinism: same seed + same process → bit-identical WAVs (md5 `2494a67f4bce` verified across runs).
+- ~90%+ clean draws at temp 0.5; at temp 1.2 provocation (seeds 1–5): 3× 200 (tail-stripped) + 2× HTTP 400 "EditX bad draw: no valid interleave prefix" — container stayed `Up (healthy)` at 12.9 GiB resident; seed-777 fox whispered clean afterwards.
+- Remaining caveat: ~8–10% of draws still land on wrong content (seed lottery) — 🎲 is the retry path; non-draw synth errors (CUDA OOM) still take evict+reload → orchestrator recycling (31c4b3e) self-heals with a visible disconnect.
+
+### Files
+
+| File | Change |
+|---|---|
+| `docker/Dockerfile.engine-editx` | patch #3 v2 — `_generate` de-rotation + validate-and-strip + bad-draw gate (byte-verified identical to live container) |
+| `tts_lab_engines.py` | `_synth_editx` sampling defaults + seed policy + bad-draw → SynthParamError |
+| `tts_lab_ui.py` / `tts_lab_config.py` | editx panel defaults (temp 0.5, seed 0=auto, max_tokens 0=auto) + Persian-unsupported warning |
+
+**Upstream faults drafted for a GitHub issue** (stepfun-ai/Step-Audio-EditX — user to post): `BatchEncoding` treated as list → TypeError in `<audio_N>` filter + silently broken max_tokens cap; no chunk-alignment guarantee; greedy never terminates on the 8-token attractor. NOT upstream: vLLM nightly seed behavior, Persian support.
 
 ---
 
