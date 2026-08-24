@@ -1047,13 +1047,6 @@ def _gpu_process_breakdown() -> list[dict]:
     raw = _gpu_probe_exec("nvidia-smi --query-compute-apps=pid,used_memory,process_name "
                           "--format=csv,noheader,nounits")
     procs = []
-
-
-def _container_gpu_mb(cname: str) -> int:
-    """Total GPU MiB currently pinned by processes inside container `cname`.
-    Uses the --pid=host probe breakdown; ~0.5 s (nvidia-smi exec)."""
-    return sum(p["mb"] for p in _gpu_process_breakdown()
-               if p["container"] == cname)
     for line in raw.splitlines():
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 3 or not parts[0].isdigit():
@@ -1070,6 +1063,13 @@ def _container_gpu_mb(cname: str) -> int:
             "container": pid2cont.get(parts[0], "host"),
         })
     return procs
+
+
+def _container_gpu_mb(cname: str) -> int:
+    """Total GPU MiB currently pinned by processes inside container `cname`.
+    Uses the --pid=host probe breakdown; ~0.5 s (nvidia-smi exec)."""
+    return sum(p["mb"] for p in _gpu_process_breakdown()
+               if p["container"] == cname)
 
 
 def _probe_containers_loaded() -> dict:
