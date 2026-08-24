@@ -676,6 +676,13 @@ def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
     for k, v in params.items():
         if k in ("audio_prompt_id", "ref_audio", "ref_text"):
             continue
+        # Blank params must not be forwarded — sgl-omni's pydantic schema
+        # rejects "" for int/float fields (blank seed → 422), and an empty
+        # string is never a meaningful value here (blank voice → server
+        # "default" kicks in). A remote caller sending numbers passes them
+        # through untouched.
+        if v is None or v == "":
+            continue
         # sgl-omni's language enum rejects 2-letter codes; map them so
         # Persian (fa → Auto) and other non-enum languages stop 400ing.
         if name == "s2pro" and k == "language":

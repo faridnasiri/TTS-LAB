@@ -825,12 +825,48 @@ curl -X POST http://192.168.0.87:8001/synthesize/qwen3tts \
 | | |
 |---|---|
 | **Size** | ~10 GB (BF16) |
-| **VRAM** | ~10 GB |
-| **Languages** | 80+ languages |
-| **Voice Cloning** | ✅ |
-| **Container** | SGLang (OpenAI-compatible `/v1/audio/speech`) |
+| **VRAM** | ~11 GB (always-resident) |
+| **Languages** | 80+ languages (auto-detected) |
+| **Voice Cloning** | ✅ 10-30s ref clip + transcript |
+| **Container** | SGLang-Omni (OpenAI-compatible `/v1/audio/speech`) |
 
-**Status:** ⚠️ Needs SGLang serving infra.
+**Status:** ✅ RUNNING (unblocked 2026-08-22, container `tts-lab-s2pro`).
+
+The orchestrator forwards every non-empty param from `POST /synthesize/s2pro`
+verbatim to sgl-omni's `/v1/audio/speech`. Full parameter surface (verified
+against sgl-omni `protocol.py` `CreateSpeechRequest` + the S2-Pro pipeline
+`stages.py`, 2026-08-23):
+
+**Consumed by the S2-Pro pipeline:**
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `input` | string | required | Text to synthesize |
+| `voice` | string | `default` | Alias: `speaker`. No ref = default voice |
+| `references` | list | — | `[{audio_path, text}]` — clone refs; `ref_audio`/`ref_text` shorthand for item 0 |
+| `max_new_tokens` | int | 2048 | Max generated semantic tokens |
+| `temperature` | float | 0.8 | Sampling temperature |
+| `top_p` | float | 0.8 | Top-p sampling |
+| `top_k` | int | 30 | **Must be -1 or 1–30** (0 → pipeline failure, not a clean 4xx) |
+| `repetition_penalty` | float | 1.1 | Repetition penalty |
+| `seed` | int | — | Omit/null for random |
+
+**Handled by the service layer (validated + applied outside the pipeline):**
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `language` | string | `Auto` | Enum only: Auto, Chinese, English, Japanese, Korean, German, French, Russian, Portuguese, Spanish, Italian. Persian → `Auto` (auto-detect) — the pipeline ignores it otherwise |
+| `response_format` | string | `wav` | wav \| mp3 \| flac \| pcm \| aac \| opus. **Keep `wav` via the lab** — the dispatcher parses the WAV header for sample-rate/duration; other formats degrade those to estimates |
+| `speed` | float | 1.0 | 0.25–4.0, applied to output audio |
+| `model` | string | served model | Served model identifier |
+
+**Endpoint accepts but the S2-Pro pipeline ignores** (used by other sgl-omni
+models): `task_type` (Base/CustomVoice/VoiceDesign), `instructions`,
+`x_vector_only_mode`, `token_count`/`duration_tokens` (MOSS-TTS),
+`initial_codec_chunk_frames`, `stage_params`.
+
+**Not usable via the lab:** `stream=true` — forces `response_format=pcm` chunk
+streaming, breaks the lab's binary-body playback.
 
 ---
 

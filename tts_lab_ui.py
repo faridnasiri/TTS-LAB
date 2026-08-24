@@ -651,6 +651,38 @@ def _build_params(name: str) -> str:
             '<em>Place tags inline in your text.</em>'
             '</div>'
         )
+        # response_format — keep wav for lab playback (the dispatcher parses
+        # the WAV header for exact sample-rate/duration; other formats still
+        # play but those numbers become size-based estimates).
+        s2pro_fmt_sel = _sel("response_format",
+            [("wav","WAV (default)"),("mp3","MP3"),("flac","FLAC"),
+             ("pcm","PCM raw"),("aac","AAC"),("opus","OPUS")], "wav")
+        # Full API surface for remote callers (POST /synthesize/s2pro mirrors
+        # sgl-omni's /v1/audio/speech). Sourced from sgl-omni protocol.py
+        # CreateSpeechRequest + the S2-Pro pipeline stages (2026-08-23).
+        s2pro_api_ref = (
+            '<details class="mt-2"><summary class="text-muted small" '
+            'style="cursor:pointer">📡 API params — for remote callers</summary>'
+            '<div class="alert alert-secondary py-2 small mt-1 mb-0">'
+            '<code>input</code> text · <code>voice</code> (alias <code>speaker</code>) · '
+            '<code>model</code><br>'
+            '<code>language</code> Auto | Chinese | English | Japanese | Korean | German | '
+            'French | Russian | Portuguese | Spanish | Italian<br>'
+            '<code>response_format</code> wav | mp3 | flac | pcm | aac | opus · '
+            '<code>speed</code> 0.25–4.0<br>'
+            '<code>max_new_tokens</code> · <code>temperature</code> · <code>top_p</code> · '
+            '<code>top_k</code> (must be -1 or 1–30) · <code>repetition_penalty</code> · '
+            '<code>seed</code><br>'
+            '<code>references</code> [{audio_path, text}] · <code>ref_audio</code>/'
+            '<code>ref_text</code> shorthand<br>'
+            '<em>Endpoint accepts but S2-Pro pipeline ignores (other models use them):</em> '
+            '<code>task_type</code> (Base/CustomVoice/VoiceDesign), <code>instructions</code>, '
+            '<code>x_vector_only_mode</code>, <code>token_count</code>/<code>duration_tokens</code>, '
+            '<code>initial_codec_chunk_frames</code>, <code>stage_params</code><br>'
+            '<em>Not usable via the lab:</em> <code>stream=true</code> — forces '
+            '<code>response_format=pcm</code> chunk streaming, breaks the lab\'s '
+            'binary-body playback.</div></details>'
+        )
         return (
             '<div class="alert alert-info py-2 small mb-2">'
             '<strong>Fish S2-Pro (5B Dual-AR)</strong> — served via SGLang-Omni '
@@ -661,7 +693,7 @@ def _build_params(name: str) -> str:
                 _grp('Voice',
                      '<input type="text" class="form-control form-control-sm" data-param="voice" '
                      'placeholder="default (or any name)">'),
-                _grp('Language <span style="font-size:.7rem;color:#aaa">(server enum)</span>',
+                _grp('Language <span style="font-size:.7rem;color:#aaa">(server enum — S2-Pro auto-detects anyway)</span>',
                      _sel("language",
                           [("auto","Auto (detect)"),("chinese","Chinese"),("english","English"),
                            ("french","French"),("german","German"),("italian","Italian"),
@@ -673,7 +705,26 @@ def _build_params(name: str) -> str:
             + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(required for cloning)</span>',
                         '<input type="text" class="form-control form-control-sm" data-param="ref_text" '
                         'placeholder="Exact words spoken in the reference audio…">'))
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Generation <span style="font-weight:400;color:#888">(sampling params — forwarded to sgl-omni verbatim)</span></div>'
+            + _row(
+                _grp('Temperature <span class="range-val">0.8</span>', _rng("temperature", "0.1", "2.0", "0.05", "0.8")),
+                _grp('Top-P <span class="range-val">0.8</span>', _rng("top_p", "0.1", "1.0", "0.05", "0.8")),
+                _grp('Top-K <span class="range-val">30</span>', _rng("top_k", "-1", "30", "1", "30", "must be -1 or 1–30 (0 invalid)")),
+            )
+            + _row(
+                _grp('Repetition penalty <span class="range-val">1.1</span>', _rng("repetition_penalty", "1.0", "2.0", "0.05", "1.1")),
+                _grp('Max tokens <span class="range-val">2048</span>', _rng("max_new_tokens", "128", "4096", "128", "2048")),
+                _grp('Speed <span class="range-val">1.0</span>', _rng("speed", "0.25", "4.0", "0.05", "1.0")),
+            )
+            + _row(
+                _grp('Seed <span style="font-size:.7rem;color:#aaa">(blank = random)</span>',
+                     '<input type="number" class="form-control form-control-sm" data-param="seed" '
+                     'placeholder="any integer">'),
+                _grp('Response format <span style="font-size:.7rem;color:#aaa">(non-wav: plays, but sample-rate/duration shown are estimates)</span>',
+                     s2pro_fmt_sel),
+            )
             + s2pro_tags
+            + s2pro_api_ref
             + '<p class="text-muted small mt-1">~11 GB VRAM (always-resident). RTF 0.195 on H200. '
             'Dual-AR: Slow AR (4B) predicts primary semantic tokens; Fast AR (400M) generates residual codebooks.</p>'
         )

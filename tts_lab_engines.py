@@ -2169,8 +2169,16 @@ def _synth_s2pro(inst, text, params):
     url = inst["sglang_url"]
     payload = {
         "input": text,
-        "voice": params.get("voice", "default"),
+        "voice": (params.get("voice") or "default"),
     }
+    # Forward sampling params the S2-Pro pipeline consumes (same names as
+    # the orchestrator path); blank values are skipped so pydantic doesn't
+    # reject "" for int/float fields.
+    for k in ("temperature", "top_p", "top_k", "repetition_penalty",
+              "max_new_tokens", "seed"):
+        v = params.get(k)
+        if v is not None and v != "":
+            payload[k] = v
     ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
     ref_path = _ref_wav_path(ref_id) if ref_id else None
     ref_text = (params.get("ref_text") or "").strip()
