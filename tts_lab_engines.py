@@ -8,7 +8,7 @@ Each engine exposes:
 Bottom of file: LOADERS and SYNTHERS dicts used by tts_lab_dispatch.
 """
 from __future__ import annotations
-import io, os, re, sys, tempfile, time, wave
+import io, os, re, sys, tempfile, time, wave, zlib
 import numpy as np
 from pathlib import Path
 
@@ -2356,11 +2356,15 @@ def _synth_editx(inst, text, params):
 
     # Sampling params — threaded into vLLM SamplingParams via the tts.py
     # patch baked at image build (clone()/edit()/_generate take **sampling).
-    # Seed 42+ fixes the output: identical WAV every run (the "sounds
-    # different each run" complaint, 2026-08-23). 0 or empty = random per
-    # request (vLLM convention). max_tokens caps the TOTAL token budget
-    # (prompt + generation — same semantics as the model's 8192 default);
-    # a tight cap stops the en-brian-style ramble.
+    # This model has NO reliable EOS: greedy argmax loops on a near-silent
+    # 8-token attractor forever, and unseeded draws land on that attractor
+    # (measured 4×, 2026-08-24) — so a seed is ALWAYS set, and temperature
+    # 0.5 + repetition_penalty 1.1 + a tight max_tokens cap are required
+    # for clean clones (~90%+ per draw; anything else drifts to the
+    # "assistant" tail-text leak / rambles / garbles). max_tokens caps the
+    # GENERATED audio tokens (the tts.py "total budget" subtraction is a
+    # no-op against the BatchEncoding — the request value lands in
+    # SamplingParams verbatim, verified 50→48 / 100→98 / 150→148).
     sampling: dict = {}
     for k, cast in (("seed", int), ("temperature", float), ("top_p", float),
                     ("top_k", int), ("repetition_penalty", float), ("max_tokens", int)):
@@ -2371,10 +2375,13 @@ def _synth_editx(inst, text, params):
             sampling[k] = cast(v)
         except (TypeError, ValueError):
             raise SynthParamError(f"EditX {k} must be a number, got {v!r}")
-    if sampling.get("seed") == 0:
-        # vLLM treats seed=0 as "randomize per request" — drop it so the
-        # user's intent (variety) is honored instead of a fixed 0.
-        del sampling["seed"]
+    sampling.setdefault("temperature", 0.5)
+    sampling.setdefault("repetition_penalty", 1.1)
+    if sampling.get("max_tokens", 0) <= 0:
+        # Auto cap from the target text: ~40 tok/s speech, ~15 chars/s →
+        # ≈ len(text)*2.7 audio tokens; ×1.3 margin + floor stops the
+        # post-content "assistant" leak from running on for tens of seconds.
+        sampling["max_tokens"] = max(80, int(len(target_text) * 3.5) + 20)
 
     # Reference WAV — required for clone, used as the edit source otherwise.
     ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
@@ -2399,6 +2406,14 @@ def _synth_editx(inst, text, params):
         # Falling straight back to the target text makes the prompt transcript
         # mismatch the ref audio → flat robotic output.
         prompt_text = _ref_transcript(ref_path) or target_text
+
+    if not sampling.get("seed"):
+        # vLLM seed 0 = randomize per request — for THIS model unseeded draws
+        # land on the degenerate near-silent attractor (2026-08-24, 4×).
+        # Deterministic crc32 of (ref, text): identical requests reproduce;
+        # the UI 🎲 button re-rolls a bad draw. Same text + different ref
+        # still varies, so heavy use across voices stays varied.
+        sampling["seed"] = int(zlib.crc32(f"{ref_path}:{target_text}".encode()))
 
     if edit_type == "clone":
         out, sr = tts.clone(prompt_wav_path=str(ref_path),

@@ -301,7 +301,7 @@ MODEL_INFO = {
     "higgs":      {"label":"Higgs Audio v3","size":"~8 GB (BF16)",         "rtf_est":"needs SGLang",          "ram_est_mb":8500, "heavy":True, "notes":"⚠ SGLang image tf too old. Needs upstream update.","arthur_fit":3},
     "omnivoice":  {"label":"OmniVoice",     "size":"~1.2 GB (BF16)",       "rtf_est":"RTF 0.67× ⚡",          "ram_est_mb":2000, "heavy":True, "notes":"0.6B diffusion LM. 600+ languages. Real-time!","arthur_fit":4},
     "s2pro":      {"label":"Fish S2-Pro",   "size":"~10 GB (BF16, 5B)",   "rtf_est":"SGLang-Omni (RTF 0.195)", "ram_est_mb":11000,"heavy":True,"notes":"Dual-AR 5B, 80+ langs. Voice cloning via ref WAV + transcript. Always-resident while container runs — orchestrator stops/starts it around EditX/LLM. 15k inline control tags.","arthur_fit":3},
-    "editx":      {"label":"Step Audio EditX","size":"~5 GB (AWQ-4bit)",  "rtf_est":"LLM-based (vLLM)",        "ram_est_mb":9000, "heavy":True,"notes":"3B LLM audio-edit + zero-shot TTS. Clone (zh/en/sichuanese/cantonese/ja/ko) + emotion(14)/style(38)/paralinguistic edits. Needs ref WAV + transcript for cloning. 24 kHz output.","arthur_fit":4},
+    "editx":      {"label":"Step Audio EditX","size":"~5 GB (AWQ-4bit)",  "rtf_est":"LLM-based (vLLM)",        "ram_est_mb":9000, "heavy":True,"notes":"3B LLM audio-edit + zero-shot TTS. Clone (zh/en/sichuanese/cantonese/ja/ko — NO Persian, model was never trained on it) + emotion(14)/style(38)/paralinguistic edits. Needs ref WAV + transcript for cloning. 24 kHz output.","arthur_fit":4},
 }
 
 MODEL_ORDER = [

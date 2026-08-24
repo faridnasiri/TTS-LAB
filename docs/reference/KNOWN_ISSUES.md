@@ -1,5 +1,31 @@
 # Arthur TTS Lab — Known Issues & Next Steps
 
+## Latest incident — 2026-08-24 EditX garbage voices ✅ FIXED (see session log)
+
+- **Was:** "editx tts produces garbage voices only" — all EditX clones came out as
+  gibberish / near-silence / garbled speech regardless of ref or text.
+- **Root causes (three, all verified with token dumps + whisper round-trip):**
+  1. **Interleave rotation** — the model sometimes prepends spurious vq06 token(s),
+     shifting the `[02,02,06,06,06]` frame the CosyVoice vocoder parses positionally
+     → every frame decodes to garbage. Fixed in `tts.py` `_generate` (Dockerfile.engine-editx
+     patch #3): drop the leading offset with the best 5-chunk alignment + truncate to
+     whole chunks.
+  2. **No reliable EOS** — greedy argmax loops forever on a near-silent 8-token
+     attractor (67 s ramble measured); the model only stops when sampling randomly
+     hits `<|EOT|>`. Unseeded requests (vLLM seed 0) land on the attractor. Fixed by
+     defaults in `_synth_editx`: temperature **0.5** + repetition_penalty **1.1** +
+     text-scaled **max_tokens cap** (leak-killer) + deterministic crc32 seed
+     (reproducible; UI 🎲 re-rolls a bad draw). ~90%+ clean clones per draw.
+  3. **Persian unsupported** — Step-Audio-EditX was trained on EN/ZH/JA/KO only;
+     the tokenizer has Persian chars but the model cannot produce Persian speech
+     (verified with en/zh refs + fa refs across 8 combos). UI + MODEL_INFO now state
+     this. Other engines (qwen3tts, etc.) remain the Persian path.
+- **Files:** `docker/Dockerfile.engine-editx` (patch #3), `tts_lab_engines.py`
+  (`_synth_editx` defaults), `tts_lab_ui.py`, `tts_lab_config.py`.
+- **Detail:** [session log 2026-08-24 editx](../sessions/EDITX-GARBAGE-2026-08-24.md)
+
+---
+
 ## Latest incident — 2026-08-17 boot hang (recovered, see report)
 
 - Guest hung ~8h in initramfs shell after forced restart — root fs carried ext4 error bit from unclean shutdown; boot `fsck -p` refused auto-repair. Fixed with `e2fsck -fy` from the shell; zero data loss.

@@ -216,6 +216,59 @@ open(p, 'w').write(src)
 print('PATCHED_OK')
 EOF
 
+# ── tts.py _generate interleave de-rotation (garbage-voice fix) ───────
+# The model sometimes prepends spurious vq06 token(s) to its output,
+# shifting the [02,02,06,06,06] frame the CosyVoice vocoder parses
+# positionally → every frame decodes to garbage (user report 2026-08-24:
+# "editx tts produces garbage voices only"). Drop the leading offset
+# with the best 5-chunk alignment to [2,2,6,6,6] and truncate to whole
+# chunks so no partial frame reaches the vocoder. Single choke point —
+# covers clone() AND edit(). Verified 2026-08-24 via whisper round-trip:
+# fox restored with temp 0.5 + rep-pen 1.1 + max_tokens cap.
+RUN /opt/arthur/Step-Audio-EditX/.venv/bin/python - <<'EOF'
+import sys
+p = '/opt/arthur/Step-Audio-EditX/tts.py'
+src = open(p).read()
+anchor = '        output_ids = torch.tensor(output_token_ids, dtype=torch.long)'
+n = src.count(anchor)
+if n != 1:
+    print(f'TENSOR_CONV_COUNT={n} — aborting'); sys.exit(1)
+ins = '''        # INTERLEAVE FIX (2026-08-24): the model sometimes prepends spurious
+        # vq06 token(s), shifting the [02,02,06,06,06] frame the vocoder parses
+        # positionally — every frame then decodes to garbage. Drop the leading
+        # offset that best aligns 5-chunks to [2,2,6,6,6], and truncate to
+        # whole chunks so no partial frame reaches the vocoder.
+        if len(output_token_ids) > 5:
+            def _cls(t):
+                _t = t - 65536
+                return '2' if 0 <= _t < 1024 else ('6' if 1024 <= _t < 8192 else 'X')
+            def _score(k):
+                _s = output_token_ids[k:]
+                _n = len(_s) // 5
+                if _n == 0:
+                    return 0.0
+                _ok = 0
+                for _i in range(_n):
+                    _ch = _s[_i * 5:_i * 5 + 5]
+                    if ''.join(_cls(_t) for _t in _ch) == '22666':
+                        _ok += 1
+                return _ok / _n
+            _best = max(range(5), key=_score)
+            _s0, _sk = _score(0), _score(_best)
+            if _best != 0 and _sk > _s0:
+                logger.warning(f"INTERLEAVE FIX: dropping {_best} leading token(s) (align {_s0:.2f} -> {_sk:.2f})")
+                output_token_ids = output_token_ids[_best:]
+        _rem = len(output_token_ids) % 5
+        if _rem:
+            logger.debug(f"INTERLEAVE FIX: truncating {_rem} trailing token(s) to whole chunks")
+            output_token_ids = output_token_ids[:len(output_token_ids) // 5 * 5]
+
+'''
+src = src.replace(anchor, ins + anchor, 1)
+open(p, 'w').write(src)
+print('PATCHED_OK')
+EOF
+
 ENV CUDA_HOME=/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13 \
     PATH=/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     FLASHINFER_WORKSPACE_BASE=/opt/models/flashinfer-editx-jit

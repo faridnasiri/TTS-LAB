@@ -775,8 +775,8 @@ def _build_params(name: str) -> str:
             )
             + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Sampling <span style="font-weight:400;color:#888">(voice character + variety)</span></div>'
             + _row(
-                _grp('Temperature <span class="range-val">0.7</span> <span style="font-size:.7rem;color:#aaa">(lower = steadier)</span>',
-                     _rng("temperature", "0.1", "2.0", "0.05", "0.7")),
+                _grp('Temperature <span class="range-val">0.5</span> <span style="font-size:.7rem;color:#aaa">(0.5 = the stable setting; 0.7+ drifts to garbage)</span>',
+                     _rng("temperature", "0.1", "2.0", "0.05", "0.5")),
                 _grp('Top-P <span class="range-val">1.0</span>', _rng("top_p", "0.1", "1.0", "0.05", "1.0")),
             )
             + _row(
@@ -786,15 +786,15 @@ def _build_params(name: str) -> str:
                      _rng("repetition_penalty", "1.0", "2.0", "0.05", "1.1")),
             )
             + _row(
-                _grp('Seed <span style="font-size:.7rem;color:#aaa">(777 = fixed; 0/empty = random — same seed ≈ similar output, not bit-identical in this vLLM dev build)</span>',
+                _grp('Seed <span style="font-size:.7rem;color:#aaa">(0 = auto — deterministic per text+voice; 🎲 re-rolls a bad draw; identical seed = identical WAV)</span>',
                      '<div class="d-flex gap-1">'
-                     '<input type="number" class="form-control form-control-sm" data-param="seed" value="777" '
+                     '<input type="number" class="form-control form-control-sm" data-param="seed" value="0" '
                      'style="min-width:110px">'
                      '<button type="button" class="btn btn-outline-secondary btn-sm" title="Random seed (variety) 🎲" '
                      f"onclick=\"var i=this.closest('.engine-pane').querySelector('[data-param=\\'seed\\']');i.value=Math.floor(Math.random()*100000)\">🎲</button>"
                      '</div>'),
-                _grp('Max tokens <span class="range-val">8192</span> <span style="font-size:.7rem;color:#aaa">(total budget — cap it to stop rambling)</span>',
-                     _rng("max_tokens", "512", "8192", "256", "8192")),
+                _grp('Max tokens <span class="range-val">0</span> <span style="font-size:.7rem;color:#aaa">(0 = auto — sized to the text; caps the post-speech leak/ramble)</span>',
+                     _rng("max_tokens", "0", "2048", "32", "0")),
             )
             + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice source <span style="font-weight:400;color:#888">(ref WAV + transcript)</span></div>'
             + f'<div class="param-row">{_upload_widget("ex-file", "ex-status", "ex-prompt-id", "Reference WAV — target voice (clone) / edit source")}</div>'
@@ -803,7 +803,9 @@ def _build_params(name: str) -> str:
                         'placeholder="Exact words spoken in the reference audio…">'))
             + editx_tags
             + '<p class="text-muted small mt-1">~12.8 GB VRAM (AWQ-4bit). Output 24 kHz. '
-            'Mutually exclusive with S2-Pro — orchestrator stops it automatically.</p>'
+            'Mutually exclusive with S2-Pro — orchestrator stops it automatically.<br>'
+            '⚠ Languages: <b>EN/ZH/JA/KO only</b> — the model cannot produce '
+            'Persian (garbled output, verified 2026-08-24).</p>'
         )
 
     if name == "qwen36":
