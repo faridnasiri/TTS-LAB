@@ -52,11 +52,17 @@ _GPU_CONTAINERS: tuple[str, ...] = (
 
 def _docker_api(method: str, path: str, content: bytes | None = None,
                 timeout: float = 10.0) -> tuple[int, str]:
-    """Call Docker Engine API via Unix socket. Returns (status_code, body)."""
+    """Call Docker Engine API via Unix socket. Returns (status_code, body).
+
+    Content-bearing calls (exec create, etc.) MUST send the JSON Content-Type
+    header — without it the API rejects with 400 "malformed Content-Type".
+    """
     import httpx
+    headers = {"Content-Type": "application/json"} if content is not None else None
     transport = httpx.HTTPTransport(uds=_DOCKER_SOCK)
     with httpx.Client(transport=transport, timeout=timeout) as client:
-        r = client.request(method, f"http://localhost{path}", content=content)
+        r = client.request(method, f"http://localhost{path}", content=content,
+                           headers=headers)
         return r.status_code, r.text
 
 
@@ -927,6 +933,7 @@ def _gpu_process_breakdown() -> list[dict]:
     Returns [] when no GPU container is up or the Docker API fails.
     """
     import json as _j
+    import re as _re
     if not _HAS_DOCKER_SOCK:
         return []
     pid2cont: dict[str, str] = {}
@@ -953,9 +960,14 @@ def _gpu_process_breakdown() -> list[dict]:
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 3 or not parts[0].isdigit():
             continue
+        # used_memory may come back as "1234" or "1234 MiB" depending on the
+        # driver — never let the int() cast 500 the whole /status.
+        m = _re.search(r"\d+", parts[1])
+        if m is None:
+            continue
         procs.append({
             "pid":      int(parts[0]),
-            "mb":       int(parts[1]),
+            "mb":       int(m.group()),
             "process":  parts[2],
             "container": pid2cont.get(parts[0], "host"),
         })
