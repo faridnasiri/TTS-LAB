@@ -23,6 +23,10 @@ from tts_lab_config import (
     OUTETTS_DEFAULT_GGUF, OMNIVOICE_LANGUAGES,
 )
 from tts_lab_dispatch import _available, _import_cache
+try:
+    from tts_lab_history import HISTORY_CAP
+except (ImportError, ModuleNotFoundError):
+    HISTORY_CAP = 200  # orchestrator image without the new module yet
 
 
 # ── HTML helpers ──────────────────────────────────────────────────────────────
@@ -1039,6 +1043,24 @@ code{background:#2a3050;padding:1px 5px;border-radius:4px;font-size:.82em;}
 .chat-stats{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px;font-size:.68rem;color:#8899aa;}
 .chat-stats span{background:#1a2230;border:1px solid #2a3050;padding:2px 8px;border-radius:4px;}
 @keyframes chatIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+
+/* ── Generation History ── */
+.gh-save-row{display:inline-flex;align-items:center;gap:6px;font-size:.75rem;color:var(--muted);margin:6px 0 2px;}
+.gh-save-row input{accent-color:var(--accent2);}
+.gh-card{background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px;
+         display:flex;flex-direction:column;gap:6px;}
+.gh-head{display:flex;justify-content:space-between;align-items:center;gap:6px;}
+.gh-engine{font-size:.72rem;font-weight:700;color:var(--accent);}
+.gh-time{font-size:.65rem;color:var(--muted);white-space:nowrap;}
+.gh-text{font-size:.75rem;color:var(--text);max-height:3.2em;overflow:hidden;
+         display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;}
+.gh-metrics{font-size:.7rem;color:var(--muted);}
+.gh-chip{background:#242840;border:1px solid var(--border);border-radius:10px;font-size:.62rem;
+         color:#aab8d0;padding:1px 7px;white-space:nowrap;}
+.gh-params{display:flex;flex-wrap:wrap;gap:4px;align-items:center;}
+.gh-params-pre{width:100%;max-height:180px;overflow:auto;background:var(--bg);border:1px solid var(--border);
+               border-radius:6px;padding:6px;font-size:.65rem;margin:4px 0 0;}
+.gh-actions{display:flex;gap:6px;}
 </style>"""
 
 _JS = r"""
@@ -1241,7 +1263,8 @@ document.addEventListener('DOMContentLoaded', () => {
   if (search) search.addEventListener('input', () => {
     const q = search.value.toLowerCase();
     document.querySelectorAll('.engine-btn').forEach(b => {
-      b.style.display = b.dataset.label.toLowerCase().includes(q) ? '' : 'none';
+      const label = (b.dataset.label || '').toLowerCase();
+      b.style.display = label.includes(q) ? '' : 'none';
     });
   });
   dbg('STATUS', '—', 'UI ready — TTS Lab loaded');
@@ -1268,9 +1291,10 @@ async function synth(model) {
   const t0 = performance.now();
   try {
     showChatLoading(model);
+    const saveCb = document.getElementById('save-' + model);
     const res = await fetch(`${API}/synthesize/${model}`, {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({text, params})
+      body: JSON.stringify({text, params, save: saveCb ? saveCb.checked : false})
     });
     const roundtrip = (performance.now() - t0).toFixed(0);
     dbg('REQUEST', model, `← HTTP ${res.status}  roundtrip ${roundtrip} ms`);
@@ -1314,6 +1338,8 @@ async function synth(model) {
         card.querySelector('.m-sr').textContent    = data.sample_rate   + ' Hz';
         const rtf = parseFloat(data.rtf);
         card.querySelector('.m-rtf').style.color = rtf <= 1 ? '#4caf50' : rtf <= 5 ? '#ff9800' : '#f44336';
+        const mh = card.querySelector('.m-history');
+        if (mh && data.history_id) mh.style.display = '';
       }
       dbg('RESULT', model,
         `✅ synth ${data.synth_time_ms} ms  |  dur ${data.audio_dur_ms} ms  |  RTF ${data.rtf}×  |  ${data.sample_rate} Hz  |  model load ${data.load_time_s} s`);
@@ -1840,6 +1866,109 @@ function renderVoiceCards(voices) {
   }).join('');
 }
 
+/* ── Generation History ── */
+let ghTotal = 0, ghOffset = 0;
+const GH_PAGE = 50;
+
+function showGenerationHistory() {
+  document.querySelectorAll('.engine-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-engine="genthistory"]')?.classList.add('active');
+  document.querySelectorAll('.engine-pane').forEach(p => p.style.display = 'none');
+  document.getElementById('pane-genthistory').style.display = 'block';
+  loadGenerationHistory();
+  loadGenerationHistoryStats();
+}
+
+function loadGenerationHistoryStats() {
+  fetch('/history/stats').then(r => r.json()).then(s => {
+    const c = document.getElementById('gh-count');
+    const b = document.getElementById('gh-stats');
+    if (c) c.textContent = s.total + ' clips';
+    if (b) b.textContent = s.total + ' clips';
+  }).catch(() => {});
+}
+
+async function loadGenerationHistory(more = false) {
+  const p = new URLSearchParams();
+  const ids = ['gh-filter-engine','gh-filter-q','gh-filter-voice','gh-filter-mindur',
+               'gh-filter-maxdur','gh-filter-dfrom','gh-filter-dto','gh-filter-sort'];
+  ids.forEach(id => { const v = document.getElementById(id).value; if (v) p.set(id.replace('gh-filter-',''), v); });
+  p.set('limit', GH_PAGE);
+  p.set('offset', more ? ghOffset : 0);
+  try {
+    const r = await fetch('/history?' + p);
+    const d = await r.json();
+    ghTotal = d.total; ghOffset = (more ? ghOffset : 0) + d.entries.length;
+    renderHistoryCards(d.entries, more);
+    document.getElementById('gh-summary').textContent = d.total + ' clips';
+    document.getElementById('gh-more').style.display = ghOffset < d.total ? '' : 'none';
+  } catch(e) { console.log('History error:', e); }
+}
+
+function escHtml(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderHistoryCards(entries, append) {
+  const grid = document.getElementById('gh-grid');
+  if (!entries.length && !append) {
+    grid.innerHTML = '<div class="text-muted small">No generations yet — run a synthesis with "Save to history" checked.</div>';
+    return;
+  }
+  const html = entries.map(e => {
+    const chips = Object.entries(e.params || {}).slice(0, 8)
+      .map(([k,v]) => '<span class="gh-chip">' + escHtml(k) + '=' + escHtml(v) + '</span>').join('');
+    return '<div class="gh-card" id="gh-card-' + e.id + '">'
+      + '<div class="gh-head"><span class="gh-engine">' + escHtml(e.engine_label || e.engine) + '</span>'
+      + '<span class="gh-time">' + escHtml((e.created_at || '').replace('T',' ').replace('Z','')) + '</span></div>'
+      + '<div class="gh-text" title="' + escHtml(e.text) + '">' + escHtml(e.text) + '</div>'
+      + '<audio controls preload="none" style="width:100%;height:24px" src="/history/' + e.id + '/audio"></audio>'
+      + '<div class="gh-metrics">⏱ ' + (e.audio_dur_ms/1000).toFixed(2) + 's · RTF ' + e.rtf + '× · synth ' + e.synth_time_ms
+      + ' ms · load ' + e.load_time_s + ' s · ' + e.sample_rate + ' Hz</div>'
+      + '<div class="gh-params">' + chips
+      + '<button class="btn-action" onclick="toggleHistoryParams(this)" title="Show full raw parameters">⚙ Params</button>'
+      + '<pre class="gh-params-pre" style="display:none">' + escHtml(JSON.stringify(e.params, null, 2)) + '</pre></div>'
+      + '<div class="gh-actions">'
+      + '<button class="btn-action" onclick="downloadHistoryEntry(\'' + e.id + '\')" title="Download WAV">⬇ Download</button>'
+      + '<button class="btn-action" onclick="deleteHistoryEntry(\'' + e.id + '\')" title="Delete from history">🗑 Delete</button>'
+      + '</div></div>';
+  }).join('');
+  grid.innerHTML = append ? grid.innerHTML + html : html;
+}
+
+function toggleHistoryParams(btn) {
+  const pre = btn.closest('.gh-params').querySelector('.gh-params-pre');
+  pre.style.display = pre.style.display === 'none' ? 'block' : 'none';
+  btn.textContent = pre.style.display === 'none' ? '⚙ Params' : '⚙ Hide';
+}
+
+function downloadHistoryEntry(id) {
+  const a = document.createElement('a');
+  a.href = '/history/' + id + '/audio'; a.download = id + '.wav'; a.click();
+}
+
+async function deleteHistoryEntry(id) {
+  if (!confirm('Delete this generation from history?')) return;
+  try {
+    await fetch('/history/' + id, {method: 'DELETE'});
+    const card = document.getElementById('gh-card-' + id);
+    if (card) card.remove();
+    loadGenerationHistoryStats();
+  } catch(e) { alert('Delete failed: ' + e); }
+}
+
+function resetHistoryFilters() {
+  ['gh-filter-engine','gh-filter-q','gh-filter-voice','gh-filter-mindur',
+   'gh-filter-maxdur','gh-filter-dfrom','gh-filter-dto']
+    .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  document.getElementById('gh-filter-sort').value = 'newest';
+  loadGenerationHistory();
+}
+
+let _ghDebounce = null;
+function debouncedHistoryLoad() { clearTimeout(_ghDebounce); _ghDebounce = setTimeout(loadGenerationHistory, 250); }
+
 async function refreshRefDropdowns(selectId) {
   // Fetch /refs and repopulate the given SELECT (or all if selectId is null)
   try {
@@ -1960,6 +2089,7 @@ window.addEventListener('load', () => {
   pollServerLog();
   schedulePreview();
   loadVoiceLibraryStats();
+  loadGenerationHistoryStats();
   refreshRefDropdowns(null);  // populate all reference WAV dropdowns from /refs
 });
 </script>"""
@@ -2009,6 +2139,7 @@ def _result_card(n: str) -> str:
         f'<span class="metric-pill">RTF <b class="m-rtf">—</b></span>'
         f'<span class="metric-pill">⬇ <b class="m-load">—</b></span>'
         f'<span class="metric-pill">🎚 <b class="m-sr">—</b></span>'
+        f'<span class="metric-pill m-history" style="display:none">💾 <a href="#" onclick="showGenerationHistory();return false" style="color:var(--accent)">Saved</a></span>'
         f'</div>'
         f'<audio class="audio-player" controls preload="none"></audio>'
         f'<div class="error-panel" id="errpanel-{n}">'
@@ -2069,6 +2200,9 @@ def build_page() -> str:
             f'    onchange="saveDescription(\"{n}\")" rows="2"></textarea>'
             f'</div>'
             f'<div class="params-area">{_build_params(n)}</div>'
+            + ('' if MODEL_INFO.get(n, {}).get("engine_type") == "llm" else
+               f'<label class="gh-save-row"><input type="checkbox" id="save-{n}" checked> '
+               f'Save to history <span class="text-muted small">(keeps last {HISTORY_CAP})</span></label>')
             + (f'<p class="text-warning small mt-1">⚠ {reason}</p>' if not ok else "")
             + f'<div class="synth-bar">'
             + f"  <button id=\"btn-{n}\" class=\"btn-synth\" onclick=\"synth('{n}')\">▶ Synthesise</button>"
@@ -2091,6 +2225,23 @@ def build_page() -> str:
         '<span class="eng-rtf" id="vl-count">—</span>'
         '<span class="eng-stars">🔊</span>'
         '</button>'
+    )
+
+    # ── Generation History sidebar item ──
+    sidebar_items.append(
+        '<div class="sidebar-section" style="margin-top:8px">📼 Generation History</div>'
+        '<button class="engine-btn" data-engine="genthistory" '
+        'onclick="showGenerationHistory()" style="border-left:3px solid var(--accent2)">'
+        '<span class="eng-dot">📼</span>'
+        '<span class="eng-name">History</span>'
+        '<span class="eng-rtf" id="gh-count">—</span>'
+        '<span class="eng-stars">💾</span>'
+        '</button>'
+    )
+
+    history_engine_opts = "".join(
+        f'<option value="{n}">{MODEL_INFO[n]["label"]}</option>'
+        for n in MODEL_ORDER
     )
 
     if DEVICE == "cuda":
@@ -2195,6 +2346,64 @@ def build_page() -> str:
         <!-- Voice cards grid -->
         <div id="vl-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px">
           <div class="text-muted small">Loading voice library...</div>
+        </div>
+      </div>
+      <!-- Generation History Pane -->
+      <div class="engine-pane" id="pane-genthistory" style="display:none">
+        <div class="engine-header">
+          <span class="engine-title">📼 Generation History</span>
+          <span class="rtf-badge" id="gh-stats">— clips</span>
+        </div>
+        <!-- Filter bar -->
+        <div class="param-row" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Engine</label>
+            <select id="gh-filter-engine" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto" onchange="loadGenerationHistory()">
+              <option value="">All</option>
+              {history_engine_opts}
+            </select>
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Search text/params</label>
+            <input id="gh-filter-q" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="text or param value…" style="width:160px" oninput="debouncedHistoryLoad()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Voice/speaker</label>
+            <input id="gh-filter-voice" class="form-control form-control-sm bg-dark text-light border-secondary" placeholder="voice, speaker, ref…" style="width:140px" oninput="debouncedHistoryLoad()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Min dur (s)</label>
+            <input type="number" id="gh-filter-mindur" class="form-control form-control-sm bg-dark text-light border-secondary" value="0" min="0" style="width:70px" onchange="loadGenerationHistory()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Max dur (s)</label>
+            <input type="number" id="gh-filter-maxdur" class="form-control form-control-sm bg-dark text-light border-secondary" value="0" min="0" style="width:70px" onchange="loadGenerationHistory()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">From</label>
+            <input type="date" id="gh-filter-dfrom" class="form-control form-control-sm bg-dark text-light border-secondary" style="width:140px" onchange="loadGenerationHistory()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">To</label>
+            <input type="date" id="gh-filter-dto" class="form-control form-control-sm bg-dark text-light border-secondary" style="width:140px" onchange="loadGenerationHistory()">
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <label class="text-muted small">Sort</label>
+            <select id="gh-filter-sort" class="form-select form-select-sm bg-dark text-light border-secondary" style="width:auto" onchange="loadGenerationHistory()">
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="duration">Longest first</option>
+              <option value="rtf">Slowest RTF first</option>
+            </select>
+          </div>
+          <div class="param-group" style="flex:0 0 auto">
+            <button class="btn btn-sm btn-outline-secondary" onclick="resetHistoryFilters()">✕ Clear</button>
+          </div>
+        </div>
+        <div class="engine-meta" id="gh-summary">Loading history…</div>
+        <div id="gh-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-top:10px"></div>
+        <div style="text-align:center;margin-top:12px">
+          <button class="btn-action" id="gh-more" style="display:none" onclick="loadGenerationHistory(true)">⬇ Load more</button>
         </div>
       </div>
     </div>

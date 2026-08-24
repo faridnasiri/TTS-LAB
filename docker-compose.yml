@@ -70,6 +70,7 @@ services:
       - /opt/models:/opt/models
       - /tmp/tts_uploads:/tmp/tts_uploads
       - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /opt/arthur/generation_history:/opt/arthur/generation_history
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       <<: *common-env

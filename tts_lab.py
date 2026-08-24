@@ -59,6 +59,10 @@ from tts_lab_dispatch import (
     _import_cache, _import_cache_lock, _sweep_done,
 )
 from tts_lab_ui import build_page
+from tts_lab_history import (
+    save_generation, list_history, get_history_path,
+    delete_history_entry, history_stats,
+)
 
 # ── Conditional imports (not available in orchestrator mode) ────
 if _ORCHESTRATOR_MODE:
@@ -102,6 +106,7 @@ app = FastAPI(title="Arthur TTS Lab")
 class SynthReq(BaseModel):
     text:   str
     params: dict = {}
+    save:   bool = True  # per-generation opt-in to the history library; UI checkbox, default checked
 
 
 @app.on_event("startup")
@@ -244,6 +249,26 @@ async def synthesize(model: str, req: SynthReq):
             loop.run_in_executor(None, _do_synth, model, req.text, req.params),
             timeout=float(timeout),
         )
+        # ── Generation history (opt-in; must never fail the synth) ──
+        # audio_b64 present in all three dispatch modes; LLM engines return
+        # text only and are skipped by the guard regardless.
+        if req.save and result.get("audio_b64"):
+            try:
+                hid = await loop.run_in_executor(None, lambda: save_generation(
+                    engine=model,
+                    engine_label=MODEL_INFO[model]["label"],
+                    text=req.text, params=req.params,
+                    audio_b64=result["audio_b64"],
+                    sample_rate=result.get("sample_rate", 0),
+                    synth_time_ms=result.get("synth_time_ms", 0),
+                    audio_dur_ms=result.get("audio_dur_ms", 0),
+                    rtf=result.get("rtf", 0),
+                    load_time_s=result.get("load_time_s", 0),
+                ))
+                if hid:
+                    result["history_id"] = hid
+            except Exception as e:
+                slog("HISTORY", model, f"history save failed (synth unaffected): {e}")
         return JSONResponse(result)
     except asyncio.TimeoutError:
         return JSONResponse({
@@ -431,6 +456,44 @@ async def preview_text(text: str = "", provider: str = "none"):
         return JSONResponse({"processed_text": text, "provider": provider, "note": "orchestrator mode — raw text"})
     result = _process_persian_text(text, provider)
     return JSONResponse({"processed_text": result, "provider": provider})
+
+
+# ── Generation History endpoints (all modes) ────────────────────
+
+@app.get("/history/stats")
+async def generation_history_stats():
+    return JSONResponse(history_stats())
+
+
+@app.get("/history")
+async def generation_history_list(
+    engine: str = "", q: str = "", voice: str = "",
+    min_dur: float = 0, max_dur: float = 0,
+    date_from: str = "", date_to: str = "",
+    sort: str = "newest", limit: int = 50, offset: int = 0,
+):
+    return JSONResponse(list_history(
+        engine=engine, q=q, voice=voice,
+        min_dur_s=min_dur, max_dur_s=max_dur,
+        date_from=date_from, date_to=date_to,
+        sort=sort, limit=limit, offset=offset,
+    ))
+
+
+@app.get("/history/{entry_id}/audio")
+async def generation_history_audio(entry_id: str):
+    from fastapi.responses import Response
+    path = get_history_path(entry_id)
+    if not path:
+        raise HTTPException(404, f"History entry not found: {entry_id}")
+    return Response(content=path.read_bytes(), media_type="audio/wav")
+
+
+@app.delete("/history/{entry_id}")
+async def generation_history_delete(entry_id: str):
+    if not delete_history_entry(entry_id):
+        raise HTTPException(404, f"History entry not found: {entry_id}")
+    return JSONResponse({"ok": True, "deleted": entry_id})
 
 
 # ── Voice Library endpoints (only in non-orchestrator mode) ─────

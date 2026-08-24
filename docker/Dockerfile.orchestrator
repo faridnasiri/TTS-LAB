@@ -31,6 +31,7 @@ COPY tts_lab.py /opt/arthur/
 COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_ui.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/
+COPY tts_lab_history.py /opt/arthur/
 
 EXPOSE 8009
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s \
