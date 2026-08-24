@@ -906,7 +906,25 @@ def _evict_all_tts_engines() -> dict:
             evict_url = f"{base_url}/evict"
             r = httpx.post(evict_url, timeout=10.0)
             if r.status_code == 200:
-                results[base_url] = r.json()
+                data = r.json()
+                # A torch engine container that still pins VRAM after a
+                # successful /evict is leaking — a failed load pinned in
+                # traceback locals, or a native arena (ONNX Runtime /
+                # CTranslate2) outside torch's allocator. torch can't see or
+                # free it; only process death can. Probe the container's
+                # actual driver-level usage and recycle if it's still fat.
+                if _HAS_DOCKER_SOCK and not data.get("evicted"):
+                    cname = (f"tts-lab-{host}" if host.startswith("engine-")
+                             else None)
+                    if cname and _container_running(cname):
+                        held = _container_gpu_mb(cname)
+                        if held > 768:
+                            ok = _container_restart(cname, label=host)
+                            data["evicted"] = ok
+                            data["mode"] = "container-restart-after-evict"
+                            data["note"] = (f"process pinned {held} MiB after "
+                                            f"/evict — container recycled")
+                results[base_url] = data
             else:
                 results[base_url] = {"error": f"HTTP {r.status_code}", "detail": r.text[:200]}
         except Exception as e:
@@ -1029,6 +1047,13 @@ def _gpu_process_breakdown() -> list[dict]:
     raw = _gpu_probe_exec("nvidia-smi --query-compute-apps=pid,used_memory,process_name "
                           "--format=csv,noheader,nounits")
     procs = []
+
+
+def _container_gpu_mb(cname: str) -> int:
+    """Total GPU MiB currently pinned by processes inside container `cname`.
+    Uses the --pid=host probe breakdown; ~0.5 s (nvidia-smi exec)."""
+    return sum(p["mb"] for p in _gpu_process_breakdown()
+               if p["container"] == cname)
     for line in raw.splitlines():
         parts = [p.strip() for p in line.split(",")]
         if len(parts) < 3 or not parts[0].isdigit():
@@ -1168,10 +1193,25 @@ def _evict_engine(name: str) -> dict:
         r = httpx.post(f"{stripped}/evict", timeout=10.0)
         if r.status_code == 200:
             data = r.json()
-            return {"model": name, "evicted": bool(data.get("evicted")),
-                    "container": stripped,
-                    "freed_mb": data.get("freed_mb", 0),
-                    "held_mb": data.get("held_mb", 0)}
+            result = {"model": name, "evicted": bool(data.get("evicted")),
+                      "container": stripped,
+                      "freed_mb": data.get("freed_mb", 0),
+                      "held_mb": data.get("held_mb", 0)}
+            # Same ghost-detection as _evict_all_tts_engines: /evict reports
+            # nothing loaded, but the process still pins VRAM → recycle.
+            if _HAS_DOCKER_SOCK and not data.get("evicted"):
+                cname = (f"tts-lab-{stripped.split('//')[-1].split(':')[0]}"
+                         if stripped.split("//")[-1].split(":")[0].startswith("engine-")
+                         else None)
+                if cname and _container_running(cname):
+                    held = _container_gpu_mb(cname)
+                    if held > 768:
+                        ok = _container_restart(cname, label=name)
+                        result["evicted"] = ok
+                        result["mode"] = "container-restart-after-evict"
+                        result["note"] = (f"process pinned {held} MiB after "
+                                          f"/evict — container recycled")
+            return result
         return {"model": name, "evicted": False, "container": stripped,
                 "error": f"HTTP {r.status_code}", "detail": r.text[:200]}
     except Exception as e:
