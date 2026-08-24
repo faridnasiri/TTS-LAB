@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import importlib.util
 import json
 import os
 import shutil
@@ -69,6 +70,20 @@ _load_times: dict[str, float] = {}   # engine_name → last load time (cached)
 _current_engine: str | None = None
 _current_instance: object | None = None
 _lock = threading.Lock()
+
+# vLLM-backed stack (editx): a failed vLLM engine-core init leaves its memory
+# arena pinned in-process forever ("vLLM engine core can't re-init in-process"
+# — see synthesize retry path). Detect vLLM presence; on load failure below we
+# exit so Docker (restart: unless-stopped) recycles the container from 0 MiB.
+_HAS_VLLM = importlib.util.find_spec("vllm") is not None
+
+
+def _recycle_container():
+    """Exit the process (after the HTTP error response is flushed) so Docker
+    restarts this container with a clean process — vLLM memory is only freed
+    by process death."""
+    _sys.stdout.flush()
+    os._exit(1)
 
 
 class SynthRequest(BaseModel):
@@ -155,6 +170,13 @@ def _load_engine(name: str) -> object:
                 torch.cuda.empty_cache()
             except Exception:
                 pass
+            if _HAS_VLLM:
+                # A failed vLLM core can't be retried in-process AND its arena
+                # stays pinned — die and let Docker recycle the container, so
+                # the next request starts from a clean 0 MiB process.
+                print(f"[engine-server:{_STACK}] vLLM load failed — exiting in "
+                      f"1.5 s for container restart (restart: unless-stopped)")
+                threading.Timer(1.5, _recycle_container).start()
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to load engine '{name}': {e}"
@@ -209,6 +231,9 @@ async def health():
         }
 
     # ── GPU info for orchestrator display ──
+    # vram_* is device-wide (torch.cuda.mem_get_info sees the whole GPU);
+    # proc_* is THIS process's own footprint (vLLM arena etc.) — lets the
+    # orchestrator explain who holds what even when no engine is "loaded".
     gpu_info = None
     try:
         import torch
@@ -219,6 +244,8 @@ async def health():
                 "vram_total": _total // 1048576,
                 "vram_used":  (_total - _free) // 1048576,
                 "vram_free":  _free // 1048576,
+                "proc_allocated_mb": int(torch.cuda.memory_allocated(0) // 1048576),
+                "proc_reserved_mb":  int(torch.cuda.memory_reserved(0) // 1048576),
             }
     except Exception:
         pass
@@ -357,33 +384,45 @@ class EvictResponse(BaseModel):
     engine_was: str | None = None
     vram_free_mb: int = 0
     vram_total_mb: int = 0
+    freed_mb: int = 0     # device-wide memory actually released by this evict
+    held_mb: int = 0      # what THIS process still pins after (vLLM arena etc.)
 
 
 @app.post("/evict", response_model=EvictResponse)
 async def evict():
     """Evict the currently loaded engine and free GPU memory.
 
-    Called by the orchestrator before loading the Qwen 3.6 LLM, which
-    needs 12-15 GB of clean VRAM. This guarantees zero TTS models
-    resident in GPU memory before the LLM loads.
+    Called by the orchestrator before loading heavy engines / via the UI.
+    Reports freed_mb (device-wide delta) and held_mb (what this process
+    still pins afterwards — vLLM-backed stacks report a large held_mb,
+    which tells the orchestrator that only a container restart truly
+    evicts it).
     """
     global _current_engine
     was = _current_engine
+    try:
+        import torch
+        free_before, total = torch.cuda.mem_get_info()
+    except Exception:
+        free_before, total = 0, 0
     _evict_current()
     try:
         import torch
-        free, total = torch.cuda.mem_get_info()
-        free_mb = free // 1048576
-        total_mb = total // 1048576
+        free_after, total = torch.cuda.mem_get_info()
+        held_mb = int(torch.cuda.memory_reserved(0) // 1048576) if torch.cuda.is_available() else 0
     except Exception:
-        free_mb, total_mb = 0, 0
+        free_after, held_mb = 0, 0
+    freed_mb = max(0, (free_after - free_before) // 1048576)
     print(f"[engine-server:{_STACK}] /evict — was={was}  "
-          f"vram_free={free_mb}/{total_mb} MB")
+          f"vram_free={free_after // 1048576}/{total // 1048576} MB  "
+          f"freed={freed_mb} MB  held={held_mb} MB")
     return EvictResponse(
         evicted=was is not None,
         engine_was=was,
-        vram_free_mb=free_mb,
-        vram_total_mb=total_mb,
+        vram_free_mb=free_after // 1048576,
+        vram_total_mb=total // 1048576,
+        freed_mb=freed_mb,
+        held_mb=held_mb,
     )
 
 

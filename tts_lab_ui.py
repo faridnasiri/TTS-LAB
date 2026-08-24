@@ -1591,7 +1591,11 @@ async function unload(model) {
 
 /* Evict a single engine from VRAM — POST /models/{model}/evict
    (orchestrator routes to the container's /evict; SGLang servers get their
-   container stopped). Works in both remote and bare-metal modes. */
+   container stopped, vLLM containers restarted). Works in both remote and
+   bare-metal modes. */
+function fmtMiB(mb) {
+  return mb >= 1024 ? (mb/1024).toFixed(1) + ' GiB' : mb + ' MiB';
+}
 async function evictModel(model, ask = true) {
   const label = (document.querySelector(`[data-engine="${model}"]`)?.dataset.label) || model;
   if (ask && !confirm(`Evict ${label} from VRAM?\n\nThe model will reload lazily on the next synthesis.`)) return;
@@ -1604,7 +1608,11 @@ async function evictModel(model, ask = true) {
     await refreshStatus();
     if (data.evicted) {
       dbg('VRAM', model, 'Evicted from VRAM');
-      showToast(`Evicted ${label} from VRAM`);
+      let msg = `Evicted ${label} from VRAM`;
+      if (data.freed_mb) msg += ` · freed ${fmtMiB(data.freed_mb)}`;
+      if (data.held_mb)  msg += ` · ${fmtMiB(data.held_mb)} still held by process`;
+      else if (data.mode === 'remote-vllm' || data.mode === 'remote-sglang') msg += ' — container recycled';
+      showToast(msg);
     } else {
       dbg('VRAM', model, 'Not evicted — ' + (data.note || data.error || 'unknown'));
       showToast(`⚠ ${label}: ${data.note || data.error || 'not evicted'}`);
@@ -1695,6 +1703,22 @@ async function refreshStatus() {
         badge.className = 'gpu-badge ok';
         badge.textContent = `🟢 ${d.gpu.name} · ${gTot} MB VRAM`;
       }
+      // Per-process breakdown — WHO holds the VRAM (containers + bare-metal
+      // Image Lab). Falls back silently when the orchestrator is old/remote.
+      const det = document.getElementById('vram-detail');
+      if (det && Array.isArray(d.gpu.processes)) {
+        const lbl = (p) => {
+          if (p.container !== 'host') return p.container.replace('tts-lab-','');
+          const n = (p.process || '').toLowerCase();
+          if (n.includes('img')) return 'Image Lab';
+          if (n.includes('sgl')) return 'sglang';
+          return p.process ? p.process.split('/').pop() : 'host';
+        };
+        det.textContent = 'GPU: ' + d.gpu.processes.map(p =>
+          `${lbl(p)} ${fmtMiB(p.mb)}`).join(' · ');
+      } else if (det) {
+        det.textContent = '';
+      }
     }
     // ── Loaded-in-VRAM chips (one per resident model, ✕ to evict) ──
     const loaded = Object.entries(d.models).filter(([,m]) => m.status === 'loaded');
@@ -1774,7 +1798,13 @@ async function evictAllVRAM() {
       dbg('VRAM','-','Errors: ' + JSON.stringify(data.errors));
     }
     await refreshStatus();
-    showToast('Evicted ' + data.evicted_count + ' engine(s) from VRAM');
+    const freed = data.freed_mb_total || 0, held = data.held_mb_total || 0;
+    const errs = Object.keys(data.errors || {}).length;
+    let msg = 'Evicted ' + data.evicted_count + ' engine(s)';
+    if (freed) msg += ' · freed ' + fmtMiB(freed);
+    if (held)  msg += ' · ' + fmtMiB(held) + ' still held (vLLM/SGLang process)';
+    if (errs)  msg += ' · ' + errs + ' error(s)';
+    showToast(msg);
     btn.textContent = 'Done';
     setTimeout(function() { btn.textContent = 'Evict VRAM'; }, 2000);
   } catch(e) {
@@ -2310,6 +2340,7 @@ def build_page() -> str:
     <div class="bar-item">
       <div class="bar-track"><div class="bar-fill vram" id="vram-bar" style="width:0%"></div></div>
       <span class="bar-label" id="vram-text">Loading VRAM…</span>
+      <span class="bar-label" id="vram-detail" style="color:#9aa"></span>
     </div>
   </div>
   {gpu_badge}

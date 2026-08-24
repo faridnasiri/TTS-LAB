@@ -186,6 +186,11 @@ async def status():
             gpu_info = best_gpu
         else:
             gpu_info = {"mode": "orchestrator — engines served by remote containers"}
+        # Per-process GPU breakdown (pid → mb → container) so the UI can
+        # show WHO holds the VRAM, incl. the bare-metal Image Lab service.
+        procs = probes.get("__gpu_processes__")
+        if procs:
+            gpu_info["processes"] = procs
     return JSONResponse({
         "models": models,
         "system": {"total": tot, "used": used, "free": free},
@@ -351,9 +356,15 @@ async def evict_all_tts():
     results = _evict_all_tts_engines()
     evicted = sum(1 for v in results.values() if v.get("evicted"))
     errors = {k: v for k, v in results.items() if "error" in v}
+    # Aggregate how much was actually freed vs still held (vLLM/SGLang
+    # containers report no freed_mb — a restart/stop frees ~everything).
+    freed_mb_total = sum(v.get("freed_mb", 0) or 0 for v in results.values())
+    held_mb_total  = sum(v.get("held_mb", 0) or 0 for v in results.values())
     return JSONResponse({
         "evicted_count": evicted,
         "containers_checked": len(results),
+        "freed_mb_total": freed_mb_total,
+        "held_mb_total": held_mb_total,
         "errors": errors,
         "details": {k: v for k, v in results.items() if "error" not in v},
     })

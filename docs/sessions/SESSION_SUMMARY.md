@@ -515,3 +515,25 @@ repo (`26b0e41e…`, `6c98ffcb…`).
 ### Not approved (do NOT implement)
 
 Fix #2 (cap resolution for short prompts), fix #4 (idle-eviction `last_used` bug).
+
+---
+
+## Session 2026-08-24 — VRAM Eviction Fixed + Per-Process GPU Visibility
+
+EditX OOM diagnosis: s2pro (always-resident, PID 368, 7.98 GiB) + editx vLLM mid-load (4.89 GiB) → 20 MiB alloc failed with 11 MiB free. "Evict VRAM" button was a no-op because (a) `/evict-all` never touched SGLang containers (s2pro un-evictable via button), (b) every engine container reported `current_engine: None` while processes held 6.6 GiB (failed vLLM loads leave their arena pinned; bookkeeping desyncs), (c) `/evict` returns `evicted: False` when nothing is bookmarked, so the UI showed "Evicted 0" with VRAM unchanged.
+
+### Fixes (all 4)
+
+1. **`/evict-all` + single evict now cover every engine class** (`tts_lab_dispatch.py`): SGLang (s2pro) → container stop; vLLM-backed (editx, orpheus) → container restart (in-process evict can't free vLLM's arena — `_VLLM_CONTAINERS` map, `_container_restart()` helper); standard torch containers → POST /evict. Dead services (legacy, orpheus) skip instead of DNS-erroring.
+2. **vLLM load-failure self-recycle** (`tts_lab_engine_server.py`): on a failed load in a vLLM-backed stack (`_HAS_VLLM` = vllm importable), the server exits 1.5 s after the error response so Docker (`restart: unless-stopped`) recycles the container from 0 MiB — kills the "stuck 4.89 GiB from a failed OOM load" trap.
+3. **Honest memory reporting**: engine `/evict` returns `freed_mb` (device-wide delta) + `held_mb` (what the process still pins); `/evict-all` aggregates `freed_mb_total`/`held_mb_total`; UI toasts now say "Evicted N · freed X · Y still held" instead of a hollow count. Engine `/health` adds per-process `proc_allocated_mb`/`proc_reserved_mb`.
+4. **Per-process GPU breakdown in `/status`**: orchestrator runs `nvidia-smi --query-compute-apps` via Docker exec in a GPU container, maps host PIDs → containers via `docker top`, and returns `gpu.processes` (pid/mb/process/container) — incl. the bare-metal Image Lab. UI shows a live "GPU: engine-editx 3.9 GiB · engine-current 2.1 GiB · Image Lab 230 MiB" line under the VRAM bar.
+
+### s2pro lighter-eviction options (checked on image)
+
+- sgl-omni has **no unload endpoint** and `docker pause` frees nothing — stop/restart remains the eviction mechanism (already light: weights on host mount + flashinfer JIT persisted at `/opt/models/flashinfer-jit` → no re-download/recompile on restart).
+- sgl-omni CLI **does accept `--cpu-offload-gb N`** (sglang 0.5.16 `OffloaderV1`): keeps the container alive with ~N GB of weights in CPU RAM (GPU footprint drops to ~3-4 GB) — coexistence mode without restarts, at the cost of per-request speed + CPU RAM. Not defaulted (would skew benchmark RTF); available as an opt-in compose flag.
+
+### Verification
+
+`py_compile` clean on all four files. Live repro before fix: `/evict-all` → `evicted_count: 0`, VRAM 6624→6624 MiB. Deployment of the new code (orchestrator + engine image rebuilds) NOT yet done — user to run `make deploy-orchestrator` / `make deploy-engine ENGINE=editx` etc. on the VM.

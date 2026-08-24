@@ -32,13 +32,31 @@ _S2PRO_CONTAINER_NAME = "tts-lab-s2pro"
 _DOCKER_SOCK = "/var/run/docker.sock"
 _HAS_DOCKER_SOCK = os.path.exists(_DOCKER_SOCK)
 
+# vLLM-backed engine containers: vLLM never returns its memory arena to the
+# driver on an in-process evict (engine core can't re-init either) — the only
+# real eviction is a container restart. editx (8105) + orpheus (8002) are
+# vLLM; engine-current/qwen/mid/legacy are torch-based and /evict in-place
+# works for them.
+_VLLM_CONTAINERS: dict[str, str] = {
+    "editx":   "tts-lab-engine-editx",
+    "orpheus": "tts-lab-orpheus",
+}
 
-def _docker_api(method: str, path: str, timeout: float = 10.0) -> tuple[int, str]:
+# Engine containers (for PID→container mapping of GPU processes).
+_GPU_CONTAINERS: tuple[str, ...] = (
+    "tts-lab-engine-current", "tts-lab-engine-qwen", "tts-lab-engine-mid",
+    "tts-lab-engine-legacy", "tts-lab-engine-editx", "tts-lab-s2pro",
+    "tts-lab-orpheus", "tts-lab-vibevoice", "tts-lab-higgs",
+)
+
+
+def _docker_api(method: str, path: str, content: bytes | None = None,
+                timeout: float = 10.0) -> tuple[int, str]:
     """Call Docker Engine API via Unix socket. Returns (status_code, body)."""
     import httpx
     transport = httpx.HTTPTransport(uds=_DOCKER_SOCK)
     with httpx.Client(transport=transport, timeout=timeout) as client:
-        r = client.request(method, f"http://localhost{path}")
+        r = client.request(method, f"http://localhost{path}", content=content)
         return r.status_code, r.text
 
 
@@ -89,6 +107,59 @@ def _container_start(name: str, label: str = "container") -> bool:
     except Exception as e:
         slog("VRAM", "start", f"Failed to start {name}: {e}")
         return False
+
+
+def _container_restart(name: str, label: str = "container") -> bool:
+    """Restart a named container — the only real eviction for vLLM-backed
+    containers, whose memory arena survives any in-process unload."""
+    if not _HAS_DOCKER_SOCK:
+        slog("VRAM", "evict", f"No Docker socket — cannot restart {name}")
+        return False
+    try:
+        if not _container_running(name):
+            slog("VRAM", "evict", f"{label} container not running ({name}) — nothing to restart")
+            return True
+        code, _ = _docker_api("POST", f"/v1.49/containers/{name}/restart")
+        ok = code in (204, 304)
+        slog("VRAM", "evict", f"Restart {label} container ({name}) → HTTP {code} {'✓' if ok else '✗'}")
+        return ok
+    except Exception as e:
+        slog("VRAM", "evict", f"Failed to restart {name}: {e}")
+        return False
+
+
+def _running_containers() -> set[str]:
+    """Names of all running containers (via Docker API)."""
+    if not _HAS_DOCKER_SOCK:
+        return set()
+    try:
+        import json as _j
+        code, body = _docker_api("GET", "/v1.49/containers/json")
+        if code != 200:
+            return set()
+        return {c["Names"][0].lstrip("/") for c in _j.loads(body)}
+    except Exception:
+        return set()
+
+
+def _docker_exec(container: str, cmd: str, timeout: float = 10.0) -> str:
+    """Run a shell command inside a container via the Docker API; return
+    combined stdout (Tty:true merges the streams, no multiplexing headers)."""
+    import json as _j
+    try:
+        code, body = _docker_api(
+            "POST", f"/v1.49/containers/{container}/exec", timeout=timeout,
+            content=_j.dumps({"AttachStdout": True, "AttachStderr": True,
+                              "Tty": True, "Cmd": ["sh", "-c", cmd]}).encode())
+        if code != 201:
+            return ""
+        exec_id = _j.loads(body)["Id"]
+        code, body = _docker_api(
+            "POST", f"/v1.49/exec/{exec_id}/start", timeout=timeout,
+            content=b'{"Detach": false, "Tty": true}')
+        return body if code == 200 else ""
+    except Exception:
+        return ""
 
 
 def _llm_container_running() -> bool:
@@ -783,15 +854,48 @@ def _sweep_availability() -> None:
 # ── Global engine eviction (for LLM VRAM clearance) ────────────────
 
 def _evict_all_tts_engines() -> dict:
-    """POST /evict to every known engine container. Returns per-URL results.
+    """Evict every engine from VRAM. Returns per-target results.
 
-    Called before LLM synthesis to guarantee 100% clean VRAM.
-    The LLM (Qwen 3.6 35B-A3B) needs ~12.4 GB — any resident TTS model
-    would cause OOM on the 16 GB RTX 5060 Ti.
+    Called by the UI 'Evict VRAM' button (and historically before LLM
+    synthesis). Three classes of target, because one eviction method does
+    NOT fit all:
+      1. SGLang engines (s2pro — always-resident, no /evict endpoint)
+         → stop the container (restarted lazily on next synthesis)
+      2. vLLM-backed containers (editx, orpheus) → restart the container
+         (vLLM's arena can't be freed in-process)
+      3. standard torch engine containers → POST /evict (in-process unload)
     """
     import httpx
     results: dict[str, dict] = {}
+    running = _running_containers()
+    _vllm_urls = {_REMOTE_ENGINES[e].rstrip("/")
+                  for e in _VLLM_CONTAINERS if e in _REMOTE_ENGINES}
+
+    # 1) SGLang: the model is resident while the server container runs.
+    if _HAS_DOCKER_SOCK and _S2PRO_CONTAINER_NAME in running:
+        results[f"container:{_S2PRO_CONTAINER_NAME}"] = {
+            "evicted": _container_stop(_S2PRO_CONTAINER_NAME, label="S2-Pro"),
+            "mode": "container-stop",
+        }
+
+    # 2) vLLM-backed containers: restart is the only real eviction.
+    for eng, cname in sorted(_VLLM_CONTAINERS.items()):
+        if cname in running:
+            results[f"container:{cname}"] = {
+                "evicted": _container_restart(cname, label=eng),
+                "mode": "container-restart",
+            }
+
+    # 3) Standard torch engine containers: in-process /evict.
     for base_url in sorted(_ENGINE_CONTAINER_URLS):
+        if base_url in _vllm_urls:
+            continue  # already recycled above
+        # Compose-style URL (host has no dot) whose container is down →
+        # skip: avoids DNS errors from dead services (legacy, orpheus).
+        host = base_url.split("//")[-1].split(":")[0]
+        if _HAS_DOCKER_SOCK and "." not in host and f"tts-lab-{host}" not in running:
+            results[base_url] = {"error": "container not running — skipped"}
+            continue
         try:
             evict_url = f"{base_url}/evict"
             r = httpx.post(evict_url, timeout=10.0)
@@ -812,6 +916,50 @@ def _evict_all_tts_engines() -> dict:
 _loaded_probe_cache: dict = {}
 _loaded_probe_ts: float = 0.0
 _LOADED_PROBE_TTL = 2.0  # seconds
+
+
+def _gpu_process_breakdown() -> list[dict]:
+    """Which processes actually hold the GPU, and which container each is in.
+
+    nvidia-smi runs inside one GPU container and reports HOST PIDs; `docker
+    top` maps those back to containers. Processes outside the container fleet
+    (the bare-metal Image Lab service, stray python) are labelled "host".
+    Returns [] when no GPU container is up or the Docker API fails.
+    """
+    import json as _j
+    if not _HAS_DOCKER_SOCK:
+        return []
+    pid2cont: dict[str, str] = {}
+    for cname in _GPU_CONTAINERS:
+        try:
+            code, body = _docker_api("GET", f"/v1.49/containers/{cname}/top")
+            if code != 200:
+                continue
+            data = _j.loads(body)
+            titles = data.get("Titles", [])
+            pid_idx = titles.index("PID") if "PID" in titles else 1
+            for row in data.get("Processes", []):
+                if len(row) > pid_idx and row[pid_idx].isdigit():
+                    pid2cont[row[pid_idx]] = cname
+        except Exception:
+            continue
+    target = next((c for c in _GPU_CONTAINERS if c in pid2cont.values()), None)
+    if target is None:
+        return []
+    raw = _docker_exec(target, "nvidia-smi --query-compute-apps=pid,used_memory,process_name "
+                              "--format=csv,noheader,nounits")
+    procs = []
+    for line in raw.splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) < 3 or not parts[0].isdigit():
+            continue
+        procs.append({
+            "pid":      int(parts[0]),
+            "mb":       int(parts[1]),
+            "process":  parts[2],
+            "container": pid2cont.get(parts[0], "host"),
+        })
+    return procs
 
 
 def _probe_containers_loaded() -> dict:
@@ -862,6 +1010,10 @@ def _probe_containers_loaded() -> dict:
             out[base] = {"engines": {}, "current_engine": None, "gpu": None,
                          "sglang_up": False}
 
+    # GPU process breakdown (per-container, incl. bare-metal Image Lab).
+    # Stored under a sentinel key — never a container URL.
+    out["__gpu_processes__"] = _gpu_process_breakdown()
+
     with _import_cache_lock:
         _loaded_probe_cache = out
         _loaded_probe_ts = now
@@ -911,12 +1063,30 @@ def _evict_engine(name: str) -> dict:
                 "container": base,
                 "note": "SGLang server holds its model always-resident — no "
                         "/evict endpoint (and no Docker socket to stop it)"}
+    # vLLM-backed engines: an in-process /evict cannot free vLLM's memory
+    # arena — restart the container (weights re-load lazily on next synth).
+    if name in _VLLM_CONTAINERS:
+        cname = _VLLM_CONTAINERS[name]
+        if not _HAS_DOCKER_SOCK:
+            return {"model": name, "evicted": False, "mode": "remote-vllm",
+                    "container": cname,
+                    "note": "vLLM memory can't be freed in-process — no Docker "
+                            "socket to restart the container"}
+        if not _container_running(cname):
+            return {"model": name, "evicted": True, "mode": "remote-vllm",
+                    "container": cname,
+                    "note": "container not running — nothing resident"}
+        ok = _container_restart(cname, label=name)
+        return {"model": name, "evicted": ok, "mode": "remote-vllm",
+                "container": cname}
     try:
         r = httpx.post(f"{stripped}/evict", timeout=10.0)
         if r.status_code == 200:
             data = r.json()
             return {"model": name, "evicted": bool(data.get("evicted")),
-                    "container": stripped}
+                    "container": stripped,
+                    "freed_mb": data.get("freed_mb", 0),
+                    "held_mb": data.get("held_mb", 0)}
         return {"model": name, "evicted": False, "container": stripped,
                 "error": f"HTTP {r.status_code}", "detail": r.text[:200]}
     except Exception as e:
