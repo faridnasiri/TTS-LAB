@@ -637,6 +637,15 @@ def _sglang_lang(v) -> str:
     return _SGLANG_LANG_ENUM.get(str(v).strip().lower(), "Auto")
 
 
+# sgl-omni validates numeric request fields STRICTLY — no pydantic coercion:
+# a JSON string "0.8" 400s ("temperature must be a float", "max_new_tokens
+# must be an integer", "seed must be an integer" — verified 2026-08-23). The
+# UI sliders send strings, so the dispatcher coerces these to real JSON
+# numbers before POSTing. Int vs float sets.
+_SGLANG_INT_PARAMS = frozenset(("top_k", "max_new_tokens", "seed"))
+_SGLANG_FLOAT_PARAMS = frozenset(("temperature", "top_p", "repetition_penalty", "speed"))
+
+
 def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
     """Synthesize via SGLang OpenAI-compatible API (/v1/audio/speech).
 
@@ -683,6 +692,18 @@ def _do_synth_sglang(name: str, text: str, params: dict, url: str) -> dict:
         # through untouched.
         if v is None or v == "":
             continue
+        # Coerce numeric fields to real JSON numbers (sgl-omni is strict —
+        # string "0.8" → 400). Garbage values are dropped rather than 400'd.
+        if k in _SGLANG_INT_PARAMS:
+            try:
+                v = int(v)
+            except (ValueError, TypeError):
+                continue
+        elif k in _SGLANG_FLOAT_PARAMS:
+            try:
+                v = float(v)
+            except (ValueError, TypeError):
+                continue
         # sgl-omni's language enum rejects 2-letter codes; map them so
         # Persian (fa → Auto) and other non-enum languages stop 400ing.
         if name == "s2pro" and k == "language":

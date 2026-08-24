@@ -833,9 +833,13 @@ curl -X POST http://192.168.0.87:8001/synthesize/qwen3tts \
 **Status:** ✅ RUNNING (unblocked 2026-08-22, container `tts-lab-s2pro`).
 
 The orchestrator forwards every non-empty param from `POST /synthesize/s2pro`
-verbatim to sgl-omni's `/v1/audio/speech`. Full parameter surface (verified
-against sgl-omni `protocol.py` `CreateSpeechRequest` + the S2-Pro pipeline
-`stages.py`, 2026-08-23):
+to sgl-omni's `/v1/audio/speech`. Numeric params (`temperature`, `top_p`,
+`top_k`, `repetition_penalty`, `max_new_tokens`, `seed`, `speed`) are coerced
+to real JSON numbers — sgl-omni validates strictly and 400s on string
+`"0.8"` (`"max_new_tokens must be an integer"`, verified 2026-08-23), so
+remote callers may send either strings or numbers. Full parameter surface
+(verified against sgl-omni `protocol.py` `CreateSpeechRequest` + the S2-Pro
+pipeline `stages.py`, 2026-08-23):
 
 **Consumed by the S2-Pro pipeline:**
 

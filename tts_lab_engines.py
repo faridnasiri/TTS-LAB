@@ -2172,13 +2172,18 @@ def _synth_s2pro(inst, text, params):
         "voice": (params.get("voice") or "default"),
     }
     # Forward sampling params the S2-Pro pipeline consumes (same names as
-    # the orchestrator path); blank values are skipped so pydantic doesn't
-    # reject "" for int/float fields.
+    # the orchestrator path); blank values are skipped, and numerics are
+    # coerced to real JSON numbers — sgl-omni validates strictly and 400s
+    # on string "0.8" ("must be an integer/float", verified 2026-08-23).
     for k in ("temperature", "top_p", "top_k", "repetition_penalty",
               "max_new_tokens", "seed"):
         v = params.get(k)
-        if v is not None and v != "":
-            payload[k] = v
+        if v is None or v == "":
+            continue
+        try:
+            payload[k] = int(v) if k in ("top_k", "max_new_tokens", "seed") else float(v)
+        except (ValueError, TypeError):
+            continue
     ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
     ref_path = _ref_wav_path(ref_id) if ref_id else None
     ref_text = (params.get("ref_text") or "").strip()
