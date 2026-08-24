@@ -1252,12 +1252,31 @@ document.addEventListener('change', e => {
   // clone engines (editx, s2pro, qwen3tts…) degrade badly when the prompt
   // transcript mismatches the ref audio, and voice-library / whisper
   // sidecars carry the real words of the clip.
+  //
+  // Stale-fill guard (2026-08-24): the fill only ran on empty fields, so
+  // once a ref was picked (auto-filled) and the user switched to another
+  // voice, the OLD transcript stayed in ref_text and was sent against the
+  // NEW audio — OmniVoice then recited the mismatched prompt ("my voice
+  // is …" spam). Track the last value WE auto-filled per select; on ref
+  // change replace it (or clear it if the new voice has no sidecar), but
+  // never clobber text the user typed or edited themselves.
   const pane = sel.closest('.engine-pane');
   const refTextEl = pane && pane.querySelector('[data-param="ref_text"]');
   const transcript = opt.dataset.transcript || '';
-  if (refTextEl && !(refTextEl.value || '').trim() && transcript) {
-    refTextEl.value = transcript;
-    showToast('📝 Ref transcript filled from sidecar — edit it if inaccurate');
+  if (refTextEl) {
+    const cur = (refTextEl.value || '').trim();
+    const prevAuto = sel.dataset.autoRefText || '';
+    if (!cur || cur === prevAuto) {
+      refTextEl.value = transcript;
+      sel.dataset.autoRefText = transcript;
+      if (transcript && cur !== transcript) {
+        showToast('📝 Ref transcript synced to the selected voice — edit it if inaccurate');
+      } else if (!transcript && cur) {
+        showToast('🧹 Cleared stale ref transcript — this voice has no sidecar');
+      }
+    } else {
+      sel.dataset.autoRefText = '';
+    }
   }
   const lang = opt.dataset.lang || '';
   if (!lang) return;
