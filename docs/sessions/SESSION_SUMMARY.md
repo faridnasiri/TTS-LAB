@@ -40,6 +40,32 @@ Full write-up: [EDITX-GARBAGE-2026-08-24.md](EDITX-GARBAGE-2026-08-24.md). Commi
 
 ---
 
+## Session 2026-08-24 (late 2) — OmniVoice "my voice is…" repetition FIXED (stale ref transcript)
+
+### Symptom
+
+OmniVoice cloning output recited the reference **transcript** ("*…My voice is engineered for clarity…*") instead of only the target text, then degraded into rambling garbage. Longer outputs (speed 0.5) ran 56 s for a ~230-char news paragraph.
+
+### Root cause — UI stale ref_text, verified end-to-end
+
+1. **UI auto-fill only ran on an EMPTY `ref_text` field** (`tts_lab_ui.py` ref-select handler, added 2026-08-23 for editx/s2pro/qwen3tts). Pick en-leo2 → its sidecar transcript auto-fills the field.
+2. Switch the ref voice to **en-brian / en-chris / en-william** → the field is non-empty → **leo2's transcript stayed in `ref_text`**, and every request paired the NEW audio with the OLD transcript.
+3. OmniVoice's prompt is `ref_text + " " + text` (`_combine_text`); with mismatched prompt text vs ref audio the diffusion LM **re-reads the prompt** — confirmed by transcribing the user's saved outputs in `/opt/arthur/generation_history/` (`b6e3e57f` etc. via `docker cp` + whisper round-trip: *"Favois is engineered for clarity, precision, and online crossover. Stocks were little changed…"* + garbage tail).
+
+A/B tests on the VM (omnivoice 0.2.1 in engine-current) proved the same ref + **matching** transcript is clean for short, long-chunked, and Persian text — the bug is purely the mismatched pairing, not the model or the sidecar transcripts.
+
+### Fix
+
+`tts_lab_ui.py` ref-select handler: track the last **auto-filled** transcript per select (`sel.dataset.autoRefText`). On ref switch, replace it with the new voice's sidecar transcript (or clear it when the new voice has none); never clobber text the user typed/edited. Rebuilt + recreated `tts-lab-orchestrator` (verified serving `autoRefText` JS).
+
+### Files
+
+| File | Change |
+|---|---|
+| `tts_lab_ui.py` | ref-select handler — stale auto-fill replacement on voice switch |
+
+---
+
 ## Session 2026-08-22/23 — S2-Pro Unblocked (sglang-omni) + Step Audio EditX Deployed
 
 Deployed and validated the two newest engines on the VM (container-only mode, ports 8009/8105/8005). Working tree at `2f44718` (all pushes on `main`).
