@@ -77,21 +77,53 @@ audio tokens.
 - Engine log shows `INTERLEAVE FIX: dropping 3 leading token(s) (align 0.00 -> 1.00)`
   on the runs that needed it.
 
+## Follow-up incident — 21:59 crash (post-deploy) ✅ HARDENED
+
+The de-rotation fix shipped, then ~1 h later the container CRASHED mid-request:
+
+```
+ScatterGatherKernel.cu:203: Assertion `idx_dim >= 0 && idx_dim < index_size`
+CUDA error: device-side assert triggered  (×5, cascading 500s)
+onnxruntime::OnnxRuntimeException → terminate → process death → compose restart
+```
+
+**Chain:** a fully garbage draw (487 tokens with **text ids min=975 and ids up
+to 74600** mixed into audio positions; align 0.10 → 0.14 even after the 4-token
+drop) → flow decoder `upsample_encoder_v2.pre_lookahead_layer` indexes the
+codebook with text ids → negative index → **device-side assert** → the assert
+poisons the ENTIRE CUDA context → every later CUDA call (FunASR load, retries)
+fails with the stale error → onnxruntime throws → abort → "Server disconnected".
+
+**Fix (patch #3 v2, live + Dockerfile, byte-verified identical):** the block now
+*validate-and-strips* instead of trusting the stream:
+
+- after the best-offset drop, walk chunks from the start and keep the **longest
+  fully-valid `[2,2,6,6,6]` prefix** (also strips the "assistant" tail leak for
+  free — it was previously only capped);
+- if the valid prefix is < 2 chunks → `raise RuntimeError("EditX bad draw: no
+  valid interleave prefix … — retry with a different seed")` — raised BEFORE the
+  tensor conversion/vocoder, so no CUDA is touched and the context stays clean;
+  the orchestrator relays the message to the UI (🎲 retry).
+
+A strict `align >= 1.0` gate would have rejected good draws with tail leaks; the
+prefix-strip accepts them and decodes only the valid part.
+
 ## Remaining caveats
 
 - ~8-10% of draws still land on wrong content (seed lottery). The UI 🎲 button
   (random seed) is the retry path — same request, new draw. No token-level
   classifier can detect the garbage cheaply (garbage and clean look statistically
   identical: distinct-id ratio, repetition, length all overlap).
-- The "assistant" tail leak is reduced but not eliminated by the cap; a very tight
-  cap can clip the final word.
+- A genuinely garbage draw no longer crashes anything — it 500s with a clear
+  message. Any future CUDA error still poisons the context until the container
+  restarts (compose restarts it automatically).
 - Persian remains unavailable in EditX by model design.
 
 ## Files
 
 | File | Change |
 |---|---|
-| `docker/Dockerfile.engine-editx` | patch #3 — `_generate` interleave de-rotation |
+| `docker/Dockerfile.engine-editx` | patch #3 — `_generate` interleave fix v2: de-rotation + validate-and-strip + bad-draw gate (post-crash hardening) |
 | `tts_lab_engines.py` | `_synth_editx` sampling defaults + seed policy |
 | `tts_lab_ui.py` | editx panel defaults + Persian warning |
 | `tts_lab_config.py` | MODEL_INFO note |

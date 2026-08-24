@@ -8,8 +8,12 @@
   1. **Interleave rotation** — the model sometimes prepends spurious vq06 token(s),
      shifting the `[02,02,06,06,06]` frame the CosyVoice vocoder parses positionally
      → every frame decodes to garbage. Fixed in `tts.py` `_generate` (Dockerfile.engine-editx
-     patch #3): drop the leading offset with the best 5-chunk alignment + truncate to
-     whole chunks.
+     patch #3, v2): drop the leading offset with the best 5-chunk alignment, then
+     **decode only the longest fully-valid chunk prefix** (also strips the tail
+     leak). A fully garbage draw (text ids in audio slots) previously **crashed the
+     container** (CUDA device-side assert in the flow decoder poisons the context →
+     onnxruntime terminate, 2026-08-24 21:59); the v2 block raises a "bad draw —
+     retry with a different seed" error instead, before any CUDA is touched.
   2. **No reliable EOS** — greedy argmax loops forever on a near-silent 8-token
      attractor (67 s ramble measured); the model only stops when sampling randomly
      hits `<|EOT|>`. Unseeded requests (vLLM seed 0) land on the attractor. Fixed by
