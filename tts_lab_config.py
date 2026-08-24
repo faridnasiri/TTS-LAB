@@ -25,6 +25,10 @@ COSYVOICE_DIR = Path("/opt/CosyVoice")
 UPLOAD_DIR    = Path("/tmp/tts_uploads")
 # Permanent curated reference voices (host bind-mounted into ALL containers)
 REFERENCE_VOICES_DIR = Path("/opt/arthur/reference_voices")
+# Voice Library (host /opt/arthur/voice_library) — voices/{id}/sample.wav +
+# per-voice metadata.json (carries the transcription, like a sidecar).
+# Host bind-mounted into all clone-capable containers + the orchestrator.
+VOICE_LIBRARY_DIR = Path("/opt/arthur/voice_library")
 INDEXTTS_DIR  = Path("/opt/models/indextts")
 OPENVOICE_MODELS_DIR = Path("/opt/models/openvoice_v2")
 # Step-Audio-EditX — repo cloned at build time; weights under /opt/models/editx/
@@ -37,8 +41,9 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 
 def _ref_wav_path(ref_id: str):
     """Resolve a reference WAV by id — checks the permanent curated dir
-    (/opt/arthur/reference_voices) AND the uploads dir, so curated voices
-    work exactly like UI uploads. Returns None when not found.
+    (/opt/arthur/reference_voices), the uploads dir, AND the voice library
+    (voices/{id}/sample.wav), so curated voices work exactly like UI
+    uploads. Returns None when not found.
 
     Lives here (not tts_lab_engines) so the orchestrator container — which
     has no numpy/torch — can resolve ref paths too (e.g. for SGLang engines
@@ -50,7 +55,11 @@ def _ref_wav_path(ref_id: str):
         p = d / f"{ref_id}.wav"
         if p.exists():
             return p
-    return None
+    # Voice Library layout: voices/{id}/sample.wav (nested). Library voices
+    # appear in the UI ref dropdowns directly (via _scan_refs) and resolve
+    # here engine-side without the use-ref copy (2026-08-23).
+    p = VOICE_LIBRARY_DIR / "voices" / ref_id / "sample.wav"
+    return p if p.exists() else None
 
 
 def _ref_transcript(ref_path) -> str:
@@ -67,12 +76,20 @@ def _ref_transcript(ref_path) -> str:
     if not ref_path:
         return ""
     sc = Path(ref_path).with_suffix(".json")
-    if not sc.exists():
-        return ""
-    try:
-        return str(json.loads(sc.read_text()).get("transcription", "") or "")
-    except Exception:
-        return ""
+    if sc.exists():
+        try:
+            return str(json.loads(sc.read_text()).get("transcription", "") or "")
+        except Exception:
+            return ""
+    # Voice-library voices carry the transcript in metadata.json next to
+    # sample.wav instead of a {stem}.json sidecar (2026-08-23).
+    meta = Path(ref_path).with_name("metadata.json")
+    if meta.exists():
+        try:
+            return str(json.loads(meta.read_text()).get("transcription", "") or "")
+        except Exception:
+            return ""
+    return ""
 
 
 # ── Kokoro voice catalogue (54 voices) ────────────────────────────────────────

@@ -773,6 +773,29 @@ def _build_params(name: str) -> str:
                     [("en","English"),("zh","Mandarin"),("sichuanese","Sichuanese"),
                      ("cantonese","Cantonese"),("ja","Japanese"),("ko","Korean")], "en")),
             )
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Sampling <span style="font-weight:400;color:#888">(voice character + variety)</span></div>'
+            + _row(
+                _grp('Temperature <span class="range-val">0.7</span> <span style="font-size:.7rem;color:#aaa">(lower = steadier)</span>',
+                     _rng("temperature", "0.1", "2.0", "0.05", "0.7")),
+                _grp('Top-P <span class="range-val">1.0</span>', _rng("top_p", "0.1", "1.0", "0.05", "1.0")),
+            )
+            + _row(
+                _grp('Top-K <span class="range-val">0</span> <span style="font-size:.7rem;color:#aaa">(0 = off)</span>',
+                     _rng("top_k", "0", "100", "1", "0")),
+                _grp('Repetition penalty <span class="range-val">1.1</span> <span style="font-size:.7rem;color:#aaa">(1.0 = off; higher = less ramble)</span>',
+                     _rng("repetition_penalty", "1.0", "2.0", "0.05", "1.1")),
+            )
+            + _row(
+                _grp('Seed <span style="font-size:.7rem;color:#aaa">(777 = fixed; 0/empty = random — same seed ≈ similar output, not bit-identical in this vLLM dev build)</span>',
+                     '<div class="d-flex gap-1">'
+                     '<input type="number" class="form-control form-control-sm" data-param="seed" value="777" '
+                     'style="min-width:110px">'
+                     '<button type="button" class="btn btn-outline-secondary btn-sm" title="Random seed (variety) 🎲" '
+                     f"onclick=\"var i=this.closest('.engine-pane').querySelector('[data-param=\\'seed\\']');i.value=Math.floor(Math.random()*100000)\">🎲</button>"
+                     '</div>'),
+                _grp('Max tokens <span class="range-val">8192</span> <span style="font-size:.7rem;color:#aaa">(total budget — cap it to stop rambling)</span>',
+                     _rng("max_tokens", "512", "8192", "256", "8192")),
+            )
             + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice source <span style="font-weight:400;color:#888">(ref WAV + transcript)</span></div>'
             + f'<div class="param-row">{_upload_widget("ex-file", "ex-status", "ex-prompt-id", "Reference WAV — target voice (clone) / edit source")}</div>'
             + _row(_grp('Ref transcript <span style="font-size:.7rem;color:#aaa">(what the ref says — improves cloning)</span>',
@@ -1222,9 +1245,21 @@ document.addEventListener('change', e => {
   const sel = e.target;
   if (sel.tagName !== 'SELECT' || !/(prompt-id|ref-select)$/.test(sel.id)) return;
   const opt = sel.selectedOptions[0];
-  const lang = opt ? opt.dataset.lang : '';
+  if (!opt) return;
+  // Auto-fill the pane's ref transcript when the user hasn't typed one —
+  // clone engines (editx, s2pro, qwen3tts…) degrade badly when the prompt
+  // transcript mismatches the ref audio, and voice-library / whisper
+  // sidecars carry the real words of the clip.
+  const pane = sel.closest('.engine-pane');
+  const refTextEl = pane && pane.querySelector('[data-param="ref_text"]');
+  const transcript = opt.dataset.transcript || '';
+  if (refTextEl && !(refTextEl.value || '').trim() && transcript) {
+    refTextEl.value = transcript;
+    showToast('📝 Ref transcript filled from sidecar — edit it if inaccurate');
+  }
+  const lang = opt.dataset.lang || '';
   if (!lang) return;
-  const langSel = sel.closest('.engine-pane') && sel.closest('.engine-pane').querySelector('[data-param="language"]');
+  const langSel = pane && pane.querySelector('[data-param="language"]');
   if (!langSel) return;
   if (Array.from(langSel.options).some(o => o.value === lang)) {
     langSel.value = lang;
@@ -1995,6 +2030,7 @@ async function refreshRefDropdowns(selectId) {
         opt.title = (ref.original_name ? ref.original_name + (ref.lang ? ' · lang=' + ref.lang : '') : ref.id)
           + (hasT ? '\nTranscript: ' + ref.transcription : '\n⚠ No transcript — clone quality will degrade. Type the ref transcript in "Ref transcript" or upload a ref with text.');
         opt.dataset.lang = ref.lang || '';
+        opt.dataset.transcript = ref.transcription || '';
         sel.appendChild(opt);
       });
       // Restore previous selection if still present
@@ -2010,9 +2046,12 @@ async function useVoiceRef(voiceId) {
     if (data.ok) {
       // Refresh ALL engine reference dropdowns and pre-select this voice
       await refreshRefDropdowns(null);
-      // Set value on both SELECT dropdowns and hidden INPUTs (legacy engines)
+      // Set value on both SELECT dropdowns and hidden INPUTs (legacy engines).
+      // Dispatch change so the pane's ref transcript / language auto-fill
+      // runs (programmatic .value= does NOT fire the change event).
       document.querySelectorAll('[id$="-prompt-id"], [id$="-ref-select"]').forEach(el => {
         el.value = voiceId;
+        if (el.tagName === 'SELECT') el.dispatchEvent(new Event('change'));
       });
       // Show toast instead of alert
       const v = data.voice || {};
@@ -2031,7 +2070,7 @@ async function useVoiceRefActive(voiceId) {
       const dropdownId = activeEngine + '-prompt-id';
       await refreshRefDropdowns(dropdownId);
       const sel = document.getElementById(dropdownId);
-      if (sel) sel.value = voiceId;
+      if (sel) { sel.value = voiceId; sel.dispatchEvent(new Event('change')); }
       // Also switch to that engine's pane
       showToast('✅ ' + voiceId + ' set as reference for ' + activeEngine);
     }

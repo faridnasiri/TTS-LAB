@@ -384,6 +384,10 @@ async def upload_audio(file: UploadFile = File(...), lang: str = Form("")):
 # Display labels for reference voice languages (subset of OMNIVOICE_LANGUAGES)
 _LANG_LABELS = {"fa": "فارسی (FA)", "en": "English (EN)", "other": "Other"}
 
+# Voice Library — voices/{id}/sample.wav + metadata.json (host bind-mounted,
+# same path in every container). Kept in sync with tts_lab_config.VOICE_LIBRARY_DIR.
+_VOICE_LIB_DIR = _os.environ.get("VOICE_LIBRARY_DIR", "/opt/arthur/voice_library")
+
 
 def _scan_refs():
     """Scan reference + uploaded WAVs with sidecar metadata (original_name/lang).
@@ -391,6 +395,11 @@ def _scan_refs():
     Sidecars are `{stem}.json` files written next to each WAV by /upload and
     /voice-library/*/use-ref. transcription is present for voice-library
     voices; curated en-* voices carry none (clone quality degrades without it).
+
+    Voice Library voices (voices/{id}/sample.wav) are included directly so
+    they appear in the ref dropdowns; clone engines resolve the id via
+    tts_lab_config._ref_wav_path (library layout branch). metadata.json
+    carries the transcription like a sidecar.
     """
     refs = []
     for d, source in ((REFERENCE_VOICES_DIR, "reference"), (UPLOAD_DIR, "uploaded")):
@@ -411,6 +420,25 @@ def _scan_refs():
                 "lang": str(meta.get("lang", "") or ""),
                 "transcription": str(meta.get("transcription", "") or ""),
                 "source": source,
+            })
+    lib_voices = Path(_VOICE_LIB_DIR) / "voices"
+    if lib_voices.exists():
+        for p in sorted(lib_voices.glob("*/sample.wav"),
+                        key=lambda x: x.stat().st_mtime, reverse=True):
+            meta = {}
+            md = p.with_name("metadata.json")
+            if md.exists():
+                try:
+                    meta = json.loads(md.read_text())
+                except Exception:
+                    meta = {}
+            refs.append({
+                "id": p.parent.name,
+                "path": p,
+                "original_name": str(meta.get("speaker_name", "") or p.parent.name),
+                "lang": str(meta.get("language", "") or ""),
+                "transcription": str(meta.get("transcription", "") or ""),
+                "source": "library",
             })
     return refs
 
@@ -579,6 +607,55 @@ if voice_library_mod:
             raise HTTPException(404, f"Embedding not available for {voice_id}/{emb_type}")
         return JSONResponse({"voice_id": voice_id, "emb_type": emb_type,
                              "shape": list(emb.shape), "dtype": str(emb.dtype)})
+
+# ── Voice Library proxy (orchestrator mode) ────────────────────────
+# The orchestrator loads ZERO ML libraries — the library lives on the
+# engine-current container (numpy + f5_tts/whisper for transcription) and
+# every /voice-library/* route is forwarded there. The UI fetches these
+# paths from this origin, so the proxy makes the whole library page work
+# without importing voice_library.py here (orchestrator-safe, convention #10).
+# In bare-metal mode the in-process routes above are registered instead.
+if voice_library_mod is None:
+    _VOICE_LIB_URL = _os.environ.get("VOICE_LIB_URL", "").rstrip("/")
+
+    async def _voice_library_forward(subpath: str, request: Request):
+        from fastapi.responses import Response
+        if not _VOICE_LIB_URL:
+            raise HTTPException(
+                503, "VOICE_LIB_URL not configured — voice library unavailable")
+        import httpx
+        # No trailing slash on the bare root: engine-current's "/voice-library"
+        # route 307s "/voice-library/" → "/voice-library" (a redirect the UI's
+        # fetch would not follow), so build the URL without it for subpath "".
+        url = (f"{_VOICE_LIB_URL}/voice-library/{subpath}" if subpath
+               else f"{_VOICE_LIB_URL}/voice-library")
+        try:
+            # Long timeout: import-uploads whisper-transcribes each file;
+            # download pulls a full dataset. Like /synthesize forwarding.
+            async with httpx.AsyncClient(timeout=1800.0) as client:
+                r = await client.request(
+                    request.method, url,
+                    params=request.query_params,
+                    content=await request.body(),
+                    headers={"content-type":
+                             request.headers.get("content-type", "")},
+                )
+        except Exception as e:
+            raise HTTPException(
+                502, f"Voice library (engine-current) unreachable: {e}")
+        return Response(content=r.content, status_code=r.status_code,
+                        media_type=r.headers.get("content-type"))
+
+    # Bare /voice-library (no trailing slash) does not match {rest:path}
+    # (the converter needs the slash) — register it explicitly.
+    @app.api_route("/voice-library", methods=["GET", "POST"])
+    async def voice_library_proxy_root(request: Request):
+        return await _voice_library_forward("", request)
+
+    @app.api_route("/voice-library/{rest:path}",
+                   methods=["GET", "POST", "PUT", "DELETE"])
+    async def voice_library_proxy(rest: str, request: Request):
+        return await _voice_library_forward(rest, request)
 
 
 if __name__ == "__main__":

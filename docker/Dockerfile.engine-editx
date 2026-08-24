@@ -133,6 +133,89 @@ open(p, 'w').write(src)
 print('PATCHED_OK')
 EOF
 
+# ── tts.py sampling params (seed/top_p/top_k/rep-pen/max_tokens) ────
+# _generate hardcodes SamplingParams(temperature, max_tokens) — no seed
+# means every run samples fresh → "sounds different each run". Thread
+# optional seed/top_p/top_k/repetition_penalty through _generate AND give
+# clone()/edit() a max_tokens budget + **sampling passthrough. vLLM seed
+# semantics: 0 = randomize per request, 42+ = deterministic. The lab's
+# _synth_editx sends a fixed seed by default (2026-08-23, user request).
+RUN /opt/arthur/Step-Audio-EditX/.venv/bin/python - <<'EOF'
+import sys
+p = '/opt/arthur/Step-Audio-EditX/tts.py'
+src = open(p).read()
+
+# 1) _generate signature — optional sampling kwargs (Optional already imported)
+old_sig = '    def _generate(self, token_ids: list[int], max_tokens: int = 4096, temperature: float = 0.7) -> torch.Tensor:'
+new_sig = ('    def _generate(self, token_ids: list[int], max_tokens: int = 4096, temperature: float = 0.7,\n'
+           '                 seed: Optional[int] = None, top_p: Optional[float] = None,\n'
+           '                 top_k: Optional[int] = None, repetition_penalty: Optional[float] = None) -> torch.Tensor:')
+n = src.count(old_sig)
+if n != 1:
+    print(f'GENERATE_SIG_COUNT={n} — aborting'); sys.exit(1)
+src = src.replace(old_sig, new_sig, 1)
+
+# 2) SamplingParams — forward kwargs only when set (None keeps vLLM defaults)
+old_sp = '''        sampling_params = SamplingParams(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            skip_special_tokens=False,
+        )'''
+new_sp = '''        sampling_params = SamplingParams(
+            temperature=temperature,
+            max_tokens=max_tokens,
+            skip_special_tokens=False,
+            **({} if seed is None else {"seed": seed}),
+            **({} if top_p is None else {"top_p": top_p}),
+            **({} if top_k is None else {"top_k": top_k}),
+            **({} if repetition_penalty is None else {"repetition_penalty": repetition_penalty}),
+        )'''
+n = src.count(old_sp)
+if n != 1:
+    print(f'SAMPLING_PARAMS_COUNT={n} — aborting'); sys.exit(1)
+src = src.replace(old_sp, new_sp, 1)
+
+# 3) clone() — max_tokens budget (total, prompt+gen — same semantics as the
+#    hardcoded 8192) + **sampling passthrough
+old_clone = '''        target_text: str
+    ) -> Tuple[torch.Tensor, int]:'''
+new_clone = '''        target_text: str,
+        max_tokens: int = 8192,
+        **sampling: object
+    ) -> Tuple[torch.Tensor, int]:'''
+n = src.count(old_clone)
+if n != 1:
+    print(f'CLONE_SIG_COUNT={n} — aborting'); sys.exit(1)
+src = src.replace(old_clone, new_clone, 1)
+old_call = 'output_ids = self._generate(token_ids, max_tokens=8192 - len(token_ids))'
+new_call = 'output_ids = self._generate(token_ids, max_tokens=max(1, max_tokens - len(token_ids)), **sampling)'
+n = src.count(old_call)
+if n != 1:
+    print(f'CLONE_CALL_COUNT={n} — aborting'); sys.exit(1)
+src = src.replace(old_call, new_call, 1)
+
+# 4) edit() — same treatment
+old_edit = '''        target_text: Optional[str] = None
+    ) -> Tuple[torch.Tensor, int]:'''
+new_edit = '''        target_text: Optional[str] = None,
+        max_tokens: int = 8192,
+        **sampling: object
+    ) -> Tuple[torch.Tensor, int]:'''
+n = src.count(old_edit)
+if n != 1:
+    print(f'EDIT_SIG_COUNT={n} — aborting'); sys.exit(1)
+src = src.replace(old_edit, new_edit, 1)
+old_call2 = 'output_ids = self._generate(prompt_tokens, max_tokens=8192 - len(prompt_tokens))'
+new_call2 = 'output_ids = self._generate(prompt_tokens, max_tokens=max(1, max_tokens - len(prompt_tokens)), **sampling)'
+n = src.count(old_call2)
+if n != 1:
+    print(f'EDIT_CALL_COUNT={n} — aborting'); sys.exit(1)
+src = src.replace(old_call2, new_call2, 1)
+
+open(p, 'w').write(src)
+print('PATCHED_OK')
+EOF
+
 ENV CUDA_HOME=/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13 \
     PATH=/opt/arthur/Step-Audio-EditX/.venv/lib/python3.12/site-packages/nvidia/cu13/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     FLASHINFER_WORKSPACE_BASE=/opt/models/flashinfer-editx-jit

@@ -121,6 +121,9 @@ COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_engine_server.py /opt/arthur/
 COPY tts_lab_engines.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/
+# Voice Library host — engine-current serves /voice-library/* (numpy +
+# f5_tts/whisper transcription); the orchestrator proxies here.
+COPY voice_library.py /opt/arthur/
 
 EXPOSE 8101
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=180s \

@@ -13,8 +13,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import base64
+import json
 import os
+import shutil
 import time
 import traceback
 import threading
@@ -50,9 +53,9 @@ else:
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
-from tts_lab_config import MODEL_ORDER, MODEL_INFO, _state, _server_log, _server_log_seq, slog
+from tts_lab_config import MODEL_ORDER, MODEL_INFO, _state, _server_log, _server_log_seq, slog, UPLOAD_DIR
 from tts_lab_dispatch import _available
-from tts_lab_engines import LOADERS, SYNTHERS
+from tts_lab_engines import LOADERS, SYNTHERS, SynthParamError
 from tts_lab_utils import _wav_dur, _safe_del
 
 app = FastAPI(title=f"TTS Lab — Engine Server ({_STACK} stack)")
@@ -304,6 +307,12 @@ async def synthesize(req: SynthRequest):
             resp["chunks"] = chunks
         return resp
     except Exception as e:
+        if isinstance(e, SynthParamError):
+            # Deterministic client error — the model is unaffected, do NOT
+            # evict + retry (for editx a reload after eviction fails outright:
+            # vLLM engine core can't re-init in-process). 400 surfaces the
+            # real message to the user instead of a vLLM init error.
+            raise HTTPException(status_code=400, detail=str(e)) from e
         traceback.print_exc()
         # Auto-evict on error — the loaded model may be stale/corrupted,
         # then retry once with a fresh load.
@@ -376,6 +385,99 @@ async def evict():
         vram_free_mb=free_mb,
         vram_total_mb=total_mb,
     )
+
+
+# ── Voice Library endpoints (ML containers only) ─────────────────────
+# The orchestrator (zero ML libs) proxies /voice-library/* here. The
+# library needs numpy (+ f5_tts/whisper for transcription) — engine-current
+# has both. Containers whose images don't COPY voice_library.py (editx,
+# qwen/mid/legacy via base) skip this block via the ImportError guard.
+try:
+    import voice_library as _vl
+    _HAS_VOICE_LIB = True
+except ImportError:
+    _HAS_VOICE_LIB = False
+
+if _HAS_VOICE_LIB:
+    from fastapi.responses import Response as _VLResponse
+
+    @app.get("/voice-library")
+    async def _vl_list(gender: str = "", min_duration: float = 0,
+                       max_duration: float = 999, min_quality: float = 0,
+                       limit: int = 200):
+        voices = _vl.list_voices(gender=gender, min_duration=min_duration,
+                                 max_duration=max_duration,
+                                 min_quality=min_quality, limit=limit)
+        return {"voices": voices, "count": len(voices)}
+
+    @app.get("/voice-library/stats")
+    async def _vl_stats():
+        return _vl.get_stats()
+
+    @app.get("/voice-library/{voice_id}")
+    async def _vl_get(voice_id: str):
+        v = _vl.get_voice(voice_id)
+        if not v:
+            raise HTTPException(404, f"Voice not found: {voice_id}")
+        return v
+
+    @app.get("/voice-library/{voice_id}/audio")
+    async def _vl_audio(voice_id: str):
+        path = _vl.get_voice_path(voice_id)
+        if not path:
+            raise HTTPException(404, f"Voice audio not found: {voice_id}")
+        return _VLResponse(content=path.read_bytes(), media_type="audio/wav")
+
+    @app.post("/voice-library/{voice_id}/use-ref")
+    async def _vl_use_ref(voice_id: str, engine: str = ""):
+        path = _vl.get_voice_path(voice_id)
+        if not path:
+            raise HTTPException(404, f"Voice not found: {voice_id}")
+        dest = UPLOAD_DIR / f"{voice_id}.wav"
+        shutil.copy2(path, dest)
+        v = _vl.get_voice(voice_id)
+        # Sidecar metadata — clone engines (editx, s2pro) read the
+        # transcription from here when ref_text isn't typed.
+        try:
+            (UPLOAD_DIR / f"{voice_id}.json").write_text(json.dumps({
+                "original_name": v.get("speaker_name", "") or f"{voice_id}.wav",
+                "lang": v.get("language", v.get("lang", "")),
+                "transcription": v.get("transcription", ""),
+                "source": "voice-library",
+            }, ensure_ascii=False))
+        except Exception:
+            pass
+        return {"ok": True, "audio_prompt_id": voice_id, "voice": v,
+                "url": f"/voice-library/{voice_id}/audio"}
+
+    @app.post("/voice-library/import-uploads")
+    async def _vl_import():
+        loop = asyncio.get_running_loop()
+        count = await loop.run_in_executor(None, _vl.import_from_uploads, UPLOAD_DIR)
+        return {"ok": True, "imported": count}
+
+    @app.post("/voice-library/download")
+    async def _vl_download(count: int = 40, min_duration: float = 3.0,
+                           max_duration: float = 12.0, female_ratio: float = 0.5):
+        loop = asyncio.get_running_loop()
+        n = await loop.run_in_executor(
+            None, _vl.download_common_voice_persian,
+            count, min_duration, max_duration, 1, female_ratio)
+        return {"ok": True, "downloaded": n}
+
+    @app.delete("/voice-library/{voice_id}")
+    async def _vl_delete(voice_id: str):
+        _vl.remove_voice(voice_id)
+        return {"ok": True, "deleted": voice_id}
+
+    @app.get("/voice-library/{voice_id}/embedding/{emb_type}")
+    async def _vl_embedding(voice_id: str, emb_type: str = "ge2e"):
+        emb = _vl.get_embedding(voice_id, emb_type)
+        if emb is None:
+            raise HTTPException(
+                404, f"Embedding not available for {voice_id}/{emb_type}")
+        return {"voice_id": voice_id, "emb_type": emb_type,
+                "shape": list(emb.shape), "dtype": str(emb.dtype)}
 
 
 if __name__ == "__main__":

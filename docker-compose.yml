@@ -44,6 +44,9 @@ x-model-volume: &model-volume
     - /opt/models:/opt/models
     - /tmp/tts_uploads:/tmp/tts_uploads
     - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+    # Voice Library (voices/{id}/sample.wav + metadata.json) — ref
+    # resolution (_ref_wav_path/_ref_transcript) + dropdown scan use it.
+    - /opt/arthur/voice_library:/opt/arthur/voice_library
 
 x-gpu: &gpu-config
   deploy:
@@ -70,6 +73,7 @@ services:
       - /opt/models:/opt/models
       - /tmp/tts_uploads:/tmp/tts_uploads
       - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /opt/arthur/voice_library:/opt/arthur/voice_library
       - /opt/arthur/generation_history:/opt/arthur/generation_history
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
@@ -113,6 +117,9 @@ services:
       S2PRO_SGLANG_URL: http://s2pro:8000/v1/audio/speech
       # Step Audio EditX — dedicated vLLM container
       EDITX_URL: http://engine-editx:8105
+      # Voice Library lives on engine-current (numpy + f5_tts/whisper) —
+      # the orchestrator proxies /voice-library/* here (ML-free).
+      VOICE_LIB_URL: http://engine-current:8101
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8009/status"]
@@ -139,6 +146,7 @@ services:
       - /opt/models:/opt/models
       - /tmp/tts_uploads:/tmp/tts_uploads
       - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /opt/arthur/voice_library:/opt/arthur/voice_library
     deploy:
       resources:
         reservations:
@@ -173,6 +181,7 @@ services:
       - /opt/models:/opt/models
       - /tmp/tts_uploads:/tmp/tts_uploads
       - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /opt/arthur/voice_library:/opt/arthur/voice_library
     deploy:
       resources:
         reservations:
@@ -207,6 +216,7 @@ services:
       - /opt/models:/opt/models
       - /tmp/tts_uploads:/tmp/tts_uploads
       - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /opt/arthur/voice_library:/opt/arthur/voice_library
     deploy:
       resources:
         reservations:
@@ -369,6 +379,7 @@ services:
       # orchestrator resolves (references[].audio_path in the request).
       - /tmp/tts_uploads:/tmp/tts_uploads
       - /opt/arthur/reference_voices:/opt/arthur/reference_voices
+      - /opt/arthur/voice_library:/opt/arthur/voice_library
     environment:
       HF_TOKEN: ${HF_TOKEN:-}
       HF_HOME: /opt/models/huggingface

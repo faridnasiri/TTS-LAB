@@ -22,6 +22,14 @@ from tts_lab_config import (
 from tts_lab_utils import _to_wav, _wav_dur, _read_wav_mono_f32, _require_gpu
 
 
+class SynthParamError(RuntimeError):
+    """Deterministic request error (bad or missing params) raised by a synth
+    function. The engine-server treats it as a CLIENT error: no auto-evict +
+    retry. Retrying a deterministic error is wasted work, and for editx the
+    evict→reload cycle fails outright (vLLM engine core can't re-init
+    in-process) — the model is fine, the request is not."""
+
+
 def _stash_builtin_conds(inst):
     """Keep the pristine built-in voice conditionals for later restoration.
 
@@ -2326,9 +2334,12 @@ def _synth_editx(inst, text, params):
       emotion/style  — generate in target voice, then edit emotion/style
       speed          — generate, then speed edit (faster/slower)
       paralinguistic — inline tags ([Laughter] etc.) pass through as text
-    clone REQUIRES a reference WAV (falls back to the first voice-library
-    wav, like qwen3tts). language ∈ zh|en|sichuanese|cantonese|ja|ko gets a
-    tag prefix where the model supports one. n_edit_iter re-feeds output.
+    clone REQUIRES a reference WAV and RAISES without one — silently
+    substituting the first sample WAV produced output that sounded like a
+    sample voice, not the selected clone (issue 2026-08-23). Edit types
+    (emotion/style/speed) fall back to the first voice-library clip since
+    they only need a source audio. language ∈ zh|en|sichuanese|cantonese|ja|ko
+    gets a tag prefix where the model supports one. n_edit_iter re-feeds output.
     """
     import torch as _torch
     tts = inst["tts"]
@@ -2343,15 +2354,44 @@ def _synth_editx(inst, text, params):
     tag = _EDITX_LANG_TAGS.get(lang)
     target_text = f"{tag} {text}" if tag else text
 
+    # Sampling params — threaded into vLLM SamplingParams via the tts.py
+    # patch baked at image build (clone()/edit()/_generate take **sampling).
+    # Seed 42+ fixes the output: identical WAV every run (the "sounds
+    # different each run" complaint, 2026-08-23). 0 or empty = random per
+    # request (vLLM convention). max_tokens caps the TOTAL token budget
+    # (prompt + generation — same semantics as the model's 8192 default);
+    # a tight cap stops the en-brian-style ramble.
+    sampling: dict = {}
+    for k, cast in (("seed", int), ("temperature", float), ("top_p", float),
+                    ("top_k", int), ("repetition_penalty", float), ("max_tokens", int)):
+        v = params.get(k)
+        if v in (None, ""):
+            continue
+        try:
+            sampling[k] = cast(v)
+        except (TypeError, ValueError):
+            raise SynthParamError(f"EditX {k} must be a number, got {v!r}")
+    if sampling.get("seed") == 0:
+        # vLLM treats seed=0 as "randomize per request" — drop it so the
+        # user's intent (variety) is honored instead of a fixed 0.
+        del sampling["seed"]
+
     # Reference WAV — required for clone, used as the edit source otherwise.
     ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
     ref_path = _ref_wav_path(ref_id)
-    if ref_path is None:
+    if ref_path is None and edit_type in ("emotion", "style", "speed"):
+        # Edit types only need SOME source clip — fall back to the first
+        # curated sample. Clone types never do: without a ref the model has
+        # no voice, and the old silent fallback played a sample voice no
+        # matter what the user selected (issue 2026-08-23).
         defaults = sorted(REFERENCE_VOICES_DIR.glob("*.wav")) or sorted(UPLOAD_DIR.glob("*.wav"))
         if defaults:
             ref_path = defaults[0]
     if ref_path is None:
-        raise RuntimeError("EditX requires a reference WAV — upload one or pick a voice-library voice.")
+        raise SynthParamError(
+            "EditX clone requires a reference WAV — pick a voice above or upload one. "
+            "Without a ref the model has no voice (a sample voice was previously "
+            "substituted silently — removed).")
     prompt_text = (params.get("ref_text") or "").strip()
     if not prompt_text:
         # Faithful clone prompt: voice-library refs carry their real
@@ -2363,23 +2403,27 @@ def _synth_editx(inst, text, params):
     if edit_type == "clone":
         out, sr = tts.clone(prompt_wav_path=str(ref_path),
                             prompt_text=prompt_text,
-                            target_text=target_text)
+                            target_text=target_text,
+                            **sampling)
     elif edit_type in ("emotion", "style", "speed"):
         # Step 1: speak the text in the target voice, then edit the clip.
         out, sr = tts.clone(prompt_wav_path=str(ref_path),
                             prompt_text=prompt_text,
-                            target_text=target_text)
+                            target_text=target_text,
+                            **sampling)
         for i in range(n_iter):
             out, sr = tts.edit(prompt_wav_path=_tensor_to_wav(out, sr),
                                prompt_text=prompt_text,
                                edit_type=edit_type,
-                               edit_info=edit_info)
+                               edit_info=edit_info,
+                               **sampling)
     elif edit_type == "paralinguistic":
         # Tags live in the text itself ([Laughter], [Uhm], …) — route via
         # the edit pipeline with the tagged text as the generation target.
         out, sr = tts.clone(prompt_wav_path=str(ref_path),
                             prompt_text=prompt_text,
-                            target_text=target_text)
+                            target_text=target_text,
+                            **sampling)
     else:
         raise RuntimeError(f"Unknown edit_type {edit_type!r} — use clone|emotion|style|speed|paralinguistic")
 
