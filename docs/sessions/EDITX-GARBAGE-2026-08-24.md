@@ -108,15 +108,41 @@ fails with the stale error → onnxruntime throws → abort → "Server disconne
 A strict `align >= 1.0` gate would have rejected good draws with tail leaks; the
 prefix-strip accepts them and decodes only the valid part.
 
+## Follow-up incident #2 — 22:19 death (high temperature) ✅ FIXED
+
+The gate worked; a DIFFERENT chain killed the container:
+
+```
+22:18:32  bad draw → gate: "EditX bad draw: no valid interleave prefix (0/96 chunks)" → 500 ✓
+22:19:14  engine server auto-evict+reload (generic-error path) →
+          old vLLM EngineCore (12 GiB) still resident →
+          "Free memory on device cuda:0 (0.87/15.48 GiB) ... less than desired" →
+          "Engine core initialization failed" → repeated 500s → SIGTERM → restart
+```
+
+**Root cause:** `tts_lab_engine_server.py` auto-evicts and reloads on ANY synth
+exception that isn't `SynthParamError`. The bad-draw `RuntimeError` from the
+gate took that path: eviction drops Python refs but the **EngineCore subprocess
+pins its 12 GiB until it actually exits**, so the reload's new core can't init
+(0.87 GiB free) → cascade → container recycled. (The server's own comment at
+`tts_lab_engine_server.py:338` already warned: "for editx a reload after
+eviction fails outright".)
+
+**Fix:** `_synth_editx` now wraps the clone/edit calls and converts the gate's
+`RuntimeError` ("no valid interleave prefix") into **`SynthParamError`** →
+the server's existing 400 path (no evict, no reload, message to UI). A bad draw
+now costs the user a 🎲 click and nothing else; the engine stays loaded.
+
 ## Remaining caveats
 
 - ~8-10% of draws still land on wrong content (seed lottery). The UI 🎲 button
   (random seed) is the retry path — same request, new draw. No token-level
   classifier can detect the garbage cheaply (garbage and clean look statistically
   identical: distinct-id ratio, repetition, length all overlap).
-- A genuinely garbage draw no longer crashes anything — it 500s with a clear
-  message. Any future CUDA error still poisons the context until the container
-  restarts (compose restarts it automatically).
+- A bad draw now 400s cleanly. Non-draw synth errors (e.g., CUDA OOM on huge
+  texts) still take the evict+reload path → VRAM race → the orchestrator's
+  container-recycling (commit 31c4b3e) restarts the container — self-healing,
+  but the user sees a disconnect instead of an error.
 - Persian remains unavailable in EditX by model design.
 
 ## Files

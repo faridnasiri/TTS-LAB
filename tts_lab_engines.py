@@ -2415,32 +2415,43 @@ def _synth_editx(inst, text, params):
         # still varies, so heavy use across voices stays varied.
         sampling["seed"] = int(zlib.crc32(f"{ref_path}:{target_text}".encode()))
 
-    if edit_type == "clone":
-        out, sr = tts.clone(prompt_wav_path=str(ref_path),
-                            prompt_text=prompt_text,
-                            target_text=target_text,
-                            **sampling)
-    elif edit_type in ("emotion", "style", "speed"):
-        # Step 1: speak the text in the target voice, then edit the clip.
-        out, sr = tts.clone(prompt_wav_path=str(ref_path),
-                            prompt_text=prompt_text,
-                            target_text=target_text,
-                            **sampling)
-        for i in range(n_iter):
-            out, sr = tts.edit(prompt_wav_path=_tensor_to_wav(out, sr),
-                               prompt_text=prompt_text,
-                               edit_type=edit_type,
-                               edit_info=edit_info,
-                               **sampling)
-    elif edit_type == "paralinguistic":
-        # Tags live in the text itself ([Laughter], [Uhm], …) — route via
-        # the edit pipeline with the tagged text as the generation target.
-        out, sr = tts.clone(prompt_wav_path=str(ref_path),
-                            prompt_text=prompt_text,
-                            target_text=target_text,
-                            **sampling)
-    else:
-        raise RuntimeError(f"Unknown edit_type {edit_type!r} — use clone|emotion|style|speed|paralinguistic")
+    try:
+        if edit_type == "clone":
+            out, sr = tts.clone(prompt_wav_path=str(ref_path),
+                                prompt_text=prompt_text,
+                                target_text=target_text,
+                                **sampling)
+        elif edit_type in ("emotion", "style", "speed"):
+            # Step 1: speak the text in the target voice, then edit the clip.
+            out, sr = tts.clone(prompt_wav_path=str(ref_path),
+                                prompt_text=prompt_text,
+                                target_text=target_text,
+                                **sampling)
+            for i in range(n_iter):
+                out, sr = tts.edit(prompt_wav_path=_tensor_to_wav(out, sr),
+                                   prompt_text=prompt_text,
+                                   edit_type=edit_type,
+                                   edit_info=edit_info,
+                                   **sampling)
+        elif edit_type == "paralinguistic":
+            # Tags live in the text itself ([Laughter], [Uhm], …) — route via
+            # the edit pipeline with the tagged text as the generation target.
+            out, sr = tts.clone(prompt_wav_path=str(ref_path),
+                                prompt_text=prompt_text,
+                                target_text=target_text,
+                                **sampling)
+        else:
+            raise RuntimeError(f"Unknown edit_type {edit_type!r} — use clone|emotion|style|speed|paralinguistic")
+    except RuntimeError as e:
+        if "no valid interleave prefix" in str(e):
+            # Bad sampling draw (the ~10% lottery) — the MODEL is fine, only
+            # this draw failed the interleave gate. Raise SynthParamError so
+            # the engine server 400s WITHOUT the auto-evict+reload it does for
+            # generic errors: reloading editx races the old vLLM EngineCore's
+            # VRAM teardown, the new core can't init (0.87 GiB free), and the
+            # container dies (observed 2026-08-24 22:19). User just 🎲 retries.
+            raise SynthParamError(str(e)) from e
+        raise
 
     return _to_wav(out.cpu().numpy(), sr), sr
 

@@ -24,8 +24,15 @@
      the tokenizer has Persian chars but the model cannot produce Persian speech
      (verified with en/zh refs + fa refs across 8 combos). UI + MODEL_INFO now state
      this. Other engines (qwen3tts, etc.) remain the Persian path.
+- **Second incident same day (22:19, high temp):** the bad-draw gate 500'd
+  cleanly, but the engine server's generic-error path auto-evicted + reloaded —
+  the old vLLM EngineCore still pinned its 12 GiB → new core init failed
+  ("0.87/15.48 GiB free") → cascade → container recycled. Fixed: `_synth_editx`
+  converts the bad-draw error into `SynthParamError` → 400 without evict/reload
+  (the server's own comment at `tts_lab_engine_server.py:338` warns editx reload
+  fails outright). Bad draws now cost a 🎲 click, never a container death.
 - **Files:** `docker/Dockerfile.engine-editx` (patch #3), `tts_lab_engines.py`
-  (`_synth_editx` defaults), `tts_lab_ui.py`, `tts_lab_config.py`.
+  (`_synth_editx` defaults + bad-draw→400), `tts_lab_ui.py`, `tts_lab_config.py`.
 - **Detail:** [session log 2026-08-24 editx](../sessions/EDITX-GARBAGE-2026-08-24.md)
 
 ---
