@@ -924,12 +924,88 @@ _loaded_probe_ts: float = 0.0
 _LOADED_PROBE_TTL = 2.0  # seconds
 
 
+# nvidia-smi exec'd inside a normal container namespace-translates PIDs
+# (every process shows as pid 1) and hides other containers' processes —
+# useless for attribution. Instead we run it in a lazily-created --pid=host
+# probe container (created via the Docker API, kept running, AutoRemove) so
+# the driver reports HOST PIDs for the whole box, which then map onto the
+# `docker top` table below. The probe is ~0 VRAM and recreated on demand if
+# it dies (reboot, compose down, manual kill).
+_GPU_PROBE_NAME = "tts-lab-gpu-probe"
+_GPU_PROBE_IMAGE_CANDIDATES = (
+    "tts-lab-engine-editx:latest",
+    "tts-lab-engine-current:latest",
+    "tts-lab-sglang-omni:latest",
+)
+_gpu_probe_id: str | None = None  # container ID once created
+
+
+def _gpu_probe_exec(cmd: str, timeout: float = 15.0) -> str:
+    """Run a shell command in the --pid=host GPU probe container.
+
+    Returns combined stdout (Tty:true raw stream), or "" when no GPU image
+    is present / the Docker API fails. The probe container is created once
+    and reused; a dead probe is removed and recreated on the next call.
+    """
+    global _gpu_probe_id
+    import json as _j
+    if not _HAS_DOCKER_SOCK:
+        return ""
+    for attempt in range(2):  # [ensure-probe, exec] x2 with recreate between
+        if _gpu_probe_id and _container_running(_gpu_probe_id):
+            out = _docker_exec(_gpu_probe_id, cmd, timeout)
+            if out:
+                return out
+        # probe missing / dead / failed — (re)create it
+        code, body = _docker_api("GET", "/v1.49/images/json")
+        if code != 200:
+            return ""
+        have = set()
+        for img in _j.loads(body):
+            for t in img.get("RepoTags") or []:
+                have.add(t)
+        img = next((t for t in _GPU_PROBE_IMAGE_CANDIDATES if t in have), None)
+        if img is None:
+            return ""
+        if _gpu_probe_id:
+            _docker_api("DELETE", f"/v1.49/containers/{_gpu_probe_id}?force=1")
+            _gpu_probe_id = None
+        payload = _j.dumps({
+            "Image": img,
+            "Cmd": ["tail", "-f", "/dev/null"],
+            "HostConfig": {
+                "PidMode": "host",
+                "AutoRemove": True,
+                "DeviceRequests": [
+                    {"Driver": "nvidia", "Count": 1, "Capabilities": [["gpu"]]},
+                ],
+            },
+        }).encode()
+        code, body = _docker_api(
+            "POST", f"/v1.49/containers/create?name={_GPU_PROBE_NAME}",
+            content=payload)
+        if code == 409:  # name taken by a stale container — force-remove, retry
+            _docker_api("DELETE", f"/v1.49/containers/{_GPU_PROBE_NAME}?force=1")
+            code, body = _docker_api(
+                "POST", f"/v1.49/containers/create?name={_GPU_PROBE_NAME}",
+                content=payload)
+        if code != 201:
+            return ""
+        cid = _j.loads(body)["Id"]
+        code, _ = _docker_api("POST", f"/v1.49/containers/{cid}/start")
+        if code not in (204, 304):
+            return ""
+        _gpu_probe_id = cid
+    return ""
+
+
 def _gpu_process_breakdown() -> list[dict]:
     """Which processes actually hold the GPU, and which container each is in.
 
-    nvidia-smi runs inside one GPU container and reports HOST PIDs; `docker
-    top` maps those back to containers. Processes outside the container fleet
-    (the bare-metal Image Lab service, stray python) are labelled "host".
+    nvidia-smi runs in a --pid=host probe container (see _gpu_probe_exec) and
+    reports HOST PIDs for every GPU process on the box; `docker top` maps
+    those back to containers. Processes outside the container fleet (the
+    bare-metal Image Lab service, stray python) are labelled "host".
     Returns [] when no GPU container is up or the Docker API fails.
     """
     import json as _j
@@ -950,11 +1026,8 @@ def _gpu_process_breakdown() -> list[dict]:
                     pid2cont[row[pid_idx]] = cname
         except Exception:
             continue
-    target = next((c for c in _GPU_CONTAINERS if c in pid2cont.values()), None)
-    if target is None:
-        return []
-    raw = _docker_exec(target, "nvidia-smi --query-compute-apps=pid,used_memory,process_name "
-                              "--format=csv,noheader,nounits")
+    raw = _gpu_probe_exec("nvidia-smi --query-compute-apps=pid,used_memory,process_name "
+                          "--format=csv,noheader,nounits")
     procs = []
     for line in raw.splitlines():
         parts = [p.strip() for p in line.split(",")]
