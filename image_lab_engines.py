@@ -132,6 +132,59 @@ def _gemini_expand_prompt(prompt: str) -> Optional[str]:
         return None
 
 
+# Encoder-load headroom (MiB free BEFORE the NF4 quantize-on-load starts).
+# BitsAndBytes streams bf16 shards to CUDA, quantises, frees — the GPU peak is
+# the staging burst, ~2.75 GiB for klein-4B's Qwen3-4B, ~5.2 GiB for
+# klein9b's Qwen3-8B (measured: the 8B load drove the process from 7.55 GiB
+# to 12.58 GiB before OOMing on a 96 MiB alloc, 2026-09-05). Threshold sits
+# between two measured post-transformer-load states on the shared card:
+#   ~4,940 MiB free — a TTS container additionally holds its ~2.2 GiB model
+#                     (e.g. engine-current omnivoice): cache-miss flows evict
+#                     it via the orchestrator, landing back at ~7.1 GiB.
+#   ~7,100 MiB free — TTS containers idle (contexts only, ~0.9 GiB, NOT
+#                     further evictable): the 8B staging burst fits — fresh
+#                     prompts must NOT be blocked here.
+# So: evict when free < 6000 (frees any resident TTS model), proceed above.
+# The transformer-load gate (_VRAM_NEED_MB 10500) passes with a TTS model
+# resident (10,748 ≥ 10,500), leaving ~4.9 GiB for the encode — verified OOM
+# 2026-09-05. Cache-miss flows pay a TTS eviction when a model is resident;
+# cache hits never do.
+_ENCODER_NEED_MB: dict[str, int] = {
+    "flux2klein":   4000,  # Qwen3-4B — ~2.75 GiB staging + margin
+    "flux2klein9b": 6000,  # Qwen3-8B — ~5.2 GiB staging; evicts a resident
+                           # TTS model, spares the idle-contexts state
+}
+
+
+def _ensure_encoder_headroom(engine_key: str) -> None:
+    """Make room for the on-demand text-encoder load before it allocates.
+
+    Same discipline as _ensure_vram_headroom but for the lazy NF4 encoder:
+    evict the TTS containers when free VRAM is short, else raise a clear
+    error instead of OOMing mid-quantise (GPU-only policy — no CPU
+    fallback). Runs only on embed-cache misses.
+    """
+    if not GPU_ONLY:
+        return
+    need_mb = _ENCODER_NEED_MB.get(engine_key)
+    if need_mb is None:
+        return
+    import torch
+    free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    if free_mb >= need_mb:
+        return
+    log.info("Encoder load needs %d MiB free (only %d) — evicting TTS engine containers …",
+             need_mb, free_mb)
+    free_mb = _evict_tts_engines()
+    if free_mb < need_mb:
+        label = (ENGINES.get(engine_key).label if ENGINES.get(engine_key)
+                 else engine_key)
+        raise RuntimeError(
+            f"Text-encoder load for {label} needs ~{need_mb // 1024} GiB free "
+            f"VRAM; only {free_mb} MiB available after evicting the TTS engine "
+            f"containers. (GPU-only policy — no CPU offloading.)")
+
+
 def _ensure_klein_encoder(pipe: Any, engine_key: str) -> None:
     """Load the Qwen3 text encoder into the pipeline on demand (embed-cache
     miss) and place it on CUDA. With the cache, the encoder is only needed
@@ -194,6 +247,7 @@ def _klein_prompt_embeds(pipe: Any, engine_key: str, prompts: dict) -> dict:
     if not missing:
         log.info("Prompt-embedding cache hit (%s) — skipping the text encoder", engine_key)
         return result
+    _ensure_encoder_headroom(engine_key)
     _ensure_klein_encoder(pipe, engine_key)
     for label, text in missing:
         with torch.no_grad():
@@ -362,9 +416,8 @@ def _ensure_engine(key: str, quant: str = ""):
         return  # already loaded with the same quantization
     _unload_current()
     # GPU-only policy: make room before allocating — evict the TTS engine
-    # containers, then the LLM container if still short (see
-    # _ensure_vram_headroom). Runs after _unload_current so the previous
-    # image engine's VRAM is already accounted for.
+    # containers (see _ensure_vram_headroom). Runs after _unload_current so
+    # the previous image engine's VRAM is already accounted for.
     if GPU_ONLY:
         need = _VRAM_NEED_MB.get(key)
         if need is not None:
@@ -383,26 +436,39 @@ def _ensure_engine(key: str, quant: str = ""):
 # ---------------------------------------------------------------------------
 
 def _evict_tts_engines() -> int:
-    """POST /evict to every TTS engine container to free shared GPU memory.
+    """Evict every TTS engine container's resident model to free GPU memory.
 
     GPU-only policy (2026-08-13): image engines NEVER fall back to CPU
     rendering or system-RAM offloading. When a loader needs more VRAM than is
     free, the TTS containers' resident models are evicted first — they
     lazy-reload on their next TTS request (a few seconds of added latency).
     Returns the free VRAM in MiB after the evictions settle.
+
+    Routing: the engine containers live on the compose bridge and publish NO
+    host ports, so direct localhost:PORT /evict calls have been connection-
+    refused (and silently swallowed) since the move to containers. The
+    orchestrator is the canonical broker — it sits on the bridge, knows the
+    containers by service name, and publishes 8009 on the host.
     """
+    import json as _json
     import time as _t
     import urllib.request as _urllib
     import torch
-    for port in (8101, 8102, 8103, 8104):
-        try:
-            req = _urllib.Request(
-                f"http://localhost:{port}/evict", data=b"", method="POST")
-            with _urllib.urlopen(req, timeout=5) as resp:
-                log.info("TTS engine container :%d evicted (%s)",
-                         port, resp.read().decode().strip()[:120])
-        except Exception:
-            pass   # container down / nothing loaded — fine
+    try:
+        req = _urllib.Request(
+            "http://localhost:8009/evict-all", data=b"", method="POST")
+        with _urllib.urlopen(req, timeout=60) as resp:
+            body = resp.read().decode().strip()
+        log.info("TTS evict-all: %s", body[:200])
+        info = _json.loads(body)
+        if info.get("evicted_count"):
+            log.info("TTS evict-all: %d container(s) evicted, %s freed",
+                     info["evicted_count"],
+                     info.get("freed_mb_total", "?"))
+    except Exception as exc:
+        # Orchestrator down / eviction failed — never OOM silently on top of
+        # it: log loudly and let the VRAM gate raise its clear error.
+        log.warning("TTS evict-all via orchestrator failed: %s", exc)
     _t.sleep(2)  # let CUDA return the freed memory to the driver
     return torch.cuda.mem_get_info()[0] // (1024 * 1024)
 
@@ -431,45 +497,14 @@ _VRAM_NEED_MB: dict[str, int] = {
     "ideogram4":    12000,  # nf4 transformer + Qwen3-VL encoder + VAE; load peak ≈ 11 GiB
 }
 
-_LLM_CONTAINER_NAME = "tts-lab-llm-qwen36"
-_DOCKER_SOCK = "/var/run/docker.sock"
-
-
-def _stop_llm_container() -> bool:
-    """Stop the Qwen 3.6 LLM container to free its ~13.6 GiB VRAM.
-
-    Last-resort eviction for image loads. Reversible: the TTS orchestrator
-    restarts the container before LLM inference (tts_lab_dispatch Phase 0).
-    Returns True only if this call issued the stop (HTTP 204); False if the
-    container was already stopped (304), the docker socket is missing, or
-    the request failed.
-    """
-    if not os.path.exists(_DOCKER_SOCK):
-        log.warning("No docker socket (%s) — cannot stop LLM container", _DOCKER_SOCK)
-        return False
-    try:
-        import httpx
-        transport = httpx.HTTPTransport(uds=_DOCKER_SOCK)
-        with httpx.Client(transport=transport, timeout=10.0) as client:
-            r = client.post(
-                f"http://localhost/v1.49/containers/{_LLM_CONTAINER_NAME}/stop")
-        stopped = r.status_code == 204
-        log.info("Stop LLM container → HTTP %s %s", r.status_code,
-                 "✓" if stopped else "✗ (already stopped or failed)")
-        return stopped
-    except Exception as exc:
-        log.warning("Failed to stop LLM container: %s", exc)
-        return False
-
-
 def _ensure_vram_headroom(need_mb: int, key: str) -> None:
     """Make sure `need_mb` MiB of VRAM are free before loading engine `key`.
 
     Escalation chain (GPU-only policy — image engines never fall back to CPU):
       1. Evict the TTS engine containers (they lazy-reload on their next
          TTS request, a few seconds of added latency).
-      2. Stop the LLM container as a last resort (~13.6 GiB).
-      3. Raise a clear error instead of OOMing mid-load.
+      2. Raise a clear error instead of OOMing mid-load. (The LLM container
+         was retired 2026-08-23 — the old stop-LLM last-resort is gone.)
     """
     import torch
     if not torch.cuda.is_available():
@@ -481,19 +516,11 @@ def _ensure_vram_headroom(need_mb: int, key: str) -> None:
              free_mb, need_mb)
     free_mb = _evict_tts_engines()
     if free_mb < need_mb:
-        log.info("Still %d MiB free — stopping LLM container (~13.6 GiB) …", free_mb)
-        if _stop_llm_container():
-            # Wait (bounded) for the driver to reclaim the LLM's memory.
-            t0 = time.monotonic()
-            while free_mb < need_mb and time.monotonic() - t0 < 30:
-                time.sleep(1)
-                free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
-    if free_mb < need_mb:
         label = ENGINES.get(key).label if ENGINES.get(key) else key
         raise RuntimeError(
             f"{label} needs ~{need_mb // 1024} GiB free VRAM; only {free_mb} MiB "
-            f"available after evicting the TTS engine containers and stopping "
-            f"the LLM container. (GPU-only policy — no CPU offloading.)")
+            f"available after evicting the TTS engine containers. "
+            f"(GPU-only policy — no CPU offloading.)")
 
 
 
@@ -537,7 +564,7 @@ def _load_flux2klein(quant: str = ""):
     # card. The encoder is therefore loaded NF4 4-bit on CUDA (as in the 9B-KV
     # loader); the transformer stays full bf16. VRAM headroom is enforced
     # centrally in _ensure_engine → _ensure_vram_headroom (evicts the TTS
-    # containers, then the LLM container, before allocating).
+    # containers before allocating).
 
     log.info("Loading FLUX.2 Klein 4B transformer (BF16) …")
     transformer = Flux2Transformer2DModel.from_pretrained(
@@ -1336,7 +1363,18 @@ def generate(engine_key: str, params: dict) -> list[dict]:
             _unload_current()
             raise
         generator_fn = _GENERATORS[engine_key]
-        results = generator_fn(params)
+        try:
+            results = generator_fn(params)
+        except Exception:
+            # A failed generation leaks just like a failed load: the NF4
+            # text-encoder quantise-on-load (cache-miss prompts) or the
+            # encode itself can OOM mid-allocation and pin partially-loaded
+            # tensors in the caching allocator — bricks the card until the
+            # service restarts (verified 2026-09-05: 3.4-5 GiB stuck after
+            # an aborted encoder load; every later request 503'd on the
+            # VRAM gate). Drop everything so the next request starts clean.
+            _unload_current()
+            raise
         STATE.last_used = time.time()
         return results
     finally:
