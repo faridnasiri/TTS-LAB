@@ -17,7 +17,7 @@ image-to-image runs pay the reference-image cost once instead of every step.
 | Joint attention dim | 7680 (= 3×2560) | **12288 (= 3×4096)** |
 | MLP | ratio 3.0 (SwiGLU doubled) | ratio 3.0 (SwiGLU doubled, bigger dims) |
 | Distilled steps | 4 | 4 |
-| Source | HF repo (bf16) | GGUF Q4_K_M (5.7 GB) |
+| Source | HF repo (bf16) | GGUF Q6_K (7.9 GB) — default since 2026-09-04 |
 
 ## Why GGUF and not the official repo
 
@@ -30,9 +30,38 @@ not have. Verified 2026-08-13:
 - `black-forest-labs/FLUX.2-klein-9b-fp8` → 401
 
 So the transformer comes from the public **QuantStack/FLUX.2-Klein-9B-KV-GGUF**
-repo (`Flux-2-Klein-9B-KV-Q4_K_M.gguf`, 5.7 GB), and the shared components
-(text encoder, VAE, scheduler, tokenizer) are reused from the accessible
-`black-forest-labs/FLUX.2-klein-4B` repo / Qwen3-8B.
+repo (`Flux-2-Klein-9B-KV-Q6_K.gguf`, 7.9 GB — default since 2026-09-04),
+and the shared components (text encoder, VAE, scheduler, tokenizer) are
+reused from the accessible `black-forest-labs/FLUX.2-klein-4B` repo / Qwen3-8B.
+
+### Quant ladder (all same architecture, one config)
+
+| Quant | GGUF size | Notes |
+|---|---|---|
+| Q3_K_M | 4.6 GB | smallest offered — facial detail softens below this |
+| Q4_K_M | 5.7 GB | previous default (2026-08-13 → 2026-09-04) |
+| Q5_K_M | 6.8 GB | |
+| **Q6_K** | **7.9 GB** | **default** — identity A/B sweet spot on the 16 GB card (14.2 GiB total at gen) |
+| Q8_0 | 10.0 GB | near-lossless — **loads but OOMs at generation on the 16 GB card** (verified 2026-09-05) |
+
+Raising the default to Q6_K (2026-09-04) followed the identity-preservation
+trial (`docs/sessions/` — 6 edits, cosine 0.70–0.93 vs a 0.084 impostor at
+Q4_K_M); Q6_K recovers detail headroom at +2.1 GiB. Q2_K/Q3_K_S are not
+offered — they blur facial structure. Chosen via the API/UI `quant` field;
+`""` resolves to the loader default.
+
+**Quant-vs-identity finding (2026-09-05):** Q4_K_M ↔ Q6_K same-prompt/same-seed
+outputs agree at 0.958–0.985 cosine, and identity cosine vs the reference
+(E2 suit / E3 laugh / E4 Rembrandt) is unchanged within noise — Q6:
+0.930 / 0.690 / 0.696 vs Q4: 0.932 / 0.697 / 0.698. Identity retention is
+**not quant-bound** in the Q4→Q6 range; it is bound by the
+4-step-distilled model's capability. **Q8_0** was verified on the VM: the
+9.98 GB GGUF downloads and loads, but generation fails with CUDA OOM (60 MiB
+free of 15.48 GiB at first allocation) even with TTS containers evicted —
+the Q8_0 transformer sits ~2.05 GiB above Q6_K and the card has no room.
+Running it requires the text encoder off-GPU (`IMGLAB_GPU_ONLY=0`, bf16 on
+CPU RAM frees ~2.5 GiB) or a larger card. Kept in the ladder for those
+deployments.
 
 ## Config derivation (the tricky part)
 
@@ -85,16 +114,19 @@ The gated repo's text encoder is 4 shards ≈ 9.4B params, consistent with Qwen3
 
 | Component | Size on GPU |
 |---|---|
-| Transformer Q4_K_M GGUF | ~5.7 GB (dequant fused at forward) |
+| Transformer Q6_K GGUF | ~7.9 GB (dequant fused at forward) |
 | Qwen3-8B text encoder (NF4) | ~2.5 GB |
 | VAE (AutoencoderKLFlux2) | ~3 GB (slicing + tiling enabled) |
 | Latents / activations @1024² | < 1.5 GB |
-| **Total, everything on CUDA** | **~10 GiB — measured 9.98 GiB CUDA (2026-08-13)** |
+| **Total, everything on CUDA** | **Q6_K 14.2 GiB @1024² gen peak (measured 2026-09-05) — Q4_K_M 9.98 GiB CUDA (2026-08-13)** |
 
-Fits on the 15.5 GiB card with ~4-5 GiB headroom for activations. The TTS
-engine containers normally keep ~3.4 GiB resident, so the loader evicts them
-when free VRAM drops below the 14800 MiB threshold (max achievable free with
-TTS CUDA contexts resident is ~15354 MiB).
+Q6_K generation peak measured at 14,234 MiB used / 1,615 MiB free — fits the
+15.48 GiB card with ~1.5 GiB of headroom, not more. The TTS engine containers
+normally keep ~3.4 GiB resident, so the loader evicts them when free VRAM
+drops below the 14800 MiB threshold (max achievable free with TTS CUDA
+contexts resident is ~15354 MiB). Q8_0 (transformer ~9.6+ GiB resident) is
+~2.05 GiB over Q6_K — over the wall before activations, hence the verified
+generation-time OOM (see Quant-vs-identity finding above).
 
 ## Loading path (what actually runs)
 
