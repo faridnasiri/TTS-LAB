@@ -651,8 +651,19 @@ def _generate_flux2klein(params: dict) -> list[dict]:
 # FLUX.2 Klein 9B-KV (GGUF Q4_K_M)
 # ---------------------------------------------------------------------------
 
+# GGUF quant ladder for the same KV transformer — all entries share the
+# architecture-derived config, only the file differs. Quant chosen via the
+# API `quant` form field; "" resolves to the loader default (Q6_K since
+# 2026-09-04 — the identity-preservation A/B pointed at Q4_K_M's 0.70-0.93
+# cosine band; Q6_K is the quality-per-GB sweet spot on the 16 GB card).
+# Q8_0 needs TTS containers evicted (~14 GiB total). Q2_K/Q3_K_S exist but
+# blur facial detail — deliberately not offered.
 _FLUX2KLEIN9B_GGUF: dict[str, tuple[str, str]] = {
+    "Q3_K_M": ("QuantStack/FLUX.2-Klein-9B-KV-GGUF", "Flux-2-Klein-9B-KV-Q3_K_M.gguf"),
     "Q4_K_M": ("QuantStack/FLUX.2-Klein-9B-KV-GGUF", "Flux-2-Klein-9B-KV-Q4_K_M.gguf"),
+    "Q5_K_M": ("QuantStack/FLUX.2-Klein-9B-KV-GGUF", "Flux-2-Klein-9B-KV-Q5_K_M.gguf"),
+    "Q6_K":   ("QuantStack/FLUX.2-Klein-9B-KV-GGUF", "Flux-2-Klein-9B-KV-Q6_K.gguf"),
+    "Q8_0":   ("QuantStack/FLUX.2-Klein-9B-KV-GGUF", "Flux-2-Klein-9B-KV-Q8_0.gguf"),
 }
 
 # Official black-forest-labs/FLUX.2-klein-9b-kv repo is gated (token lacks
@@ -705,7 +716,7 @@ def _load_flux2klein9b(quant: str = "Q4_K_M"):
     from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
     from transformers import AutoModel, Qwen2TokenizerFast
 
-    use_quant = quant or "Q4_K_M"   # resolve the caller's "" to the engine default…
+    use_quant = quant or "Q6_K"     # resolve the caller's "" to the engine default…
     if use_quant not in _FLUX2KLEIN9B_GGUF:
         raise RuntimeError(
             f"FLUX.2 Klein 9B-KV quant '{use_quant}' not recognised. "

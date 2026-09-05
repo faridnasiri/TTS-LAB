@@ -173,11 +173,12 @@ ENGINES: dict[str, EngineInfo] = {
         label       = "FLUX.2 Klein 9B-KV",
         description = (
             "FLUX.2 Klein 9B-KV — the mid-size Klein variant from Black Forest Labs "
-            "(official 9B-KV repo is gated). Runs the Q4_K_M GGUF from "
+            "(official 9B-KV repo is gated). Runs the Q6_K GGUF (default) from "
             "QuantStack/FLUX.2-Klein-9B-KV-GGUF with a locally-derived transformer "
             "config (8 double + 24 single blocks, hidden 4096). Uses the Qwen3-8B "
             "text encoder (NF4-quantised) and the shared FLUX.2 Klein VAE/scheduler. "
-            "KV reference-token caching enables efficient image editing."
+            "KV reference-token caching enables efficient image editing. "
+            "Quant ladder Q3_K_M…Q8_0 (default raised from Q4_K_M on 2026-09-04)."
         ),
         output_type = "image",
         vram_gb     = 13.5,
@@ -205,6 +206,22 @@ ENGINES: dict[str, EngineInfo] = {
             _p("seed",                "int",      -1,     "Seed (-1 = random)",
                min_=-1, max_=2**31-1, step=1,
                tooltip="Fixed seed for reproducible results."),
+            _p("quant",               "select",   "Q6_K", "Quantization",
+               options=[
+                   {"value": "Q3_K_M", "label": "Q3_K_M — 4.6 GB  (smallest usable for faces)"},
+                   {"value": "Q4_K_M", "label": "Q4_K_M — 5.7 GB  (previous default)"},
+                   {"value": "Q5_K_M", "label": "Q5_K_M — 6.8 GB"},
+                   {"value": "Q6_K",   "label": "Q6_K   — 7.9 GB  ✓ default"},
+                   {"value": "Q8_0",   "label": "Q8_0   — 10.0 GB (near-lossless — exceeds 16 GB card)"},
+               ],
+               tooltip=(
+                   "GGUF quantisation uses QuantStack/FLUX.2-Klein-9B-KV-GGUF, downloaded "
+                   "on first use. All quants share one transformer config. Default Q6_K since "
+                   "2026-09-04 (Q4_K_M passed the identity A/B; Q6_K is the quality-per-GB "
+                   "sweet spot). Q8_0 loads but OOMs at generation on the 16 GB card even "
+                   "with TTS containers evicted (verified 2026-09-05) — kept for larger-GPU "
+                   "or text-encoder-offload deployments."
+               )),
         ],
     ),
 
