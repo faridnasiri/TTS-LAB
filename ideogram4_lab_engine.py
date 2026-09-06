@@ -470,6 +470,22 @@ def load_ideogram4(
         "float32": torch.float32,
     }.get(dtype, torch.bfloat16)
 
+    # hf_hub 1.16.1 treats a token-less hf_hub_download() as anonymous even
+    # when HF_TOKEN is in the environment, and the ideogram4 package's weight
+    # downloads never pass a token. On this gated repo the loader's first
+    # fetch (shard index, which does not exist) then 401s before the
+    # single-file fallback can run. Inject the resolved token into the
+    # package's hf_hub_download binding for the duration of the process.
+    _hf_token = _resolve_hf_token()
+    if _hf_token:
+        from functools import partial
+        from huggingface_hub import hf_hub_download as _hub_download
+        import ideogram4.pipeline_ideogram4 as _pipeline_module
+
+        _pipeline_module.hf_hub_download = partial(
+            _hub_download, token=_hf_token
+        )
+
     # Select repo + pipeline config based on quantization
     if quant == "nf4":
         weights_repo = "ideogram-ai/ideogram-4-nf4"
