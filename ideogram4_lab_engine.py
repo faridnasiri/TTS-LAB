@@ -84,8 +84,39 @@ def _load_cached_text_encoder(device: str = "cuda", torch_dtype=None):
     return None, None  # Disabled — known OOM issue
 
 def _resolve_hf_token() -> str:
-    """Return HF_TOKEN from environment (set in deploy script)."""
+    """Return an HF access token — env first, then cache-token fallbacks.
+
+    The env-only check was fragile: the imglab service's HF_HOME
+    (/opt/arthur-img-models/huggingface) holds no token file, so hf_hub's own
+    get_token() finds nothing there even though root's default cache
+    (~/.cache/huggingface/token) has one. The engine runs as root, so probe
+    the classic path explicitly when HF_TOKEN is unset — otherwise a deploy
+    that forgets the token silently kills Ideogram 4 (gated repo) while every
+    other engine still resolves gated access through hf_hub's cache.
+    """
     tok = os.environ.get("HF_TOKEN", "")
+    if not tok:
+        try:
+            from huggingface_hub import get_token
+            tok = get_token() or ""
+        except Exception:
+            tok = ""
+    if not tok:
+        candidates = (
+            os.environ.get("HF_TOKEN_PATH", ""),
+            os.path.join(os.environ.get("HF_HOME", ""), "token"),
+            os.path.expanduser("~/.cache/huggingface/token"),
+        )
+        for path in candidates:
+            if not path:
+                continue
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    tok = fh.read().strip()
+                if tok:
+                    break
+            except OSError:
+                continue
     return tok.strip()
 
 
