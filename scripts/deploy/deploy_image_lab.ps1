@@ -105,6 +105,22 @@ function Run-Phase {
 # ─────────────────────────────────────────────────────────────────────────────
 Run-Phase 1 "System packages + directory layout" {
     Invoke-SSH "sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg libglib2.0-0 libsm6 libxext6 libgl1 git-lfs python3.11 python3.11-venv python3-pip 2>&1 | tail -5"
+    # Ubuntu jammy ships python3.11 as 3.11.0~rc1 — a PRE-RELEASE CPython that
+    # segfaults triton reduction codegen (Boogu's fp8 act-quant kernels die with
+    # a code_generator crash under rc1; final 3.11.x runs them fine). If the
+    # distro package is an rc, upgrade to final 3.11.x from the deadsnakes PPA.
+    Invoke-SSH @"
+if /usr/bin/python3.11 --version | grep -qi 'rc'; then
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq software-properties-common >/dev/null 2>&1 || true
+  sudo add-apt-repository -y ppa:deadsnakes/ppa >/dev/null 2>&1
+  sudo apt-get update -qq
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq python3.11 python3.11-venv 2>&1 | tail -2
+  echo 'python3.11 upgraded from rc -> final (deadsnakes)'
+else
+  echo 'python3.11 is already a final release'
+fi
+/usr/bin/python3.11 --version
+"@
     Invoke-SSH "sudo mkdir -p /opt/arthur-img /opt/models/image /opt/arthur-gen/images /opt/arthur-gen/videos"
     Invoke-SSH "sudo chown -R ${User}:${User} /opt/arthur-img /opt/arthur-gen"
     Invoke-SSH "sudo git lfs install --system --skip-repo 2>/dev/null || true"
@@ -120,8 +136,10 @@ sudo bash -c 'if [ ! -d /opt/arthur-img-env ]; then python3.11 -m venv /opt/arth
 "@
     $pip = "/opt/arthur-img-env/bin/pip"
     Invoke-SSH "$pip install --upgrade pip wheel setuptools -q"
-    # PyTorch — pin same version as TTS lab (2.10.0+cu128) to match driver
-    Invoke-SSH "$pip install torch==2.10.0+cu128 torchvision==0.21.0+cu128 --index-url https://download.pytorch.org/whl/cu128 -q"
+    # PyTorch — 2.11.0+cu128 (first stable line with sm_120 for the 5060 Ti).
+    # DO NOT pin 2.10.0: it lacks sm_120 and would revert a working venv.
+    # Verified pairing on the VM: torchvision 0.26.0+cu128.
+    Invoke-SSH "$pip install torch==2.11.0+cu128 torchvision==0.26.0+cu128 --index-url https://download.pytorch.org/whl/cu128 -q"
     Invoke-SSH "/opt/arthur-img-env/bin/python -c 'import torch; print(torch.__version__, torch.cuda.is_available())'"
 }
 
@@ -155,6 +173,17 @@ Run-Phase 3 "Engine Python packages" {
     # Ideogram 4 (cloned from GitHub, install as editable)
     Invoke-SSH "test -d /opt/arthur-img/ideogram4 && echo 'ideogram4 already cloned' || (cd /opt/arthur-img && git clone https://github.com/ideogram-ai/ideogram4.git)"
     Invoke-SSH "$pip install -e /opt/arthur-img/ideogram4 -q"
+
+    # Boogu-Image (cloned from GitHub, install as editable, NO deps — the venv
+    # already has the required torch 2.11 / diffusers / transformers, and the
+    # package pins torch<2.12 which must NOT be resolved here)
+    Invoke-SSH "test -d /opt/arthur-img/Boogu-Image && echo 'Boogu-Image already cloned' || (cd /opt/arthur-img && git clone https://github.com/boogu-project/Boogu-Image.git)"
+    Invoke-SSH "$pip install -e /opt/arthur-img/Boogu-Image --no-deps -q"
+    # Boogu runtime deps: omegaconf (imported by the upstream pipeline) and the
+    # `kernels` package (transformers 5.9's finegrained-fp8 loader requires it;
+    # kernels-community/finegrained-fp8 pack v1 is resolved from HF hub at
+    # first fp8 load). Pin <0.15 — 0.14.x is the verified line.
+    Invoke-SSH "$pip install omegaconf 'kernels>=0.14,<0.15' -q"
 
     # Patch ideogram4 pipeline to add local_files_only=True for offline mode.
     # NOTE: Do NOT patch the tokenizer — Qwen3-VL tokenizer files (vocab.json,
@@ -195,10 +224,15 @@ os.environ['HF_HOME'] = '/opt/arthur-img-models/huggingface'
 from huggingface_hub import snapshot_download
 
 models = [
-    'diffusers/FLUX.2-dev-bnb-4bit',
     'stabilityai/stable-diffusion-3.5-large',
     'Wan-AI/Wan2.2-T2V-A14B-Diffusers',
     'Wan-AI/Wan2.2-I2V-A14B-Diffusers',
+    # SANA — two 1.6B variants share the Gemma-2-2B encoder shards, so the HF
+    # cache dedups the second download down to ~4.5 GB net.
+    'Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers',
+    'Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers',
+    # Boogu Turbo fp8 (~21 GB) — mllm + bf16 DiT + FLUX.1 VAE
+    'Boogu/Boogu-Image-0.1-Turbo-fp8',
 ]
 
 token = '$HFToken'
@@ -230,7 +264,8 @@ Run-Phase 5 "SCP code files to VM" {
         "$repoRoot\image_lab_utils.py",
         "$repoRoot\scripts\download\gguf_download.py",
         "$repoRoot\scripts\utils\nvfp4_save.py",
-        "$repoRoot\ideogram4_lab_engine.py"
+        "$repoRoot\ideogram4_lab_engine.py",
+        "$repoRoot\boogu_lab_engine.py"
     )
 
     foreach ($f in $files) {
@@ -253,7 +288,8 @@ Run-Phase 5 "SCP code files to VM" {
         "IMGLAB_MODELS_ROOT=/opt/models/image",
         "IMGLAB_OUTPUT_ROOT=/opt/arthur-gen",
         "IMGLAB_PORT=8002",
-        "IMGLAB_GPU_ONLY=1"
+        "IMGLAB_GPU_ONLY=1",
+        "TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1"
     )
     if ($HFToken) {
         $envLines = @("HF_TOKEN=$HFToken") + $envLines
@@ -413,11 +449,15 @@ Write-Host "══════════════════════�
 Write-Host ""
 Write-Host "  Logs:   ssh $User@$VM journalctl -u arthur-imglab.service -f"
 Write-Host "  UI:     http://${VM}:8002"
-Write-Host "  API:    POST http://${VM}:8002/generate/flux2"
+Write-Host "  API:    POST http://${VM}:8002/generate/flux2klein"
+Write-Host "          POST http://${VM}:8002/generate/flux2klein9b"
 Write-Host "          POST http://${VM}:8002/generate/sd35"
 Write-Host "          POST http://${VM}:8002/generate/wan"
+Write-Host "          POST http://${VM}:8002/generate/ideogram4"
+Write-Host "          POST http://${VM}:8002/generate/sana"
+Write-Host "          POST http://${VM}:8002/generate/boogu"
 Write-Host ""
-Write-Host "  LICENSES — you must accept BEFORE running Phase 4 download:"
-Write-Host "    https://huggingface.co/black-forest-labs/FLUX.2-dev" -ForegroundColor Yellow
+Write-Host "  LICENSES — accept BEFORE running Phase 4 download:"
 Write-Host "    https://huggingface.co/stabilityai/stable-diffusion-3.5-large" -ForegroundColor Yellow
+Write-Host "    (SANA Apache-2.0 + Gemma terms; Boogu Apache-2.0 research-only — ungated)" -ForegroundColor DarkGray
 Write-Host ""

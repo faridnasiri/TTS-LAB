@@ -5,6 +5,8 @@ image_lab_engines.py — Load / unload / generate functions for all engines:
   sd35        — Stable Diffusion 3.5 Large GGUF (Q4_0 / Q5_0 / Q8_0) via city96
   wan         — Wan2.2 T2V / I2V GGUF (Q3_K_M / Q4_K_M / Q5_K_M / Q8_0) via QuantStack
   ideogram4   — Ideogram 4 (API)
+  sana        — SANA 1.6B (Sprint + SANA 1.5 variants, variant rides `quant`)
+  boogu       — Boogu-Image-0.1-Turbo-fp8 (CPU-offload exception; boogu_lab_engine)
 
 Note: flux2 (FLUX.2 [dev] 32B) was REMOVED 2026-08-13 — its ~27 GB footprint
 cannot fit the 15.5 GiB card and the GPU-only policy forbids CPU fallback.
@@ -27,6 +29,12 @@ from image_lab_utils import free_vram, random_seed, save_image, save_images, sav
 
 # Local directory for cached GGUF model files
 GGUF_ROOT = "/opt/arthur-img-models/gguf"
+
+# TTS orchestrator's whole-card eviction endpoint — the engine containers
+# publish no host ports, so the orchestrator (port 8009) is the canonical
+# broker for evicting TTS models off the shared GPU (see _evict_tts_engines).
+# Also used by the dispatch-layer /evict-all for the UI "Evict VRAM" button.
+TTS_EVICT_ALL_URL = "http://localhost:8009/evict-all"
 
 # Pre-saved shared pipeline components (text encoders, VAE, configs)
 # These were written by preq_save.py and contain everything except the transformer.
@@ -385,6 +393,10 @@ def _unload_current():
         'conditional_transformer', 'unconditional_transformer',
         'text_encoder', 'autoencoder', 'transformer',
         'vae', 'text_encoder_2',
+        # Boogu pipeline components — under its CPU-offload exception nothing
+        # is GPU-resident at rest, but a mid-generate failure can leave them
+        # staged on the card; the failure path must release them.
+        'mllm', 'processor',
     ]
     for ref in [STATE.loaded_model, STATE.loaded_pipe2]:
         if ref is None:
@@ -455,8 +467,7 @@ def _evict_tts_engines() -> int:
     import urllib.request as _urllib
     import torch
     try:
-        req = _urllib.Request(
-            "http://localhost:8009/evict-all", data=b"", method="POST")
+        req = _urllib.Request(TTS_EVICT_ALL_URL, data=b"", method="POST")
         with _urllib.urlopen(req, timeout=60) as resp:
             body = resp.read().decode().strip()
         log.info("TTS evict-all: %s", body[:200])
@@ -495,6 +506,19 @@ _VRAM_NEED_MB: dict[str, int] = {
     "sd35":         12500,  # GGUF transformer + shared encoders/VAE ≈ 11-12 GiB
     "wan":          14800,  # two A14B transformers — needs the card to itself
     "ideogram4":    12000,  # nf4 transformer + Qwen3-VL encoder + VAE; load peak ≈ 11 GiB
+    # SANA: whole bf16 pipeline incl. Gemma-2-2B encoder resident. Measured
+    # 2026-09-07 (1024², both variants): resident 8,968 MiB, gen proc peak
+    # 9,886 MiB, device peak 10,866 MiB. 11500 still sits between the
+    # TTS-resident free state (~10.8 GiB → evicts TTS on load) and the idle
+    # free state (~14.3 GiB → passes untouched); the headroom above the device
+    # peak covers 2048² activation growth.
+    "sana":         11500,
+    # Boogu (CPU-offload exception — the ONLY engine allowed to stage off
+    # GPU): load is cheap (modules stage on CPU) but the first generate moves
+    # the whole fp8 mllm AND bf16 DiT onto the card. Measured GPU peak
+    # 2026-09-07: 12,640 MiB (1024², 4 steps, TTS evicted) → 13200 clears it
+    # yet still sits under the idle free state, so an idle TTS is left alone.
+    "boogu":        13200,
 }
 
 def _ensure_vram_headroom(need_mb: int, key: str) -> None:
@@ -1223,6 +1247,176 @@ def _generate_ideogram4(params: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# SANA 1.6B  (Sprint + SANA 1.5 — the variant rides the `quant` form field)
+# ---------------------------------------------------------------------------
+
+# Why quant carries the variant: _ensure_engine / generate() / the UI
+# reload-warning banner all key on the quant string — a separate param would
+# not trigger an unload+reload when the checkpoint switches. STATE.active_quant
+# stores the caller's verbatim string ("sprint-1.6b" / "1.5-1.6b"), so a
+# default request never mismatches a resident default.
+# Variant → (repo, supports_CFG). Both repos ship identical Gemma-2-2B-IT
+# encoder shards → the HF cache dedups ~5.2 GB between them.
+_SANA_VARIANTS: dict = {
+    "sprint-1.6b": ("Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers", False),
+    "1.5-1.6b":    ("Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers",    True),
+}
+
+
+def _load_sana(quant: str = ""):
+    import torch
+    from diffusers import SanaPipeline, SanaSprintPipeline
+
+    variant = quant or "sprint-1.6b"
+    if variant not in _SANA_VARIANTS:
+        raise RuntimeError(
+            f"SANA variant '{variant}' not recognised. "
+            f"Valid options: {list(_SANA_VARIANTS)}"
+        )
+    repo, has_cfg = _SANA_VARIANTS[variant]
+    pipe_cls = SanaPipeline if has_cfg else SanaSprintPipeline
+
+    t0 = time.time()
+    # Public (ungated) repos — token=None per hf_hub 1.16.1 semantics (a token
+    # would only be needed for gated access; see the klein loaders).
+    log.info("Loading SANA %s (%s) — whole bf16 pipeline to CUDA …",
+             variant, pipe_cls.__name__)
+    pipe = pipe_cls.from_pretrained(
+        repo, torch_dtype=torch.bfloat16, token=None,
+    ).to("cuda")
+
+    # Tiling protects 2048² renders (no-op at 1024). Slicing is a no-op where
+    # AutoencoderDC lacks it (diffusers-version dependent) — guard both.
+    if hasattr(pipe.vae, "enable_slicing"):
+        pipe.vae.enable_slicing()
+    if hasattr(pipe.vae, "enable_tiling"):
+        pipe.vae.enable_tiling()
+
+    # Store the CALLER's quant verbatim ("" = default), never the resolved
+    # variant — _ensure_engine compares active_quant to the request string,
+    # so resolving here would make every default request pay an unload+reload.
+    STATE.loaded_model  = pipe
+    STATE.active_engine = "sana"
+    STATE.active_quant  = quant
+    ENGINES["sana"].loaded = True
+    log.info("SANA %s ready in %.1f s (CUDA: %.2f GiB)",
+             variant, time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
+
+
+def _generate_sana(params: dict) -> list[dict]:
+    import torch
+
+    pipe = STATE.loaded_model
+    # Resident by construction — _ensure_engine guarantees the request's
+    # variant is loaded when we get here.
+    variant, has_cfg = _SANA_VARIANTS[STATE.active_quant or "sprint-1.6b"]
+
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+
+    n = int(params.get("num_images", 1))
+    steps = int(params.get("num_inference_steps", 4))
+    if not has_cfg:
+        # Sprint is step-distilled: SCMScheduler runs 1-4 steps. Clamp instead
+        # of erroring — a UI/API caller pasting 20 would otherwise silently
+        # get garbage from an invalid schedule.
+        if steps > 4:
+            log.info("Sprint steps=%d exceeds the 1-4 range — clamping to 4", steps)
+            steps = 4
+        steps = max(1, steps)
+    else:
+        steps = max(1, min(steps, 24))
+
+    generator = [
+        torch.Generator(device="cpu").manual_seed(seed + i)
+        for i in range(n)
+    ]
+
+    kw = dict(
+        prompt                 = params["prompt"],
+        width                  = int(params.get("width",  1024)),
+        height                 = int(params.get("height", 1024)),
+        num_inference_steps    = steps,
+        num_images_per_prompt  = n,
+        generator              = generator,
+    )
+    if has_cfg:
+        kw["negative_prompt"] = params.get("negative_prompt", "")
+        kw["guidance_scale"]  = float(params.get("guidance_scale", 4.5))
+    elif steps != 2:
+        # diffusers SanaSprintPipeline passes intermediate_timesteps=1.3 (its
+        # signature default) to the SCMScheduler, which accepts that only at
+        # exactly 2 steps (the SCM max->1.3->0 jump). For 1/3/4 steps the
+        # scheduler requires intermediate_timesteps=None to fall back to the
+        # linear max_timesteps->0 schedule the Sprint distiller was trained
+        # on — otherwise EVERY non-2-step Sprint request errors out.
+        kw["intermediate_timesteps"] = None
+
+    result = pipe(**kw)
+
+    final_params = {**params, "seed": seed, "variant": variant}
+    return save_images(result.images, "sana", final_params)
+
+
+def _probe_sana():
+    try:
+        from diffusers import SanaPipeline, SanaSprintPipeline  # noqa: F401
+        ENGINES["sana"].available = True
+    except Exception as exc:
+        ENGINES["sana"].available = False
+        ENGINES["sana"].error     = str(exc)
+        log.warning("SANA unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Boogu-Image-0.1-Turbo-fp8  (CPU-offload exception — boogu_lab_engine)
+# ---------------------------------------------------------------------------
+
+def _load_boogu(quant: str = ""):
+    import importlib
+    boogu_engine = importlib.import_module("boogu_lab_engine")
+    t0 = time.time()
+    log.info("Loading Boogu turbo fp8 (CPU-offloaded — approved exception) …")
+    pipe = boogu_engine.load_boogu(quant=quant)
+    STATE.loaded_model  = pipe
+    STATE.active_engine = "boogu"
+    STATE.active_quant  = quant
+    ENGINES["boogu"].loaded = True
+    log.info("Boogu turbo ready in %.1f s", time.time() - t0)
+
+
+def _generate_boogu(params: dict) -> list[dict]:
+    import importlib
+    boogu_engine = importlib.import_module("boogu_lab_engine")
+
+    pipe   = STATE.loaded_model
+    images, seed_used = boogu_engine.generate_boogu(pipe, params)
+
+    # Record the ACTUAL seed used — auto seed is drawn server-side inside the
+    # module, so the gallery/API shows the real seed for reproducibility.
+    final_params = {**params, "seed": seed_used}
+    return save_images(images, "boogu", final_params)
+
+
+def _probe_boogu():
+    try:
+        import importlib
+        mod = importlib.import_module("boogu_lab_engine")
+        result = mod.probe_boogu()
+        if result["available"]:
+            ENGINES["boogu"].available = True
+        else:
+            ENGINES["boogu"].available = False
+            ENGINES["boogu"].error     = result.get("error", "unknown error")
+            log.warning("Boogu unavailable: %s", result.get("error"))
+    except Exception as exc:
+        ENGINES["boogu"].available = False
+        ENGINES["boogu"].error     = str(exc)
+        log.warning("Boogu unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Availability probe (called at startup)
 # ---------------------------------------------------------------------------
 
@@ -1236,6 +1430,8 @@ def probe_availability():
     _probe_sd35()
     _probe_wan()
     _probe_ideogram4()
+    _probe_sana()
+    _probe_boogu()
     _strip_missing_nvfp4_options()
 
 
@@ -1355,11 +1551,24 @@ def generate(engine_key: str, params: dict) -> list[dict]:
     STATE.generating = True
     try:
         try:
+            # Stamp the run-timing context: save_image/save_video read
+            # run_started/run_loaded_at to record per-image stats. run_loaded_at
+            # is only set when a load actually happens — a warm run (same
+            # engine + quant already resident) leaves it 0.0 so the saved
+            # entry's load_s is null, not a misleading 0.0.
+            need_load = not (STATE.active_engine == engine_key and
+                             (not quant or STATE.active_quant == quant))
+            STATE.run_started = time.time()
+            STATE.run_loaded_at = 0.0
             _ensure_engine(engine_key, quant)
+            if need_load:
+                STATE.run_loaded_at = time.time()
         except Exception:
             # A failed load (e.g. CUDA OOM mid-load) leaves partially-loaded
             # tensors pinned in the caching allocator — release them so the
             # card isn't bricked until the service restarts.
+            STATE.run_started = 0.0
+            STATE.run_loaded_at = 0.0
             _unload_current()
             raise
         generator_fn = _GENERATORS[engine_key]
@@ -1379,15 +1588,18 @@ def generate(engine_key: str, params: dict) -> list[dict]:
         return results
     finally:
         STATE.generating = False
+        # Run context is only meaningful while a generation is in flight
+        STATE.run_started   = 0.0
+        STATE.run_loaded_at = 0.0
 
 
 # ---------------------------------------------------------------------------
 # Public load / unload for the API
 # ---------------------------------------------------------------------------
 
-def load_engine(engine_key: str):
+def load_engine(engine_key: str, quant: str = ""):
     try:
-        _ensure_engine(engine_key)
+        _ensure_engine(engine_key, quant)
     except Exception:
         # Same cleanup as generate() — a failed load must not leave
         # partially-loaded tensors pinned on the GPU.
@@ -1429,6 +1641,8 @@ _LOADERS = {
     "sd35":          _load_sd35,
     "wan":           _load_wan,
     "ideogram4":     _load_ideogram4,
+    "sana":          _load_sana,
+    "boogu":         _load_boogu,
 }
 
 _GENERATORS = {
@@ -1437,4 +1651,6 @@ _GENERATORS = {
     "sd35":          _generate_sd35,
     "wan":           _generate_wan,
     "ideogram4":     _generate_ideogram4,
+    "sana":          _generate_sana,
+    "boogu":         _generate_boogu,
 }

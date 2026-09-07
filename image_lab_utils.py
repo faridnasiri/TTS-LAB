@@ -8,6 +8,8 @@ import gc
 import io
 import json
 import os
+import re
+import subprocess
 import time
 import uuid
 import base64
@@ -73,6 +75,179 @@ def free_vram():
     except Exception:
         pass
 
+
+# ---------------------------------------------------------------------------
+# Device-wide GPU stats — nvidia-smi based, TTL-cached. Unlike vram_stats()
+# (this process's torch-allocator view), gpu_stats() reports the whole card as
+# the driver sees it — including the TTS engine containers and any other CUDA
+# processes sharing the GPU — plus a per-process attribution list.
+# ---------------------------------------------------------------------------
+
+_GPU_STATS_CACHE: dict = {"ts": 0.0, "data": None}
+_DOCKER_NAMES_CACHE: dict = {"ts": 0.0, "map": {}}
+
+
+def gpu_stats(ttl: float = 2.0) -> dict:
+    """Device-wide GPU stats for the VRAM report (MB ints).
+
+    Runs nvidia-smi at most once per `ttl` seconds. Falls back to the torch
+    view from vram_stats() when nvidia-smi is unavailable (non-GPU host).
+    """
+    now = time.time()
+    if _GPU_STATS_CACHE["data"] and (now - _GPU_STATS_CACHE["ts"]) < ttl:
+        return _GPU_STATS_CACHE["data"]
+    stats = _gpu_stats_impl()
+    _GPU_STATS_CACHE["ts"], _GPU_STATS_CACHE["data"] = now, stats
+    return stats
+
+
+def _gpu_stats_impl() -> dict:
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.used,memory.free",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5)
+        if out.returncode != 0:
+            raise RuntimeError("nvidia-smi query failed")
+        head = out.stdout.strip().splitlines()[0] if out.stdout.strip() else ""
+        parts = [s.strip() for s in head.split(",")] if head else ["", "0", "0", "0"]
+        name, total_mb, used_mb, free_mb = parts[0], int(parts[1]), int(parts[2]), int(parts[3])
+
+        processes: list[dict] = []
+        apps = subprocess.run(
+            ["nvidia-smi", "--query-compute-apps=pid,used_memory,process_name",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=5)
+        if apps.returncode == 0:
+            for line in apps.stdout.splitlines():
+                cols = [c.strip() for c in line.split(",", 2)]
+                if len(cols) < 3:
+                    continue
+                try:
+                    pid = int(cols[0])
+                    mb  = int(cols[1].split()[0])
+                except ValueError:
+                    continue
+                container = _proc_container_name(pid) if mb > 0 else ""
+                processes.append({
+                    "pid": pid, "mb": mb, "process": cols[2],
+                    "container": container,   # tts-lab-* name or "" for host procs
+                })
+        processes.sort(key=lambda p: -p["mb"])
+        return {
+            "available":    True,
+            "name":         name,
+            "vram_total_mb": total_mb,
+            "vram_used_mb": used_mb,
+            "vram_free_mb": free_mb,
+            "source":       "nvidia-smi",
+            "processes":    processes,
+            "ts":           time.time(),
+        }
+    except Exception as exc:
+        # Fallback — this process's torch view (GB floats → MB ints)
+        v = vram_stats()
+        if v.get("available"):
+            return {
+                "available":     True,
+                "name":          v.get("device_name", ""),
+                "vram_total_mb": round(v["total_gb"] * 1024),
+                "vram_used_mb":  round(v["reserved_gb"] * 1024),
+                "vram_free_mb":  round(v["free_gb"] * 1024),
+                "source":        "torch",
+                "processes":     [],
+                "ts":            time.time(),
+            }
+        return {"available": False, "processes": [], "error": str(exc), "ts": time.time()}
+
+
+def _docker_name_map(max_age: float = 5.0) -> dict:
+    """Map container id-prefix → container name via `docker ps` (TTL-cached)."""
+    now = time.time()
+    cache = _DOCKER_NAMES_CACHE
+    if cache["map"] and (now - cache["ts"]) < max_age:
+        return cache["map"]
+    names: dict[str, str] = {}
+    try:
+        out = subprocess.run(
+            ["docker", "ps", "--format", "{{.ID}}\t{{.Names}}"],
+            capture_output=True, text=True, timeout=3)
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                cid, _, cname = line.partition("\t")
+                if cid:
+                    names[cid[:12].lower()] = cname
+    except Exception:
+        pass
+    cache["map"], cache["ts"] = names, time.time()
+    return names
+
+
+def _proc_container_name(pid: int) -> str:
+    """Container name owning host pid `pid` ('' = host process)."""
+    try:
+        with open(f"/proc/{pid}/cgroup", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception:
+        return ""
+    for m in re.finditer(r"docker[-/]([0-9a-f]{12,64})", text):
+        return _docker_name_map().get(m.group(1)[:12].lower(), "")
+    return ""
+
+
+def system_stats() -> dict:
+    """Host RAM {total, used, free} in MB — psutil, else /proc/meminfo."""
+    try:
+        import psutil
+        vm = psutil.virtual_memory()
+        return {
+            "total": vm.total >> 20,
+            "used":  (vm.total - vm.available) >> 20,
+            "free":  vm.available >> 20,
+        }
+    except Exception:
+        pass
+    try:
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            info = {}
+            for line in f:
+                k, _, v = line.partition(":")
+                if k in ("MemTotal", "MemAvailable"):
+                    info[k] = int(v.strip().split()[0])   # kB
+        if "MemTotal" in info:
+            total = info["MemTotal"] >> 10
+            free  = info.get("MemAvailable", info["MemTotal"]) >> 10
+            return {"total": total, "used": total - free, "free": free}
+    except Exception:
+        pass
+    return {"total": 0, "used": 0, "free": 0}
+
+
+# ---------------------------------------------------------------------------
+# Run-stats stamping — save_image/save_video record when the generation that
+# produced the file started/finished (STATE.run_started is stamped by
+# engines.generate() around load + inference).
+# ---------------------------------------------------------------------------
+
+def _stamp_run_stats(entry: dict) -> None:
+    """Merge run-timing stats into a saved entry (no-op outside a generate())."""
+    try:
+        from image_lab_config import STATE
+        if not STATE.run_started:
+            return
+        now = time.time()
+        load_s = None
+        if STATE.run_loaded_at:
+            load_s = round(max(STATE.run_loaded_at - STATE.run_started, 0.0), 2)
+        entry["stats"] = {
+            "started_at":  round(STATE.run_started, 3),
+            "finished_at": round(now, 3),
+            "load_s":      load_s,
+            "total_s":     round(max(now - STATE.run_started, 0.0), 2),
+        }
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Image saving
 # ---------------------------------------------------------------------------
@@ -104,6 +279,7 @@ def save_image(pil_image, engine_key: str, params: dict) -> dict:
         "params":     _strip_file_params(params),
         "created_at": time.time(),
     }
+    _stamp_run_stats(entry)
     _append_gallery(entry)
     log.info("Saved image %s (%dx%d)", filename, pil_image.width, pil_image.height)
     return entry
@@ -142,6 +318,7 @@ def save_video(frames, fps: int, engine_key: str, params: dict) -> dict:
         "params":     _strip_file_params(params),
         "created_at": time.time(),
     }
+    _stamp_run_stats(entry)
     _append_gallery(entry)
     log.info("Saved video %s (%d frames @ %d fps)", filename, len(frames), fps)
     return entry
@@ -179,7 +356,20 @@ def _append_gallery(entry: dict):
     try:
         path = Path(GALLERY_DB)
         data = json.loads(path.read_text(encoding="utf-8"))
-        data.append(entry)
+        # The gallery DB must never persist base64 blobs: it is rewritten in
+        # full on every save, so storing each entry's ~1.5 MB base64 grew the
+        # file unboundedly (measured 1.26 GB at ~750 entries) and every
+        # generation paid a synchronous full-file read+parse+rewrite — a
+        # ~15 s stall between the stats stamp and the HTTP response. The
+        # live response copy keeps its base64; gallery media loads by /files
+        # URL and read_gallery() already strips base64 from listings. Old
+        # entries are stripped too — self-healing migration for DBs written
+        # before this fix.
+        for old in data:
+            old.pop("base64", None)
+        store = dict(entry)
+        store.pop("base64", None)
+        data.append(store)
         data = data[-500:]   # keep last 500 entries
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
     except Exception as exc:

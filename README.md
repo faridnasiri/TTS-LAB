@@ -12,7 +12,7 @@ Originally built for an Android scam-baiting app ("SpamBlocker") that uses a cha
 ## Features
 
 - **30 TTS engines** — every major open-source TTS model, 16 validated + 10 experimental + 3 blocked
-- **6 Image & Video engines** — FLUX.2, SD 3.5, Ideogram 4, Wan2.2, FLUX.2 Klein, FLUX.2 Klein 9B-KV
+- **7 Image & Video engines** — FLUX.2 Klein ×2, SD 3.5, Wan2.2, Ideogram 4, SANA 1.6B, Boogu Turbo
 - **Side-by-side comparison** — switch engines instantly, compare voices, measure quality
 - **Voice cloning** — zero-shot cloning on 8 engines (F5-TTS, Chatterbox, Zonos, Fish Speech, StyleTTS2, XTTS, CosyVoice2, IndexTTS-2)
 - **Voice Library** — browse, play, download Persian reference voices from Common Voice
@@ -423,17 +423,19 @@ Parameters are engine-specific — unused ones are silently ignored.
 
 ---
 
-## Image Lab — 5 Image & Video Engines
+## Image Lab — 7 Image & Video Engines
 
 The project also includes a separate Image & Video generation lab on port 8002:
 
 | # | Key | Label | Type | VRAM | Notes |
 |---|---|---|---|---|---|
 | 1 | `flux2klein` | FLUX.2 Klein 4B | Image | ~10 GB | Compact 4B model. Apache 2.0. Step-distilled. |
-| 2 | `flux2klein9b` | FLUX.2 Klein 9B-KV | Image | ~10 GB | 9B-KV variant. GGUF Q4_K_M. I2I with KV cache. |
+| 2 | `flux2klein9b` | FLUX.2 Klein 9B-KV | Image | ~10 GB | 9B-KV variant. GGUF Q6_K. I2I with KV cache. |
 | 3 | `sd35` | SD 3.5 Large | Image | ~12 GB | 8B MMDiT. GGUF quantized. Turbo/Lightning presets. |
 | 4 | `wan` | Wan2.2 | Video | ~14 GB | T2V + I2V. Up to 5s cinematic video. Dual-transformer GGUF. |
 | 5 | `ideogram4` | Ideogram 4 | Image | ~6-10 GB | 9.3B DiT + Qwen3-VL. Native text rendering. NF4/FP8 quants. |
+| 6 | `sana` | SANA 1.6B | Image | ~11 GB | Sprint (1-4 steps, no CFG) + 1.5 (~20 steps, CFG) variants. Apache 2.0. |
+| 7 | `boogu` | Boogu Turbo | Image | ~13 GB | fp8 + bf16 DiT. **CPU-offload exception** (~27 GB RAM). 4 steps. |
 
 > **Optional:** ComfyUI integration toggle via `IMGLAB_USE_COMFYUI=1` env var.
 

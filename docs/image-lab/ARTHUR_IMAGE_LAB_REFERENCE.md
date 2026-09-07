@@ -93,13 +93,13 @@ Think of it as a private version of services like Midjourney or Runway — runni
 
 1. Browser sends `POST /generate/flux2klein` (multipart form, optional image upload)
 2. `image_lab_dispatch.py` validates the engine key, reads form fields
-3. `engines.generate("flux2klein", params)` is called — this is synchronous (blocks)
+3. `engines.generate("flux2klein", params)` is called via `asyncio.to_thread` — the HTTP connection stays open until done, but `/status`, `/logs` and the management endpoints keep serving (`generating: true` in the poll)
 4. `_ensure_engine("flux2klein")` evicts any loaded model, loads FLUX.2 Klein into VRAM
 5. `_generate_flux2klein(params)` runs the diffusion pipeline; PyTorch uses CUDA
 6. The output image/video is written to `/opt/arthur-gen/images/` or `.../videos/`
-7. A JSON entry is appended to `gallery.json`
+7. A JSON entry (with per-image `stats` — started/finished timestamps + load/generation split) is appended to `gallery.json`
 8. The file path + metadata is returned to the browser as JSON
-9. The browser renders the image/video card in the output pane
+9. The browser renders the image/video card in the output pane with its stat block (prompt, timings, params)
 
 ---
 
@@ -147,10 +147,14 @@ class EngineInfo:
 @dataclass
 class LabState:
     active_engine: str   # Which engine is currently in VRAM
+    active_quant: str    # Quant of the loaded engine ("" = BF16/default)
     loaded_model: Any    # The loaded pipeline object
     loaded_pipe2: Any    # Second pipeline (Wan T2V + I2V pair)
     loading: bool        # True during model load
     generating: bool     # True during inference
+    run_started: float   # wall clock when a generate() run began (incl. load)
+    run_loaded_at: float # wall clock when the model finished loading (0.0 if not reached)
+                         #   → read by save_image/save_video to stamp each entry's stats
 ```
 
 **Path constants:**
@@ -201,9 +205,14 @@ def generate(engine_key: str, params: dict) -> list[dict]:
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/status` | GET | JSON: engines list, VRAM stats, active engine, loading/generating flags |
-| `/generate/{engine_key}` | POST | Multipart form submission; triggers generation |
-| `/outputs/{filename}` | GET | Serve generated image/video file |
+| `/status[?brief=1]` | GET | JSON: engines list, torch VRAM, device-wide `gpu` report + host `system` RAM, active engine, loading/generating flags. `brief=1` drops per-engine `params`/`description` for the 4 s UI poll |
+| `/generate/{engine_key}` | POST | Multipart form submission; runs generation in a worker thread |
+| `/engines/{engine_key}/load` | POST | Preload engine (async, optional `quant` form field) |
+| `/engines/unload` | POST | Evict the resident engine |
+| `/engines/{engine_key}/evict` | POST | Evict ONE engine if it is resident |
+| `/evict-all` | POST | Whole-card eviction — Image Lab engine + all TTS engines via orchestrator `localhost:8009/evict-all` |
+| `/refresh` | POST | Re-probe engine availability |
+| `/files/images/{filename}` | GET | Serve generated PNG (same for `/files/videos/...` MP4) |
 | `/gallery` | GET | Return gallery JSON array |
 | `/gallery/{entry_id}` | DELETE | Remove a gallery entry + file |
 | `/` | GET | Returns the full Web UI (HTML) |
@@ -215,13 +224,16 @@ def generate(engine_key: str, params: dict) -> list[dict]:
 A single Python string constant `UI_HTML` containing the entire frontend — HTML, CSS, and JavaScript — returned by `GET /`. No build step, no npm, no separate static files.
 
 **UI capabilities:**
-- Engine selector tabs (FLUX.2 / SD 3.5 / Wan2.2)
+- Engine selector tabs (FLUX.2 Klein / Klein 9B-KV / SD 3.5 / Wan2.2 / Ideogram 4)
 - Dynamic parameter form (generated from `engine.params` schema via the `/status` API)
-- VRAM usage bar in the header (live, polled every 3 s)
+- **VRAM/system report strip** (TTS-Lab-style, polled every 4 s with `?brief=1`): host RAM bar, device-wide VRAM bar with % + "hot" state, GPU badge, per-process "who holds the VRAM" line (container names resolved via `/proc/<pid>/cgroup` + `docker ps`), resident-engine chip with ✕ evict, **Evict VRAM** (whole card incl. TTS containers) and **🔄 Refresh** buttons
+- **⬇ Preload / ⏏ Unload** buttons per engine tab (load honors the selected quant; load is async so the UI stays live — the status dot pulses amber while `loading: true`)
 - Status dot (green=idle, amber=loading or generating)
+- Per-image stat cards (prompt + started/finished times + duration with load/gen split + all params; seed click-to-copy)
+- Gallery detail modal — click any thumbnail for the full media + same stat block
 - Output gallery (images displayed inline, videos with playback controls)
 - Reference image drag-and-drop upload for I2I / I2V modes
-- Download button for each result
+- Toast notifications, Download button for each result
 - Dark theme with accent colours (`--accent: #6c8ef7`, `--accent2: #a78bfa`)
 
 ---
@@ -393,18 +405,108 @@ Both pipelines are kept in RAM simultaneously (`STATE.loaded_model` = T2V, `STAT
 
 ---
 
+### 4.4 SANA 1.6B — `sana` (Sprint + 1.5 variants)
+
+One engine key, two checkpoints selected via the existing `quant` form field
+(the string that drives reload on change):
+
+| Property | Value |
+|---|---|
+| **Sprint repo** | `Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers` |
+| **1.5 repo** | `Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers` |
+| **Architecture** | 1.6B DiT + Gemma-2-2B-IT text encoder + DC-AE (32×) VAE |
+| **Quantization** | None — whole pipeline bf16, fully GPU-resident |
+| **Disk size** | 9.74 GB per repo; ~14 GB net for both (Gemma-2-2B shards dedup across the pair) |
+| **VRAM (measured 2026-09-07)** | resident 8,968 MiB; gen device peak 10,866 MiB (1024²) |
+| **Output type** | Image (PNG), up to 4 per request |
+| **Resolution** | 256–2048 px, step 32 (DC-AE 32× compression) |
+| **License** | Apache 2.0 + Gemma terms |
+| **Requires HF token** | No (ungated) |
+
+**Variants (`quant` field):**
+
+| Value | Pipeline | Steps | CFG |
+|---|---|---|---|
+| `sprint-1.6b` (default) | `SanaSprintPipeline` + SCMScheduler | 1–4 (default 4; >4 clamped server-side with a log line) | none (guidance-free) |
+| `1.5-1.6b` | `SanaPipeline` + DPM scheduler | 1–24 (default 20; UI preset sets this on variant switch) | 4.5 default; `negative_prompt` supported |
+
+**Sprint SCM schedule quirk (fix baked into `_generate_sana`):** diffusers'
+`SanaSprintPipeline` passes `intermediate_timesteps=1.3` (its signature
+default) to the SCMScheduler, which accepts that only at exactly 2 steps (the
+SCM max→1.3→0 jump). For 1/3/4 steps the code passes
+`intermediate_timesteps=None`, making the scheduler fall back to the linear
+`max_timesteps→0` schedule the Sprint distiller was trained on. The 2-step
+path keeps the default 1.3 jump.
+
+**Loading strategy:**
+
+```python
+pipe = SanaPipeline / SanaSprintPipeline.from_pretrained(
+    repo, torch_dtype=torch.bfloat16, token=None,  # ungated
+)
+pipe.to("cuda")                  # whole pipeline resident incl. Gemma encoder
+pipe.vae.enable_slicing(); pipe.vae.enable_tiling()  # protects 2048² gens
+```
+
+---
+
+### 4.5 Boogu-Image 0.1 Turbo — `boogu` ⚠️ CPU-OFFLOAD EXCEPTION
+
+> **The ONLY engine exempt from the lab's GPU-only policy** (user-approved
+> 2026-09-06). The vendor's own 16 GB guidance is fp8 weights +
+> `enable_model_cpu_offload()`, and the fp8 mllm + bf16 DiT together exceed
+> the card. Every other engine still honors `IMGLAB_GPU_ONLY` — this one
+> stages modules from CPU RAM across a request by design.
+
+| Property | Value |
+|---|---|
+| **HuggingFace repo** | `Boogu/Boogu-Image-0.1-Turbo-fp8` (~21 GB disk) |
+| **mllm** | Qwen3-VL-8B-class, **fp8** (`quant_method` in config — the name's "fp8" is the mllm + a runtime flag, not the DiT) |
+| **transformer** | custom `BooguImageTransformer2DModel`, **bf16-stored** `.bin` shards (loaded with `use_safetensors=False`) |
+| **vae / scheduler** | FLUX.1 VAE (335 MB) + custom in-repo scheduler (`pip` package `boogu`, cloned from `github.com/boogu-project/Boogu-Image`) |
+| **Output type** | Image (PNG), up to 2 per request |
+| **Resolution** | ≤ 1536×1536, step 16 (FLUX.1 VAE) |
+| **Steps / CFG** | 1–8, default 4; CFG forced 1.0 — **no** `negative_prompt` field |
+| **License** | Apache 2.0 (repo states research use only) |
+| **Requires HF token** | No (ungated) |
+| **VRAM (measured 2026-09-07)** | transient GPU peak 12,640 MiB (1024², 4 steps); ~0 resident between requests |
+| **RAM (measured)** | peak 26,814 MB of 64 GB host (60% gate) |
+| **Latency (measured)** | first load 383 s incl. ~14 GB cache top-up; first gen ~100 s (module staging); warm gens 37–41 s |
+
+**Loading strategy (thin wrappers in `boogu_lab_engine.py`):**
+
+```python
+os.environ["TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR"] = "1"  # before ANY transformers import
+transformer = BooguImageTransformer2DModel.from_pretrained(
+    repo_snapshot, torch_dtype=torch.bfloat16, use_safetensors=False)
+pipe = BooguImageTurboPipeline.from_pretrained(
+    repo_snapshot, torch_dtype=torch.bfloat16,
+    trust_remote_code=True, transformer=transformer)
+pipe.enable_model_cpu_offload(device="cuda")   # THE approved offload exception
+pipe.vae.enable_slicing(); pipe.vae.enable_tiling()
+```
+
+Do **not** enable `torch.compile` (documented all-black outputs). The fused-op
+gate in `block_lumina2.py` keys off the lowercase `device` env var (unset in
+the lab) → torch RMSNorm fallback, benign — same path the upstream direct run
+validated. A failed generation can't strand components GPU-pinned: `mllm` and
+`processor` were added to the shared `_gpu_attrs` unload list.
+
+---
+
 ### Engine Comparison Summary
 
-| Feature | FLUX.2 [dev] | SD 3.5 Large | Wan2.2 |
-|---|---|---|---|
-| Output | Image | Image | Video |
-| Model size | 32B params | 8B params | 14B params |
-| VRAM needed | ~10 GB | ~12 GB | ~14 GB |
-| Speed (1024px) | ~60 s | ~30 s | ~3 min (49 frames) |
-| Image quality | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐ |
-| Prompt following | Excellent | Very good | Good |
-| Reference image | ✓ I2I editing | ✗ | ✓ I2V animation |
-| License | Non-commercial | Community | Apache 2.0 |
+| Feature | FLUX.2 Klein 4B | FLUX.2 Klein 9B-KV | SD 3.5 Large | Wan2.2 | Ideogram 4 | SANA 1.6B | Boogu Turbo |
+|---|---|---|---|---|---|---|---|
+| Output | Image | Image | Image | Video | Image | Image | Image |
+| Model | 4B DiT + Qwen3-4B | 9B-KV DiT + Qwen3-8B | 8B MMDiT | 14B ×2 (T2V+I2V) | 9.3B DiT + Qwen3-VL | 1.6B DiT + Gemma-2-2B | mllm (fp8) + DiT (bf16) |
+| VRAM when loaded | ~10 GB | ~10 GB | ~12 GB | ~14 GB | 6–10 GB (quant) | ~11 GB (measured 10.9 GB peak) | ~13 GB transient peak, CPU-offloaded |
+| Steps | distilled (4) | distilled (4) | 4–40 | — | — | Sprint 1–4 / 1.5 ≤ 24 | 1–8 (default 4) |
+| Text rendering | poor | poor | poor | poor | **native** | poor | poor |
+| Reference image | ✓ I2I | ✓ I2I (KV) | ✗ | ✓ I2V | ✓ | ✗ | ✗ |
+| Negative prompt | ✓ | ✓ | ✓ | ✗ | ✗ | 1.5 only (Sprint is CFG-free) | ✗ (CFG 1.0) |
+| License | Apache 2.0 | Apache 2.0 | Community | Apache 2.0 | Apache 2.0 | Apache 2.0 + Gemma terms | Apache 2.0 (research) |
+| Quantization | GGUF | GGUF Q6_K | GGUF | NVFP4 | NF4/FP8/BF16 | none (bf16) | fp8 mllm + bf16 DiT |
 
 ---
 
@@ -429,10 +531,15 @@ Both pipelines are kept in RAM simultaneously (`STATE.loaded_model` = T2V, `STAT
 
 | Device | Mount | Size | Contents |
 |---|---|---|---|
-| `/dev/sda1` | `/` (root) | 650 GB | OS + `/opt/arthur-img-models/` (image model cache) + `/opt/arthur-img/` (code) |
-| `/dev/sdb1` | `/opt/models` | 180 GB | TTS models (100% full — unrelated to image lab) |
+| `/dev/sda1` | `/` (root) | 630 GB (one single disk) | OS + `/opt/arthur-img-models/` (image model cache) + `/opt/arthur-img/` (code) + **all TTS docker images/containers** |
+| `/dev/sdb1` | `/opt/models` | 180 GB | TTS model weights (100% full — unrelated to image lab) |
 
-> **Important:** The image lab models are stored on the root disk (`sda1`) at `/opt/arthur-img-models/`, NOT on `/opt/models` (`sdb1`). The `/opt/models` disk is full with TTS service data.
+> **Important:** `/opt/arthur-img-models/` is NOT a separate mount — it shares the
+> 630 GB root disk with the TTS docker stack (measured 2026-09-07: the disk hit
+> 100% during the Boogu download; `docker builder prune` + removing a stale
+> unreferenced cache entry freed ~87 GB — open-but-deleted container layers can
+> pin tens of GB until pruned). Watch `df -h /` before large model downloads.
+> After the 2026-09-07 cleanup: 133 GB free (79%).
 
 ### Python Environment
 
@@ -450,11 +557,12 @@ Both pipelines are kept in RAM simultaneously (`STATE.loaded_model` = T2V, `STAT
 ### Environment Variables (`.env` file at `/opt/arthur-img/.env`)
 
 ```bash
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx    # Required for FLUX.2 and SD 3.5 (gated)
+HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx    # Required for SD 3.5 (gated)
 HF_HOME=/opt/arthur-img-models/huggingface
 IMGLAB_MODELS_ROOT=/opt/models/image   # Legacy, not actively used
 IMGLAB_OUTPUT_ROOT=/opt/arthur-gen
 IMGLAB_PORT=8002
+TRANSFORMERS_DISABLE_DEEPGEMM_LINEAR=1 # Boogu — must be set BEFORE any transformers import
 ```
 
 The `.env` file has `chmod 600` permissions. It is **not** committed to source control. The `secrets.env` file on the dev machine contains the tokens for use by the deployment script.
@@ -502,16 +610,24 @@ Installs the full ML inference stack:
 
 ### Phase 4 — Model Download
 
-Downloads all four models (~170 GB total) to `/opt/arthur-img-models/huggingface/hub/`:
+Pre-downloads the new models into the HF cache at
+`/opt/arthur-img-models/huggingface/` (top-level `models--*` directories —
+hf_hub ≥ 1.0 layout, NOT a `hub/` subdirectory). sd35/Wan entries are cached
+no-ops on an existing VM; the old `diffusers/FLUX.2-dev-bnb-4bit` entry was
+removed (flux2 deleted 2026-08-13):
 
 | Model | Download Size | Destination |
 |---|---|---|
-| `diffusers/FLUX.2-dev-bnb-4bit` | ~32 GB | `models--diffusers--FLUX.2-dev-bnb-4bit` |
-| `stabilityai/stable-diffusion-3.5-large` | ~40 GB | `models--stabilityai--stable-diffusion-3.5-large` |
-| `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ~49 GB | `models--Wan-AI--Wan2.2-T2V-A14B-Diffusers` |
-| `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ~50 GB | `models--Wan-AI--Wan2.2-I2V-A14B-Diffusers` |
+| `stabilityai/stable-diffusion-3.5-large` | ~40 GB (cached no-op) | `models--stabilityai--stable-diffusion-3.5-large` |
+| `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ~49 GB (cached no-op) | `models--Wan-AI--Wan2.2-T2V-A14B-Diffusers` |
+| `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ~50 GB (cached no-op) | `models--Wan-AI--Wan2.2-I2V-A14B-Diffusers` |
+| `Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers` | ~9.7 GB | `models--Efficient-Large-Model--Sana_Sprint_1.6B_1024px_diffusers` |
+| `Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers` | ~9.7 GB (~4.5 GB net — shares the Gemma-2-2B encoder shards already cached) | `models--Efficient-Large-Model--SANA1.5_1.6B_1024px_diffusers` |
+| `Boogu/Boogu-Image-0.1-Turbo-fp8` | ~21 GB | `models--Boogu--Boogu-Image-0.1-Turbo-fp8` |
 
-Uses `snapshot_download()` with `ignore_patterns=['*.msgpack','*.h5','flax_model*']` to skip non-PyTorch weights. All files in the HF hub format are symlinks pointing to content-addressed blobs in a `blobs/` directory.
+**New-model total ≈ 36 GB net.** Uses `snapshot_download()` with
+`ignore_patterns=['*.msgpack','*.h5','flax_model*']`. Snapshot files are
+symlinks into each repo's content-addressed `blobs/` directory.
 
 > **Note:** This phase uses SCP to transfer the download script to `/tmp/imglab_download.py` first, then executes it via SSH. This was necessary because multi-line heredocs in PowerShell SSH commands caused quoting failures.
 
@@ -538,46 +654,50 @@ Polls `http://192.168.0.87:8002/status` and prints:
 
 ## 7. API Reference
 
+> **Full, current API documentation lives in [`IMAGE_LAB_API_REFERENCE.md`](IMAGE_LAB_API_REFERENCE.md)** (all endpoints, response schemas, error reference, curl/Python cookbooks). This section is a condensed overview and can drift.
+
 ### `GET /status`
 
-Returns the current state of all engines and hardware.
+Returns the current state of all engines and hardware. Supports `?brief=1` (drops per-engine `params`/`description` — what the UI polls every 4 s).
 
-**Response (JSON):**
+**Response (JSON, condensed):**
 
 ```json
 {
-  "engines": [
-    {
-      "key": "flux2klein",
-      "label": "FLUX.2 Klein",
-      "description": "...",
-      "output_type": "image",
-      "vram_gb": 10.0,
-      "available": true,
-      "loaded": false,
-      "error": "",
-      "params": [ ... ]
-    }
-  ],
-  "active_engine": null,
+  "engines": [ { "key": "flux2klein", "label": "FLUX.2 Klein", "available": true, "loaded": true, "error": "" } ],
+  "active_engine": "flux2klein",
+  "active_quant": "",
   "generating": false,
   "loading": false,
-  "vram": {
-    "available": true,
-    "allocated_gb": 0.0,
-    "reserved_gb": 0.0,
-    "total_gb": 15.48,
-    "free_gb": 15.48,
-    "device_name": "NVIDIA GeForce RTX 5060 Ti"
+  "vram": { "available": true, "allocated_gb": 0.0, "reserved_gb": 6.1, "total_gb": 15.48, "free_gb": 9.3, "device_name": "NVIDIA GeForce RTX 5060 Ti" },
+  "system": { "total": 31914, "used": 15022, "free": 16892 },
+  "gpu": {
+    "available": true, "name": "NVIDIA GeForce RTX 5060 Ti",
+    "vram_total_mb": 16280, "vram_used_mb": 9216, "vram_free_mb": 7064,
+    "source": "nvidia-smi",
+    "processes": [
+      { "pid": 5121, "mb": 6144, "process": "python", "container": "" },
+      { "pid": 2093, "mb": 2970, "process": "python3", "container": "tts-lab-engine-current" }
+    ]
   }
 }
 ```
 
----
+`gpu` is the **device-wide** view (`nvidia-smi`): it includes the TTS engine containers sharing the card, with per-process container attribution. `vram` is this process's torch view (kept for compatibility).
+
+### Management endpoints
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /engines/{key}/load` | Preload engine — async (poll `/status` for `loading:true`), optional `quant` form field |
+| `POST /engines/unload` | Evict the resident engine |
+| `POST /engines/{key}/evict` | Evict one engine (only if resident) |
+| `POST /evict-all` | **Whole-card** eviction — Image Lab engine + all TTS engines via `localhost:8009/evict-all` |
+| `POST /refresh` | Re-probe availability |
 
 ### `POST /generate/{engine_key}`
 
-Triggers image or video generation. Accepts multipart/form-data.
+Triggers image or video generation. Accepts multipart/form-data. Runs in a worker thread — the HTTP response stays open, but `/status` keeps serving.
 
 **URL parameters:** `engine_key` = `flux2klein` | `flux2klein9b` | `sd35` | `wan` | `ideogram4`
 
@@ -592,6 +712,7 @@ Triggers image or video generation. Accepts multipart/form-data.
 | `num_inference_steps` | int | 28 | Denoising steps |
 | `guidance_scale` | float | 4.0 | Prompt adherence strength |
 | `seed` | int | -1 | -1 for random, fixed value for reproducibility |
+| `quant` | string | engine default | Quantization level (see the engine tables in §4) |
 | `reference_image` | file | null | Optional image upload (FLUX.2 Klein I2I, Wan I2V) |
 
 **Wan-specific fields:**
@@ -606,17 +727,20 @@ Triggers image or video generation. Accepts multipart/form-data.
 **Response (success, 200):**
 
 ```json
-[
-  {
-    "id": "uuid-string",
-    "engine": "flux2klein",
-    "output_type": "image",
-    "filename": "flux2klein_20260524_2314_abc123.png",
-    "url": "/outputs/flux2klein_20260524_2314_abc123.png",
-    "params": { "prompt": "...", "seed": 1234567 },
-    "created_at": 1779663000.0
-  }
-]
+{
+  "results": [
+    {
+      "id": "uuid-string",
+      "engine": "flux2klein",
+      "type": "image",
+      "filename": "flux2klein_uuid.png",
+      "url": "/files/images/flux2klein_uuid.png",
+      "params": { "prompt": "...", "seed": 1234567 },
+      "stats": { "started_at": 1779663000.0, "finished_at": 1779663001.9, "load_s": 1.6, "total_s": 1.9 },
+      "created_at": 1779663000.0
+    }
+  ]
+}
 ```
 
 **Response (error, 503):**
@@ -625,19 +749,13 @@ Triggers image or video generation. Accepts multipart/form-data.
 { "detail": "CUDA out of memory. Tried to allocate 15.01 GiB..." }
 ```
 
----
+### Files & gallery
 
-### `GET /outputs/{filename}`
-
-Returns the raw PNG image or MP4 video file.
-
-### `GET /gallery`
-
-Returns the full gallery as a JSON array of result objects (same schema as generate response items).
-
-### `DELETE /gallery/{entry_id}`
-
-Removes a gallery entry and deletes the associated file from disk. The `entry_id` is the `id` field from the gallery entry (UUID string).
+| Endpoint | Purpose |
+|---|---|
+| `GET /files/images/{filename}` | Raw PNG (videos: `/files/videos/{filename}`) |
+| `GET /gallery` | Gallery JSON — entries same shape as generate results, `stats` on rows saved since 2026-09-06 |
+| `DELETE /gallery/{entry_id}` | Remove a gallery entry and delete its file from disk |
 
 ---
 
@@ -648,37 +766,62 @@ Access the UI at **`http://192.168.0.87:8002`** from any browser on the local ne
 ### Layout
 
 ```
-┌─────────────────────┬──────────────────────────────────────────────┐
-│  Sidebar (300 px)   │  Main pane                                   │
-│                     │                                               │
-│  [FLUX.2][SD35][Wan]│  ← Engine tabs                               │
-│                     │  Status bar: ● Idle | FLUX.2 loaded | 8.2 GB│
-│  ┌───────────────┐  │  ┌──────────────────────────────────────┐   │
-│  │  Parameter    │  │  │  Output Gallery                      │   │
-│  │  Form         │  │  │                                       │   │
-│  │               │  │  │  [Image Card 1]                       │   │
-│  │  Prompt:      │  │  │  prompt | seed | steps | ↓ download  │   │
-│  │  [textarea]   │  │  │                                       │   │
-│  │               │  │  │  [Image Card 2]  ...                 │   │
-│  │  Width: [1024]│  │  │                                       │   │
-│  │  Steps: [28]  │  │  └──────────────────────────────────────┘   │
-│  │               │  │                                               │
-│  └───────────────┘  │                                               │
-│  [ Generate ▶ ]     │                                               │
-│  ─────────────────  │                                               │
-│  Engine description │                                               │
-└─────────────────────┴──────────────────────────────────────────────┘
+┌──────────────────────────┬────────────────────────────────────────────────┐
+│ Sidebar (300 px)         │ Main pane                                      │
+│                          │  ┌──────────────────────────────────────────┐ │
+│ [FLUX.K][9B][SD35][Wan]  │  │ VRAM/system report strip                 │ │
+│ [Ideogram 4]             │  │ ● Ready · Loaded: FLUX.2 Klein ...        │ │
+│                          │  │            [Evict VRAM][🔄 Refresh]       │ │
+│ ┌──────────────────────┐ │  │ RAM ▓▓▓░░ 8.1/31.2 GiB                   │ │
+│ │ Parameter form       │ │  │ VRAM ▓▓▓▓▓ 6.4/15.9 GiB (40%)  🟢RTX5060 │ │
+│ │  Prompt: [textarea]  │ │  │ GPU: Image Lab 5.8 GiB · ... · 🧠 chip ✕  │ │
+│ │  ...  Quant: [Q4_K_M]│ │  └──────────────────────────────────────────┘ │
+│ └──────────────────────┘ │  ┌──────────────────────────────────────────┐ │
+│ [⬇ Preload][⏏ Unload]    │  │ Generate │ Gallery │ Logs                │ │
+│ [⚡ Generate]            │  │ ┌──────────────────────────────────────┐ │ │
+│ ──────────────────────── │  │ │ [image] ⬇ Download                  │ │ │
+│ Engine description       │  │ │ ┌──────────────────────────────────┐ │ │ │
+│ ▸ Log panel              │  │ │ │ Prompt used (expanded)           │ │ │ │
+└──────────────────────────┘  │ │ │ "the fox, golden hour..."  ───────│ │ │ │
+                              │ │ │ Started 14:02:11 · Finished 14:02:13 │ │ │ │
+                              │ │ │ ⏱ 1.9 s (1.6 s load · 0.3 s gen)     │ │ │ │
+                              │ │ │ Seed · Width · Height · Steps · ... │ │ │ │
+                              │ │ └──────────────────────────────────┘ │ │ │
+                              │ └──────────────────────────────────────┘ │ │
+                              └──────────────────────────────────────────┘
 ```
 
-### VRAM Bar
+### VRAM / System Report Strip
 
-The top-right of the header shows a live VRAM usage bar that updates every 3 seconds. It displays reserved VRAM / total VRAM. When a model is loading or generating, the bar climbs to 10–14 GB.
+A full-width strip above the view tabs (polled every **4 s** via `/status?brief=1`), mirroring the TTS Lab's VRAM report:
+
+- **Row 1** — status dot + text, `Loaded: <engine> · <quant>`, then **Evict VRAM** (red ghost button) and **🔄 Refresh**.
+- **Row 2** — **RAM bar** (host memory, MB from `/status.system`), **VRAM bar** (device-wide, MB from `/status.gpu` — includes the TTS containers, not just this process), GPU badge (`🟢 RTX 5060 Ti · 15.9 GiB`), and the **🧠 In VRAM** chip line.
+- The **detail line under the VRAM bar** shows *who* holds the card, e.g. `GPU: Image Lab 5.8 GiB · tts-lab-engine-editx 12.9 GiB` (bare-metal host python → "Image Lab"; container PIDs resolved to `tts-lab-*` names via `/proc/<pid>/cgroup` + `docker ps`).
+- The resident engine chip (`🧠 FLUX.2 Klein · Q4_K_M ✕`) evicts just that engine — ✕ calls `POST /engines/{key}/evict`.
+- **Evict VRAM** asks for confirmation, then calls `POST /evict-all`: unloads the Image Lab engine **and** POSTs `localhost:8009/evict-all` to evict every TTS engine container sharing the card. The toast reports each side's outcome (TTS counts/freed MB come from the orchestrator payload; a down orchestrator shows as a warning, not an error).
+- All management buttons disable while `loading`/`generating` is true (re-enabled on the next poll).
+
+### Preload / Unload
+
+Each engine tab has **⬇ Preload** and **⏏ Unload** buttons above Generate. Preload sends the currently-selected `quant` value (`POST /engines/{key}/load`, `quant` form field) and is fully **asynchronous** — the load runs server-side while the UI keeps polling (`loading: true`, amber dot); the button re-enables when the load finishes. Unload evicts whatever is resident. The ⚠️ quantization-change warning still appears when the selected quant differs from the loaded one.
+
+### Per-Image Stat Cards & Gallery Detail
+
+Every result card now carries a full stat block:
+
+- **Header** — engine chip, quant chip, finished time, ⬇ Download.
+- **Prompt** — the text actually sent (Ideogram 4 shows the magic-prompt-expanded caption as *"Prompt used (expanded)"* with the raw *"Submitted prompt"* beneath when they differ). Long prompts clamp to 3 lines with a *Show more* toggle.
+- **Timing grid** — Started / Finished (local time), and a **Duration pill** (`⏱ 1.9 s`) with the load/gen split (`1.6 s load · 0.3 s gen`) when the model had to load. Rows saved before 2026-09-06 show *"not recorded"*.
+- **Parameter grid** — seed (click to copy), width, height, quant, steps, guidance, frames/FPS for videos, preset, magic-prompt flags, negative prompt, … — rendered from the persisted `params`.
+
+Clicking a **gallery thumbnail** opens the same stats in a detail **modal** (larger media + full stat block + Download / 🗑 Delete). Old gallery rows without `stats` render with what they have.
 
 ### Status Indicator
 
-- 🟢 **Green dot** — Service idle, no model loaded or model loaded and ready
-- 🟡 **Amber pulsing dot** — Model currently loading or generation in progress
-- 🔴 **Red dot** — Last generation failed
+- 🟢 **Green dot** — Service idle ("Ready")
+- 🟡 **Amber pulsing dot** — "Loading model…" (preload or quant reload) or "Generating…"
+- 🔴 **Red dot** — Server unreachable (poll failed)
 
 ### Reference Image Upload
 
@@ -905,6 +1048,8 @@ def _unload_current():
 
 After eviction, `nvidia-smi` should show ~0.5 GB used (CUDA driver overhead only).
 
+This cycle only manages **this process**. The Image Lab shares the card with the TTS engine containers, so whole-card management goes through `POST /evict-all` (UI: **Evict VRAM**): it runs `_unload_current()` here and then POSTs `localhost:8009/evict-all` on the TTS orchestrator (the same call `_evict_tts_engines()` makes when it needs headroom). The `/status` `gpu.processes` block (container-attributed via `/proc/<pid>/cgroup` + `docker ps`) shows whether anything else still holds the card.
+
 ### BitsAndBytes (BnB) 4-bit Quantization
 
 BnB NF4 (NormalFloat4) quantization stores model weights in 4-bit format:
@@ -1096,36 +1241,32 @@ Total              ~32 GB      ~10.3 GB       ~49 GB
 
 ### Cache Structure
 
-HuggingFace Hub uses a content-addressed cache at `$HF_HOME/hub/`:
+huggingface_hub ≥ 1.0 (the version in the imglab venv) stores the
+content-addressed cache **directly under `$HF_HOME`** — top-level
+`models--<org>--<repo>` directories, no `hub/` subdirectory. (A legacy
+`hub/` subdir holding ~69 GB of duplicates — downloaded by a one-off upstream
+script run — was deleted 2026-09-07 after confirming no code path reads it.)
 
 ```
-/opt/arthur-img-models/huggingface/hub/
-├── models--diffusers--FLUX.2-dev-bnb-4bit/
+/opt/arthur-img-models/huggingface/          (92 GB total)
+├── models--Boogu--Boogu-Image-0.1-Turbo-fp8/
 │   ├── blobs/          ← Actual weight files (content-addressed)
-│   │   ├── ef849d9660...  (9.4 GB — transformer shard 1)
-│   │   ├── 43bf95cffd...  (7.6 GB — transformer shard 2)
-│   │   ├── 4875062f3f...  (4.6 GB — text encoder shard 1)
+│   │   ├── 9f41d2aa...  (10.3 GB — transformer .bin shards, bf16)
+│   │   ├── 6e0cdd51...  (10.6 GB — mllm fp8 shards)
 │   │   └── ...
 │   ├── refs/main       ← Current commit hash
 │   └── snapshots/
-│       └── c30ad107.../  ← Symlinks to blobs
-│           ├── transformer/
-│           │   ├── config.json → ../../../blobs/...
-│           │   ├── diffusion_pytorch_model-00001-of-00002.safetensors → ../../../blobs/...
-│           │   └── diffusion_pytorch_model-00002-of-00002.safetensors → ../../../blobs/...
-│           ├── text_encoder/
-│           │   ├── config.json → ...
-│           │   └── model-000{01..04}-of-00004.safetensors → ...
-│           ├── vae/
-│           ├── tokenizer/
-│           ├── scheduler/
+│       └── 6e7d02c1.../  ← Symlinks to blobs
+│           ├── mllm/  ├── transformer/  ├── vae/
+│           ├── processor/  ├── scheduler/
 │           └── model_index.json
-├── models--stabilityai--stable-diffusion-3.5-large/
-│   └── (similar structure, ~40 GB)
-├── models--Wan-AI--Wan2.2-T2V-A14B-Diffusers/
-│   └── (similar structure, ~49 GB)
-└── models--Wan-AI--Wan2.2-I2V-A14B-Diffusers/
-    └── (similar structure, ~50 GB)
+├── models--Efficient-Large-Model--Sana_Sprint_1.6B_1024px_diffusers/   (9.1 GB)
+├── models--Efficient-Large-Model--SANA1.5_1.6B_1024px_diffusers/       (9.1 GB — Gemma shards dedup against the Sprint repo)
+├── models--ideogram-ai--ideogram-4-nf4/    (16 GB)
+├── models--ideogram-ai--ideogram-4-fp8/    (8.7 GB)
+├── models--Qwen--Qwen3-8B/                 (16 GB — shared by klein9b + ideogram)
+├── models--black-forest-labs--FLUX.2-klein-4B/   (15 GB)
+└── models--Wan-AI--Wan2.1-T2V-14B-Diffusers/    (Wan2.2 GGUF lives in /opt/arthur-img-models/gguf/)
 ```
 
 ### Why HF_HOME Must Be Set Before Imports
@@ -1151,20 +1292,23 @@ This means model loading is **offline-capable** once downloaded. The HF_TOKEN is
 |---|---|---|
 | `/opt/arthur-img/` | Python source code | ~1 MB |
 | `/opt/arthur-img/.env` | Secrets + paths | <1 KB |
-| `/opt/arthur-img-models/` | Image model cache | ~172 GB |
+| `/opt/arthur-img-models/` | Image model cache | ~227 GB (huggingface/ 92 G + gguf/ 71 G + quantized/ 44 G + nvfp4/ 20 G) |
 | `/opt/arthur-gen/` | Generated outputs | Growing |
 | `/opt/models/` | TTS models (separate service) | 177 GB (full) |
 
 ### Capacity Planning
 
-| Model | Disk | VRAM | RAM (offload) |
+| Model | On-disk copies (2026-09-07 du) | VRAM | RAM (offload) |
 |---|---|---|---|
-| FLUX.2-dev-bnb-4bit | 32 GB | 10 GB | Minimal (BnB on GPU) |
-| SD 3.5 Large | 40 GB | 12 GB | ~9 GB (T5 offload) |
-| Wan2.2 T2V + I2V | 99 GB | 14 GB | ~15 GB (offload) |
-| **Total models** | **~171 GB** | — | — |
+| SD 3.5 Large | gguf/ 13 G + quantized/ 21 G + nvfp4/ 4.4 G (older quant generations kept) | ~12 GB | ~9 GB (T5 offload) |
+| Wan2.2 T2V + I2V | gguf/ 36 G + quantized/ 24 G + nvfp4/ 15 G (nvfp4 I2V is an 8 KB stub) | ~14 GB | ~15 GB (offload) |
+| FLUX.2 Klein 4B / 9B-KV | hf-cache 15 G / gguf/ 22 G (Q6_K + quant ladder) | ~10 GB each | ~1.5 GB (Qwen encoders lazy) |
+| Ideogram 4 | hf-cache 25 G (nf4 16 G + fp8 8.7 G; Qwen3-8B 16 G shared with klein9b) | 6–10 GB | — |
+| SANA Sprint + 1.5 | hf-cache 18.2 G (Gemma shards deduped) | ~11 GB (measured device peak 10.9 GB) | — (GPU-only) |
+| Boogu Turbo fp8 | hf-cache 20 G | ~13 GB transient | **~27 GB (CPU offload exception)** |
 
-Recommended root disk size: **≥500 GB** for model cache + OS + outputs. The current 650 GB setup has ~330 GB free after models (enough for months of output accumulation).
+Recommended root disk size: **≥500 GB**. The single 630 GB root disk (shared
+with the TTS docker stack) had 133 GB free after the 2026-09-07 cleanup.
 
 ### Output Storage
 
@@ -1456,7 +1600,7 @@ T=90s  Result appears in browser
 
 ### Current Limitations
 
-1. **Single request at a time**: The generation function is synchronous and blocks the FastAPI event loop. Concurrent requests will time out or queue. Fix: move generation to a background thread or process.
+1. **Single generation at a time**: Generation and model loading are single-flight by design (one resident model, `generating`/`loading` flags → second `/generate` or `/load` returns `503 "Server is busy"`). Since 2026-09-06 both run in worker threads (`asyncio.to_thread`), so `/status`, `/logs`, gallery and eviction keep working mid-run — the event loop is never blocked.
 
 2. **No authentication**: Anyone on the local network can use the service. Fix: add FastAPI `HTTPBasicAuth` or an API key middleware.
 

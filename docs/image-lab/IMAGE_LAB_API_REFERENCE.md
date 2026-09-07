@@ -14,14 +14,17 @@
 4. [GET /engines](#4-get-engines)
 5. [POST /engines/{engine}/load](#5-post-enginesengineload)
 6. [POST /engines/unload](#6-post-enginesunload)
-7. [GET /files/{subdir}/{filename}](#7-get-filessubdirfilename)
-8. [GET /gallery](#8-get-gallery)
-9. [DELETE /gallery/{id}](#9-delete-galleryid)
-10. [Engine Parameters Reference](#10-engine-parameters-reference)
-11. [Response Schemas](#11-response-schemas)
-12. [Error Reference](#12-error-reference)
-13. [curl Cookbook](#13-curl-cookbook)
-14. [Python Cookbook](#14-python-cookbook)
+7. [POST /engines/{engine}/evict](#7-post-enginesengineevict)
+8. [POST /evict-all](#8-post-evict-all)
+9. [POST /refresh](#9-post-refresh)
+10. [GET /files/{subdir}/{filename}](#10-get-filessubdirfilename)
+11. [GET /gallery](#11-get-gallery)
+12. [DELETE /gallery/{id}](#12-delete-galleryid)
+13. [Engine Parameters Reference](#13-engine-parameters-reference)
+14. [Response Schemas](#14-response-schemas)
+15. [Error Reference](#15-error-reference)
+16. [curl Cookbook](#16-curl-cookbook)
+17. [Python Cookbook](#17-python-cookbook)
 
 ---
 
@@ -32,8 +35,11 @@
 | `GET` | `/status` | Live engine status, VRAM, active engine |
 | `POST` | `/generate/{engine}` | Run generation (blocks until done) |
 | `GET` | `/engines` | Engine metadata (static, no state) |
-| `POST` | `/engines/{engine}/load` | Preload engine into VRAM |
+| `POST` | `/engines/{engine}/load` | Preload engine into VRAM (non-blocking, optional `quant`) |
 | `POST` | `/engines/unload` | Evict current engine from VRAM |
+| `POST` | `/engines/{engine}/evict` | Evict ONE engine (only if it is the resident one) |
+| `POST` | `/evict-all` | Whole-card eviction — Image Lab engine **and** all TTS engines via the orchestrator |
+| `POST` | `/refresh` | Re-probe engine availability without restart |
 | `GET` | `/files/images/{filename}` | Download generated PNG |
 | `GET` | `/files/videos/{filename}` | Download generated MP4 |
 | `GET` | `/gallery` | List past generations |
@@ -43,7 +49,13 @@
 
 ## 2. GET /status
 
-Returns live service state: all engine availability, which engine is loaded, VRAM usage.
+Returns live service state: all engine availability, which engine is loaded, VRAM, host RAM, and a device-wide GPU report with per-process attribution. The web UI polls this endpoint every 4 s with `?brief=1`.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `brief` | int | `0` | `?brief=1` drops each engine's `description` and `params` (keeps `key`/`label`/`available`/`loaded`/`error`). The full `/status` is fetched once at UI boot; the 4 s poll always uses `brief=1` to stay light. |
 
 ### Response — 200
 
@@ -57,40 +69,42 @@ Returns live service state: all engine availability, which engine is loaded, VRA
       "output_type": "image",
       "vram_gb":     10.0,
       "available":   true,
-      "loaded":      false,
+      "loaded":      true,
       "error":       "",
       "params":      [ ... ]
     },
-    {
-      "key":       "sd35",
-      "available": true,
-      "loaded":    false,
-      ...
-    },
-    {
-      "key":       "flux2klein",
-      "available": true,
-      "loaded":    true,
-      ...
-    },
-    {
-      "key":       "wan",
-      "available": true,
-      "loaded":    false,
-      ...
-    }
+    { "key": "sd35", "label": "SD 3.5 Large", "available": true, "loaded": false, "error": "" },
+    { "key": "wan",  "label": "Wan2.2",       "available": true, "loaded": false, "error": "" }
   ],
   "active_engine": "flux2klein",
   "active_quant":  "",
   "generating":    false,
   "loading":       false,
-  "vram": {
+  "vram": {                                // this process's torch view (GB)
     "available":    true,
     "allocated_gb": 0.01,
     "reserved_gb":  0.04,
     "total_gb":     15.48,
     "free_gb":      15.43,
     "device_name":  "NVIDIA GeForce RTX 5060 Ti"
+  },
+  "system": {                              // host RAM (MB) — whole-card context
+    "total": 31914,
+    "used":  15022,
+    "free":  16892
+  },
+  "gpu": {                                 // device-wide nvidia-smi view (MB) + processes
+    "available":     true,
+    "name":          "NVIDIA GeForce RTX 5060 Ti",
+    "vram_total_mb": 16280,
+    "vram_used_mb":  9216,
+    "vram_free_mb":  7064,
+    "source":        "nvidia-smi",
+    "ts":            1779640492.3,
+    "processes": [
+      { "pid": 5121, "mb": 6144, "process": "python",   "container": "" },
+      { "pid": 2093, "mb": 2970, "process": "python3",  "container": "tts-lab-engine-current" }
+    ]
   }
 }
 ```
@@ -103,10 +117,12 @@ Returns live service state: all engine availability, which engine is loaded, VRA
 | `loaded` | `true` if this engine is currently in VRAM (only one can be `true` at a time) |
 | `active_engine` | Key of the loaded engine, or `null` if nothing is loaded |
 | `active_quant` | Quantization level of the loaded engine (e.g. `"Q3_K_M"`), empty for BF16 |
-| `generating` | `true` while a generation is running — further `/generate` calls will queue |
-| `loading` | `true` while a model is being loaded — takes 30–90 s |
-| `vram.reserved_gb` | PyTorch reserved (includes loaded model + KV cache) |
-| `vram.allocated_gb` | PyTorch actively allocated (subset of reserved) |
+| `generating` | `true` while a generation is running — further `/generate` calls return `503` |
+| `loading` | `true` while a model is being loaded (30–90 s) — the load endpoints are async, so `/status` stays live during a load |
+| `vram` | This process's PyTorch allocator view in GB (`reserved_gb` = model + cache). Kept for compatibility with the older UI. |
+| `system` | Host RAM in MB — psutil, else `/proc/meminfo`. Zeros when unavailable. |
+| `gpu` | Device-wide driver view in MB (`nvidia-smi`, TTL-cached ~2 s). `processes` lists every CUDA process on the card with its container name (`""` = bare-metal host process, e.g. Image Lab itself) — this is what the UI's "who holds the VRAM" line renders. Falls back to the torch view with `source: "torch"` and empty `processes` when nvidia-smi is missing. |
+| `brief=1` | Engine items drop `description`/`params` — the UI merges these only from full polls. |
 
 ---
 
@@ -146,7 +162,7 @@ Runs image or video generation. **Synchronous — the connection is held open un
 | `num_inference_steps` | int | engine default | Denoising steps. More = better quality, slower. |
 | `guidance_scale` | float | engine default | Prompt adherence strength. |
 | `seed` | int | `-1` | `-1` = random. Fixed value = reproducible output. |
-| `quant` | string | engine default | Quantization level. See [Engine Parameters Reference](#10-engine-parameters-reference). |
+| `quant` | string | engine default | Quantization level. See [Engine Parameters Reference](#13-engine-parameters-reference). |
 | `reference_image` | file | `null` | Optional image upload for I2I (FLUX.2) or I2V first frame (Wan). |
 
 ### Engine-Specific Fields
@@ -181,6 +197,12 @@ Runs image or video generation. **Synchronous — the connection is held open un
         "num_inference_steps": 4,
         "guidance_scale": 3.5
       },
+      "stats": {
+        "started_at":  1779640490.2,
+        "finished_at": 1779640492.3,
+        "load_s":      1.9,
+        "total_s":     2.1
+      },
       "created_at": 1779640492.3
     }
   ]
@@ -192,6 +214,8 @@ Runs image or video generation. **Synchronous — the connection is held open un
 - `base64` contains the full PNG encoded as base64. For videos, `base64` is `null` (too large).
 - `url` is a relative path — prepend the base URL to fetch the file.
 - `params.seed` is the actual seed used (even if you sent `-1`, the resolved random seed is returned).
+- `stats` (per-image run timing, present on every entry saved since 2026-09-06) holds epoch `started_at`/`finished_at` and the load/generation split: `total_s` spans request start → file saved, `load_s` is the model-load portion (`null` if the model was already resident). Generation time ≈ `total_s − load_s`. Older gallery rows simply lack `stats`.
+- `params.prompt` is the raw submitted prompt. For Ideogram 4 the text **actually sent to the model** is recorded separately under `params.caption` — the magic-prompt-expanded caption (equals `prompt` when expansion is off or fails). The UI shows the caption as the primary prompt block when the two differ.
 
 ### Error Responses
 
@@ -225,12 +249,18 @@ Returns static engine metadata (no live state — for available/loaded, use `/st
 
 Pre-loads an engine into VRAM without generating anything. Useful for warming up before the first request.
 
-Returns immediately with `503` if the server is currently generating or loading.
+**Non-blocking:** the load runs in a worker thread — the HTTP call stays open for the duration (30–90 s), but `/status` and `/logs` keep responding and report `"loading": true` so clients can poll rather than hang. Requests are single-flight: a second preload while one is running (or during generation) returns `503`.
+
+### Form Field
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `quant` | string | `""` | Quantization level to load (e.g. `"Q3_K_M"` for `wan`). Empty = engine default. Changing quant on an already-loaded engine reloads it. |
 
 ### Response — 200
 
 ```json
-{ "loaded": "sd35" }
+{ "loaded": "sd35", "quant": "Q4_0" }
 ```
 
 ### Response — 503 (server busy)
@@ -253,7 +283,74 @@ Evicts the currently-loaded engine from VRAM. Useful for freeing VRAM between se
 
 ---
 
-## 7. GET /files/{subdir}/{filename}
+## 7. POST /engines/{engine}/evict
+
+Evicts ONE engine — but only if it is the currently-resident one (the Image Lab is single-resident, so this is effectively the per-engine form of `/engines/unload`). The UI's resident-chip ✕ button calls this with the loaded engine's key.
+
+Returns `200` (not an error) when the engine is not resident — nothing to do.
+
+### Response — 200 (was resident → unloaded)
+
+```json
+{ "evicted": true, "engine": "flux2klein", "mode": "local-unload" }
+```
+
+### Response — 200 (not resident)
+
+```json
+{ "evicted": false, "engine": "sd35", "note": "not resident" }
+```
+
+### Response — 503 (server busy)
+
+```json
+{ "detail": "Server is busy" }
+```
+
+---
+
+## 8. POST /evict-all
+
+**Whole-card eviction** — the Image Lab shares its 16 GB RTX 5060 Ti with the TTS engine containers, so this unloads:
+
+1. The Image Lab's resident engine (if any — skipped with a note when a generation/load is in flight), then
+2. Every TTS engine container, by POSTing `http://localhost:8009/evict-all` on the TTS orchestrator (the canonical broker — TTS containers publish no host ports).
+
+The TTS call is best-effort: the orchestrator being down is reported in `errors`, not raised. Used by the UI's **Evict VRAM** button.
+
+### Response — 200
+
+```json
+{
+  "image_lab": { "unloaded": true, "engine": "flux2klein" },
+  "tts":       { "evicted_count": 3, "freed_mb_total": 9216, ... },
+  "errors":    []
+}
+```
+
+`tts` is the orchestrator's payload verbatim, or `{ "error": "..." }` when unreachable. Each side's failure lands in `errors` (`{ "side": "image_lab" | "tts", "error": "..." }`).
+
+---
+
+## 9. POST /refresh
+
+Re-runs the engine availability probe (`importlib` spec checks) without restarting the service. Use after installing a missing dependency or adding a model file, to flip an engine's `available` flag without a redeploy.
+
+### Response — 200
+
+```json
+{ "refreshed": true }
+```
+
+### Response — 503 (server busy)
+
+```json
+{ "detail": "Server is busy" }
+```
+
+---
+
+## 10. GET /files/{subdir}/{filename}
 
 Serves a generated image or video file directly.
 
@@ -274,7 +371,7 @@ File not found or invalid subdir.
 
 ---
 
-## 8. GET /gallery
+## 11. GET /gallery
 
 Returns a paginated list of past generations.
 
@@ -301,6 +398,12 @@ Returns a paginated list of past generations.
       "width":      1024,
       "height":     1024,
       "params":     { ... },
+      "stats": {
+        "started_at":  1779640490.2,
+        "finished_at": 1779640492.3,
+        "load_s":      1.9,
+        "total_s":     2.1
+      },
       "created_at": 1779640492.3
     }
   ],
@@ -309,11 +412,11 @@ Returns a paginated list of past generations.
 }
 ```
 
-Entries are ordered newest-first. The gallery stores the last 500 entries on disk.
+Entries are ordered newest-first. The gallery stores the last 500 entries on disk. `base64` is stripped from listings (fetch `/files/...` instead). Entries saved before 2026-09-06 have no `stats` key.
 
 ---
 
-## 9. DELETE /gallery/{id}
+## 12. DELETE /gallery/{id}
 
 Deletes a gallery entry and its associated file from disk.
 
@@ -333,7 +436,7 @@ Deletes a gallery entry and its associated file from disk.
 
 ---
 
-## 10. Engine Parameters Reference
+## 13. Engine Parameters Reference
 
 ### `flux2` — FLUX.2 [dev] — 🗑️ REMOVED
 
@@ -415,7 +518,7 @@ Deletes a gallery entry and its associated file from disk.
 
 ---
 
-## 11. Response Schemas
+## 14. Response Schemas
 
 ### Generation Result Object
 
@@ -431,12 +534,20 @@ Deletes a gallery entry and its associated file from disk.
   height?:    number;        // Image height in pixels (images only)
   fps?:       number;        // Frame rate (videos only)
   num_frames?: number;       // Frame count (videos only)
-  params:     object;        // Echo of generation params (seed resolved)
+  params:     object;        // Echo of generation params (seed resolved;
+                             //   ideogram4 additionally stores the effective
+                             //   magic-prompt caption under params.caption)
+  stats?:     {              // Present on entries saved since 2026-09-06
+    started_at:  number;     //   epoch — generate() request began
+    finished_at: number;     //   epoch — file saved
+    load_s:      number|null;//   model-load portion (null when already resident)
+    total_s:     number;     //   total wall time (request start → saved)
+  };
   created_at: number;        // Unix timestamp (float)
 }
 ```
 
-### VRAM Object (inside /status)
+### VRAM Object (inside /status — `vram`)
 
 ```typescript
 {
@@ -449,9 +560,35 @@ Deletes a gallery entry and its associated file from disk.
 }
 ```
 
+### GPU Report Object (inside /status — `gpu`, device-wide)
+
+```typescript
+{
+  available:     boolean;   // false if no GPU / nvidia-smi and torch both fail
+  name:          string;    // "NVIDIA GeForce RTX 5060 Ti"
+  vram_total_mb: number;    // 16280 on this card
+  vram_used_mb:  number;    // includes ALL processes (Image Lab + TTS containers)
+  vram_free_mb:  number;
+  source:        string;    // "nvidia-smi" | "torch" (fallback)
+  ts:            number;    // cache timestamp
+  processes:     Array<{   // every CUDA process on the card, sorted by MB desc
+    pid:        number;
+    mb:         number;
+    process:    string;     // process name (e.g. "python3")
+    container:  string;     // container name, "" = bare-metal host process
+  }>;
+}
+```
+
+### System Object (inside /status — `system`, host RAM)
+
+```typescript
+{ total: number; used: number; free: number; }   // MB
+```
+
 ---
 
-## 12. Error Reference
+## 15. Error Reference
 
 All errors follow FastAPI's default shape:
 
@@ -484,7 +621,7 @@ Server is busy
 
 ---
 
-## 13. curl Cookbook
+## 16. curl Cookbook
 
 ### Quick image — fastest (FLUX.2 Klein, 4 steps)
 
@@ -583,7 +720,37 @@ curl -X POST http://192.168.0.87:8002/generate/sd35 \
 ### Check VRAM before generating
 
 ```bash
+# This process's torch view (GB)
 curl -s http://192.168.0.87:8002/status | jq '.vram | {reserved_gb, free_gb, total_gb}'
+
+# Device-wide view incl. TTS containers (MB) + who holds what
+curl -s http://192.168.0.87:8002/status | jq '.gpu | {used_mb: .vram_used_mb, total_mb: .vram_total_mb}'
+curl -s http://192.168.0.87:8002/status | jq '.gpu.processes[] | "\(.container // "host") \(.mb) MB"'
+
+# Lightweight poll payload (no per-engine param schemas)
+curl -s "http://192.168.0.87:8002/status?brief=1"
+```
+
+### Evict everything from VRAM (Image Lab + all TTS engines)
+
+```bash
+curl -s -X POST http://192.168.0.87:8002/evict-all
+# → {"image_lab":{"unloaded":true,"engine":"flux2klein"},
+#    "tts":{"evicted_count":3,"freed_mb_total":9216,...},
+#    "errors":[]}
+
+# Evict one engine (resident only)
+curl -s -X POST http://192.168.0.87:8002/engines/flux2klein/evict
+
+# Re-probe availability after fixing a dependency / adding model files
+curl -s -X POST http://192.168.0.87:8002/refresh
+```
+
+### Preload with a specific quant
+
+```bash
+curl -s -X POST http://192.168.0.87:8002/engines/wan/load \
+  -F "quant=Q3_K_M"     # async — /status reports loading:true while it runs
 ```
 
 ### Filter gallery by engine
@@ -606,7 +773,7 @@ curl -o image.png "http://192.168.0.87:8002/files/images/flux2klein_3f2a1b9c-...
 
 ---
 
-## 14. Python Cookbook
+## 17. Python Cookbook
 
 ### Simple generation + save
 

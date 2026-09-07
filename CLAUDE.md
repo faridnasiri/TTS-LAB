@@ -1,11 +1,11 @@
 # Arthur TTS Lab
 
-> 30-engine TTS benchmark + 6-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
+> 30-engine TTS benchmark + 7-engine Image/Video lab | FastAPI | Docker multi-container | Ansible IaC
 > **Deployed to:** `arthur@192.168.0.87:8009` (TTS) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
 
-A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an Image/Video generation lab (FLUX.2, SD 3.5, Ideogram 4, Wan2.2).
+A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an Image/Video generation lab (FLUX.2 Klein ×2, SD 3.5, Wan2.2, Ideogram 4, SANA 1.6B, Boogu Turbo).
 
 Originally built for an Android scam-baiting app ("SpamBlocker") that uses a character named Arthur Henderson as an AI decoy — hence the "Arthur" naming throughout.
 
@@ -74,9 +74,10 @@ API:        OpenAI-compatible POST /v1/chat/completions on port 8006
 | `tts_lab_ui.py` | 1,900 | Full HTML/JS web UI inlined as Python strings (TTS + LLM chat) |
 | `tts_lab_utils.py` | 103 | `_to_wav()`, `_wav_dur()`, `_safe_del()`, `_ram_mb()`, `_require_gpu()` |
 | `voice_library.py` | 593 | Persian Voice Library — Common Voice download, speaker embeddings |
-| `image_lab.py` | 188 | Image Lab FastAPI entry-point (port 8002) |
-| `image_lab_engines.py` | 1,118 | 6 image/video engine load/synth pairs |
-| `image_lab_ui.py` | 891 | Image Lab web UI |
+| `image_lab.py` | 204 | Image Lab FastAPI entry-point (port 8002), idle-eviction loop |
+| `image_lab_engines.py` | 1,656 | 7 image/video engine load/generate pairs + VRAM gates (`_VRAM_NEED_MB`) |
+| `boogu_lab_engine.py` | 226 | Boogu-Image Turbo engine module (CPU-offload exception) |
+| `image_lab_ui.py` | 1,420 | Image Lab web UI |
 
 ## Build / Run / Test / Deploy Commands
 
@@ -237,6 +238,8 @@ Response differs from TTS engines:
 | `docs/containerization/08-QWEN36-DEPLOYMENT.md` | **Qwen 3.6 LLM deployment reference** — full deploy guide, API, VRAM budget, troubleshooting |
 | `docs/image-lab/FLUX2_KLEIN_9B_KV.md` | **FLUX.2 Klein 9B-KV engine** — GGUF config derivation, Qwen3-8B encoder, VRAM budget |
 | `docs/image-lab/IDEOGRAM4_FIX_2026-08-14.md` | **Ideogram 4 blank-image fix** — caption starvation root cause, auto-expansion via hosted magic-prompt API, seed randomization |
+| `docs/image-lab/MODEL_LANDSCAPE_2026-09-06.md` | Model landscape survey — frozen upstreams, 16 GB fit-screening verdicts, watchlist (Z-Image dropped) |
+| `docs/sessions/SESSION_2026-09-07_IMGLAB_SANA_BOOGU.md` | **SANA + Boogu integration session** — SCM 4-step fix, disk-full incident, measured VRAM/RAM verdicts |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
 | `docs/issues/*.md` | Bug investigations (VibeVoice, S2-Pro, ChatTTS) |

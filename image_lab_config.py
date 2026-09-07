@@ -338,6 +338,106 @@ ENGINES: dict[str, EngineInfo] = {
                        tooltip="Target aspect ratio for magic-prompt expansion."),
                 ],
             ),
+
+    "sana": EngineInfo(
+        key         = "sana",
+        label       = "SANA 1.6B",
+        description = (
+            "SANA 1.6B — efficient DC-AE text-to-image model from NVIDIA "
+            "(Efficient-Large-Model). Two variants share one engine key: "
+            "Sprint 1.6B (1-4 steps, no CFG — step-distilled) and SANA 1.5 "
+            "1.6B (~20 steps, CFG 4.5 — quality). Gemma-2-2B-IT text encoder "
+            "stays resident. Whole pipeline bf16 ≈ 10.4 GiB VRAM. "
+            "Apache-2.0 + Gemma terms."
+        ),
+        output_type = "image",
+        vram_gb     = 11.0,
+        hf_repo     = "Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers",
+        hf_repo_alt = "Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image you want to generate.", required=True),
+            _p("negative_prompt",     "textarea", "",     "Negative prompt",
+               tooltip="Used by the SANA 1.5 variant only — Sprint is trained "
+                       "guidance-free and ignores it."),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=2048, step=32,
+               tooltip="Output width in pixels. Must be a multiple of 32 (DC-AE "
+                       "32x compression)."),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=2048, step=32,
+               tooltip="Output height in pixels. Must be a multiple of 32 (DC-AE "
+                       "32x compression)."),
+            _p("num_inference_steps", "int",      4,      "Steps",
+               min_=1, max_=24, step=1,
+               tooltip="Sprint: 1-4 steps (clamped server-side; 4 is best). "
+                       "SANA 1.5: ~20 steps recommended."),
+            _p("guidance_scale",      "float",    4.5,    "Guidance scale",
+               min_=1.0, max_=20.0, step=0.5,
+               tooltip="SANA 1.5 uses CFG (4.5 default). Sprint is trained "
+                       "guidance-free — value ignored by that variant."),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=4, step=1),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+            _p("quant",               "select",   "sprint-1.6b", "Variant",
+               options=[
+                   {"value": "sprint-1.6b", "label": "Sprint 1.6B — 1-4 steps, no CFG (default)"},
+                   {"value": "1.5-1.6b",    "label": "SANA 1.5 1.6B — ~20 steps, CFG 4.5"},
+               ],
+               tooltip=(
+                   "Which SANA checkpoint to run. Switching variant unloads the "
+                   "current one and reloads from the HF cache (~60 s)."
+               )),
+        ],
+    ),
+
+    "boogu": EngineInfo(
+        key         = "boogu",
+        label       = "Boogu Turbo",
+        description = (
+            "Boogu-Image-0.1-Turbo-fp8 — DMD few-step (4) image model from "
+            "Boogu Team with a Qwen3-VL-8B-class instruction encoder. Runs "
+            "with fp8 mllm weights and CPU model offload — the ONE engine "
+            "with a user-approved CPU-offload exception to the lab's "
+            "GPU-only policy (nothing stays resident; each generate stages "
+            "components on the card, ~20-21 GB of host RAM peak). "
+            "Apache-2.0, research-only. No CFG (1.0)."
+        ),
+        output_type = "image",
+        vram_gb     = 12.0,
+        hf_repo     = "Boogu/Boogu-Image-0.1-Turbo-fp8",
+        hf_repo_alt = None,
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image you want to generate. Long, detailed "
+                       "instructions work best with the VLM encoder.",
+               required=True),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=1536, step=16,
+               tooltip="Output width in pixels. Must be a multiple of 16 "
+                       "(FLUX.1 VAE)."),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=1536, step=16,
+               tooltip="Output height in pixels. Must be a multiple of 16 "
+                       "(FLUX.1 VAE)."),
+            _p("num_inference_steps", "int",      4,      "Steps",
+               min_=1, max_=8, step=1,
+               tooltip="DMD few-step model — 4 steps is the training target. "
+                       "Clamped to [1, 8]."),
+            _p("guidance_scale",      "float",    1.0,    "Guidance (fixed 1.0)",
+               min_=1.0, max_=1.0, step=0.1,
+               tooltip="Boogu Turbo is a DMD student model: no classifier-free "
+                       "guidance. The pipeline requires 1.0 and the server "
+                       "forces it."),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=2, step=1,
+               tooltip="Max 2 — each image stages the full pipeline on the "
+                       "card under CPU offload."),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+        ],
+    ),
         }
 
         # ---------------------------------------------------------------------------
@@ -352,5 +452,10 @@ class LabState:
     loading:       bool           = False  # True while a load is in progress
     generating:    bool           = False  # True while generation runs
     last_used:     float          = 0.0   # time.time() of last generate call
+    # Run-timing context for per-image stats: stamped by engines.generate()
+    # around load+inference; save_image/save_video read them to record each
+    # entry's started/finished timestamps and load/generation split.
+    run_started:   float          = 0.0   # time.time() when a generate() run began
+    run_loaded_at: float          = 0.0   # time.time() when the model finished loading
 
 STATE = LabState()

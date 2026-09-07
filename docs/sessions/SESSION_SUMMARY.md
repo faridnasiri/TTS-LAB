@@ -1,8 +1,22 @@
 # Arthur Server — Session Summary
-> Chat sessions: 2026-03-23 → 2026-08-24
+> Chat sessions: 2026-03-23 → 2026-09-07
 > Branch: `main`
 
 ---
+
+## Session 2026-09-07 — Image Lab: SANA 1.6B + Boogu-Image 0.1 Turbo added
+
+Full write-up: [SESSION_2026-09-07_IMGLAB_SANA_BOOGU.md](SESSION_2026-09-07_IMGLAB_SANA_BOOGU.md).
+Landscape survey: [MODEL_LANDSCAPE_2026-09-06.md](../image-lab/MODEL_LANDSCAPE_2026-09-06.md).
+Two new engines on port 8002 (`sana`: Sprint 1–4-step + 1.5 ~20-step variants on the
+`quant` field; `boogu`: fp8, the sole CPU-offload exception), all verified live.
+Found + fixed a diffusers SCM blocker (SanaSprintPipeline's `intermediate_timesteps=1.3`
+default is only legal at 2 steps → pass `None` for steps ≠ 2). Disk incident: the root
+disk is ONE 630 GB volume (not separate mounts) and hit 100% during the Boogu download —
+freed by removing a stale 32 GB unreferenced cache entry + `docker builder prune -af`
+(87 GB), then deleting the 69 GB legacy `hub/` orphan cache → 133 GB free. Gates
+recalibrated to measured peaks (sana 11,500 / boogu 13,200 MiB); VRAM/RAM verdicts in
+the session doc. Commits: (this change).
 
 ## Session 2026-08-24 (late) — EditX garbage voices FIXED + two container-crash hardenings
 

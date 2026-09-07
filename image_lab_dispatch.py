@@ -16,39 +16,45 @@ from fastapi.responses import FileResponse, JSONResponse
 from image_lab_config import (
     ENGINES, STATE, IMAGES_DIR, VIDEOS_DIR,
 )
-from image_lab_utils import read_gallery, delete_gallery_entry, vram_stats
+from image_lab_utils import (
+    read_gallery, delete_gallery_entry, vram_stats, gpu_stats, system_stats,
+)
 import image_lab_engines as engines
 
 log     = logging.getLogger("image_lab")
 router  = APIRouter()
 
 # ---------------------------------------------------------------------------
-# /status
+# /status  (?brief=1 for the 4 s UI poll — drops per-engine param schemas)
 # ---------------------------------------------------------------------------
 
 @router.get("/status")
-async def status():
+async def status(brief: bool = False):
     vram = vram_stats()
     engine_list = []
     for key, eng in ENGINES.items():
-        engine_list.append({
+        item = {
             "key":         key,
             "label":       eng.label,
-            "description": eng.description,
-            "output_type": eng.output_type,
-            "vram_gb":     eng.vram_gb,
             "available":   eng.available,
             "loaded":      eng.loaded,
             "error":       eng.error,
-            "params":      eng.params,
-        })
+        }
+        if not brief:
+            item["description"] = eng.description
+            item["output_type"] = eng.output_type
+            item["vram_gb"]     = eng.vram_gb
+            item["params"]      = eng.params
+        engine_list.append(item)
     return {
         "engines":        engine_list,
         "active_engine":  STATE.active_engine,
         "active_quant":   STATE.active_quant,
         "generating":     STATE.generating,
         "loading":        STATE.loading,
-        "vram":           vram,
+        "vram":           vram,      # this process's torch view (GB)
+        "system":         system_stats(),  # host RAM (MB) — whole-card context
+        "gpu":            gpu_stats(),     # device-wide nvidia-smi view (MB) + processes
     }
 
 # ---------------------------------------------------------------------------
@@ -255,27 +261,105 @@ async def delete_generation(gen_id: str):
 
 
 # ---------------------------------------------------------------------------
-# /engines/{engine}/load  — preload into VRAM
+# /engines/{engine}/load  — preload into VRAM (async: /status stays live)
 # ---------------------------------------------------------------------------
 
 @router.post("/engines/{engine_key}/load")
-async def load_engine(engine_key: str):
+async def load_engine(engine_key: str, quant: str = Form("")):
     if engine_key not in ENGINES:
         raise HTTPException(404, f"Unknown engine: {engine_key}")
     if STATE.generating or STATE.loading:
         raise HTTPException(503, "Server is busy")
+    # Claim the busy flag BEFORE yielding to the thread so a second preload
+    # request 503s instead of racing the same GPU. engines.load_engine sets
+    # STATE.loading internally while the load actually runs; cleared again in
+    # finally so the flag can never read stale after an early failure.
+    STATE.loading = True
     try:
-        engines.load_engine(engine_key)
+        await asyncio.to_thread(engines.load_engine, engine_key, quant)
     except Exception as exc:
         log.exception("Load error for engine %s", engine_key)
         raise HTTPException(500, str(exc))
-    return {"loaded": engine_key}
+    finally:
+        STATE.loading = False
+    return {"loaded": engine_key, "quant": quant}
+
+
+# ---------------------------------------------------------------------------
+# /engines/{engine}/evict  — unload ONE engine if it is the resident one
+# ---------------------------------------------------------------------------
+
+@router.post("/engines/{engine_key}/evict")
+async def evict_engine(engine_key: str):
+    if engine_key not in ENGINES:
+        raise HTTPException(404, f"Unknown engine: {engine_key}")
+    if STATE.active_engine != engine_key:
+        return {"evicted": False, "engine": engine_key, "note": "not resident"}
+    if STATE.generating or STATE.loading:
+        raise HTTPException(503, "Server is busy")
+    engines.unload_engine()
+    return {"evicted": True, "engine": engine_key, "mode": "local-unload"}
 
 
 @router.post("/engines/unload")
 async def unload_engine():
+    if STATE.generating or STATE.loading:
+        raise HTTPException(503, "Server is busy")
     engines.unload_engine()
     return {"unloaded": True}
+
+
+# ---------------------------------------------------------------------------
+# /evict-all  — whole-card eviction: Image Lab engine + every TTS engine
+# container (via the TTS orchestrator — the canonical broker for the shared
+# 16 GB card; engine containers publish no host ports).
+# ---------------------------------------------------------------------------
+
+@router.post("/evict-all")
+async def evict_all():
+    import json as _json
+    import urllib.request as _urllib
+
+    prev = STATE.active_engine
+    busy = STATE.generating or STATE.loading
+    unloaded = prev is None
+    if prev is not None and not busy:
+        engines.unload_engine()
+        unloaded = True
+
+    errors: list[dict] = []
+    if busy:
+        errors.append({"side": "image_lab", "error": "generation/load in progress — resident engine kept"})
+
+    tts_result: dict = {}
+    try:
+        req = _urllib.Request(engines.TTS_EVICT_ALL_URL, data=b"", method="POST")
+        with _urllib.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode().strip()
+        tts_result = _json.loads(body) if body else {}
+        log.info("TTS evict-all via orchestrator: %s", body[:200])
+    except Exception as exc:
+        tts_result = {"error": f"{type(exc).__name__}: {exc}"}
+        errors.append({"side": "tts", "error": str(exc)})
+        log.warning("TTS evict-all via orchestrator failed: %s", exc)
+
+    return {
+        "image_lab": {"unloaded": unloaded, "engine": prev},
+        "tts":       tts_result,
+        "errors":    errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# /refresh  — re-probe engine availability without restarting the service
+# ---------------------------------------------------------------------------
+
+@router.post("/refresh")
+async def refresh():
+    if STATE.generating or STATE.loading:
+        raise HTTPException(503, "Server is busy")
+    await asyncio.to_thread(engines.probe_availability)
+    return {"refreshed": True}
 
 
 # ---------------------------------------------------------------------------
