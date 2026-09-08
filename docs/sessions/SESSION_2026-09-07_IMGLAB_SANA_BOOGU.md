@@ -92,10 +92,17 @@ The 2-step path keeps the default 1.3. SCM `step()` is a generic Euler
 | Cross-eviction direction 2 | flux2klein (Q6_K) load evicted boogu; cleanup evict returned `{"evicted": true, "engine": "flux2klein"}` |
 | UI (deployed VM) | 7 gallery filter options, SANA/Boogu labels, variant preset switch + reload-warning hook |
 
-### Idle unload (900 s)
+### Idle unload (900 s) — PASSED
 
-_Result appended post-write: see commit note — the engine auto-evicted within the
-expected 900–960 s window and the journal logged the idle-eviction line._
+`sana` sprint preloaded, then untouched. Watcher observed the eviction at
+**943 s** after load (900 s threshold + ≤60 s check interval + 30 s poll
+granularity — exactly the expected window):
+
+```
+Sep 07 19:03:39 image_lab — Idle eviction: sana unused for 933s — unloading from GPU
+```
+
+GPU returned to idle (1.1 GiB — bare CUDA context).
 
 ## Disk incident — the single 630 GB root disk (2026-09-07)
 
