@@ -133,14 +133,21 @@ UI_HTML = r"""<!DOCTYPE html>
   .modal-actions { display: flex; gap: 8px; margin-top: 12px; }
 
   /* ---- Engine tabs ---- */
-  .engine-tabs { display: flex; border-bottom: 1px solid var(--border); }
-  .engine-tab  { flex: 1; padding: 10px 4px; text-align: center; cursor: pointer;
-                 font-size: 12px; font-weight: 600; color: var(--muted);
-                 border-bottom: 2px solid transparent; transition: all .2s; }
-  .engine-tab:hover  { color: var(--text); }
-  .engine-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
-  .engine-tab .badge { font-size: 9px; display: block; margin-top: 2px;
-                       color: var(--muted); font-weight: 400; }
+  /* Engine tabs — 2-col grid so every engine stays reachable; a scrollbar
+     appears automatically if the catalogue outgrows the height budget. */
+  .engine-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
+                 padding: 8px 10px 6px; border-bottom: 1px solid var(--border);
+                 max-height: 248px; overflow-y: auto; }
+  .engine-tab  { display: flex; flex-direction: column; align-items: center;
+                 justify-content: center; min-height: 40px; padding: 5px 6px;
+                 text-align: center; cursor: pointer; font-size: 11px; font-weight: 600;
+                 color: var(--muted); border: 1px solid var(--border); border-radius: 8px;
+                 transition: all .2s; line-height: 1.2; }
+  .engine-tab:hover  { color: var(--text); border-color: var(--accent); }
+  .engine-tab.active { color: var(--accent); border-color: var(--accent);
+                       background: rgba(108,142,247,.08); }
+  .engine-tab .badge { font-size: 9px; margin-top: 2px; color: var(--muted);
+                       font-weight: 400; }
 
   /* ---- Params ---- */
   .params-area { flex: 1; overflow-y: auto; padding: 16px; min-height: 0; }
@@ -375,17 +382,9 @@ UI_HTML = r"""<!DOCTYPE html>
     <div class="view-panel" id="viewGallery">
       <div class="gallery-header">
         <h2>Gallery</h2>
+        <!-- Options are filled from /status at boot (see buildGalleryFilter) -->
         <select class="gallery-filter" id="galleryFilter" onchange="loadGallery()">
           <option value="">All engines</option>
-          <option value="flux2klein">FLUX.2 Klein</option>
-          <option value="flux2klein9b">Klein 9B-KV</option>
-          <option value="ideogram4">Ideogram 4</option>
-          <option value="sana">SANA 1.6B</option>
-          <option value="boogu">Boogu Turbo</option>
-          <option value="zimage">Z-Image Turbo</option>
-          <option value="qwenimage">Qwen-Image 2512</option>
-          <option value="hidream">HiDream O1</option>
-          <option value="ernie">ERNIE-Image</option>
         </select>
       </div>
       <div class="gallery-grid" id="galleryGrid"></div>
@@ -434,9 +433,14 @@ let lastStatus     = null; // last /status response
 // ============================================================
 (async function boot() {
   uiLog('info', 'Image Lab UI booting', {url: location.href, ua: navigator.userAgent.slice(0,60)});
-  await refreshStatus();            // full fetch — loads the param schemas into ENGINES_META
-  buildEngineTabs();
-  selectEngine(currentEngine);
+  const ok = await refreshStatus();      // full fetch — loads param schemas AND builds the engine tabs
+  if (!ok || !lastStatus) {
+    // Server unreachable at boot — show the known engines anyway; the first
+    // successful poll rebuilds the list from /status.
+    buildEngineTabs(DEFAULT_ENGINES);
+    buildGalleryFilter(DEFAULT_ENGINES);
+  }
+  await selectEngine(currentEngine);
   loadGallery();
   // VRAM/system report auto-refresh — brief=1 keeps the polled payload light
   // (per-engine param schemas are only fetched at boot).
@@ -456,6 +460,9 @@ async function refreshStatus(brief) {
     for (const e of s.engines) {
       if (e.params) ENGINES_META[e.key] = e;
     }
+    // Rebuild the tab bar / gallery filter when the server-side catalogue
+    // changes (boot, or an engine added without a UI redeploy).
+    syncEngineList(s.engines);
     // Status dot
     const dot  = document.getElementById('statusDot');
     const txt  = document.getElementById('statusText');
@@ -482,10 +489,12 @@ async function refreshStatus(brief) {
         badge.style.color  = e.available ? 'var(--ok)' : 'var(--err)';
       }
     }
+    return true;
   } catch(e) {
     document.getElementById('statusDot').className = 'status-dot err';
     document.getElementById('statusText').textContent = 'Server unreachable';
     uiLog('warn', 'Status poll failed', e.message);
+    return false;
   }
 }
 
@@ -718,25 +727,96 @@ async function refreshAvailability() {
 }
 
 // ============================================================
-// Engine tabs
+// Engine tabs — built from the /status catalogue, never hardcoded:
+// adding an engine to image_lab_config.py must not require a UI edit.
 // ============================================================
-function buildEngineTabs() {
-  const tabs = document.getElementById('engineTabs');
-  const keys = ['flux2klein', 'flux2klein9b', 'ideogram4', 'sana', 'boogu', 'zimage', 'qwenimage', 'hidream', 'ernie'];
-  const labels = { flux2klein: 'FLUX.2 Klein', flux2klein9b: 'Klein 9B-KV', ideogram4: 'Ideogram 4', sana: 'SANA 1.6B', boogu: 'Boogu Turbo', zimage: 'Z-Image Turbo', qwenimage: 'Qwen-Image 2512', hidream: 'HiDream O1', ernie: 'ERNIE-Image' };
-  tabs.innerHTML = keys.map(k => `
-    <div class="engine-tab" id="tab-${k}" onclick="selectEngine('${k}')">
-      ${labels[k]}
-      <span class="badge">…</span>
-    </div>`).join('');
+const DEFAULT_ENGINES = [
+  {key: 'flux2klein',    label: 'FLUX.2 Klein',      available: null},
+  {key: 'flux2klein9b',  label: 'Klein 9B-KV',       available: null},
+  {key: 'ideogram4',     label: 'Ideogram 4',        available: null},
+  {key: 'sana',          label: 'SANA 1.6B',         available: null},
+  {key: 'boogu',         label: 'Boogu Turbo',       available: null},
+  {key: 'zimage',        label: 'Z-Image Turbo',     available: null},
+  {key: 'qwenimage',     label: 'Qwen-Image 2512',   available: null},
+  {key: 'hidream',       label: 'HiDream O1',        available: null},
+  {key: 'ernie',         label: 'ERNIE-Image',       available: null},
+];
+
+let engineSig = null;   // signature of the currently-rendered engine list
+
+function syncEngineList(engines) {
+  const sig = engines.map(e => e.key).join('|');
+  if (sig === engineSig) return;
+  engineSig = sig;
+  const prev = currentEngine;
+  if (!engines.some(e => e.key === prev)) {
+    // Selected engine vanished from the catalogue — jump to the first
+    // available one (or the first listed).
+    currentEngine = (engines.find(e => e.available) || engines[0] || {}).key || currentEngine;
+  }
+  buildEngineTabs(engines);
+  buildGalleryFilter(engines);
+  if (currentEngine !== prev) selectEngine(currentEngine);
 }
 
-function selectEngine(key) {
+function escAttr(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function badgeMarkup(e) {
+  // available: true / false from the server; null = not yet probed
+  if (e.available === true)  return '<span class="badge" style="color:var(--ok)">✓ available</span>';
+  if (e.available === false) return '<span class="badge" style="color:var(--err)">✗ unavailable</span>';
+  return '<span class="badge">…</span>';
+}
+
+function buildEngineTabs(engines) {
+  const tabs = document.getElementById('engineTabs');
+  tabs.innerHTML = (engines || []).map(e => `
+    <div class="engine-tab" id="tab-${e.key}" onclick="selectEngine('${e.key}')"
+         title="${escAttr(e.label || e.key)}">
+      ${escHtml(e.label || e.key)}
+      ${badgeMarkup(e)}
+    </div>`).join('');
+  const tab = document.getElementById('tab-' + currentEngine);
+  if (tab) tab.classList.add('active');
+}
+
+function buildGalleryFilter(engines) {
+  const sel = document.getElementById('galleryFilter');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = '<option value="">All engines</option>' +
+    (engines || []).map(e =>
+      `<option value="${escAttr(e.key)}">${escHtml(e.label || e.key)}</option>`).join('');
+  if (prev && engines && engines.some(e => e.key === prev)) sel.value = prev;
+}
+
+// Full /status fetch used when an engine is selected before its schema is
+// known (e.g. an engine added server-side mid-session).
+async function ensureMeta(key) {
+  try {
+    const s = await apiFetch('/status');
+    for (const e of s.engines) {
+      if (e.params) ENGINES_META[e.key] = e;
+    }
+    syncEngineList(s.engines);
+    return !!ENGINES_META[key];
+  } catch(e) {
+    return false;
+  }
+}
+
+async function selectEngine(key) {
   currentEngine = key;
   uploadedFile  = null;
   document.querySelectorAll('.engine-tab').forEach(t => t.classList.remove('active'));
   const tab = document.getElementById('tab-' + key);
   if (tab) tab.classList.add('active');
+  if (!ENGINES_META[key] && !(await ensureMeta(key))) {
+    showToast('Engine "' + key + '" is not known by this server', 'err');
+    return;
+  }
   renderParams(key);
   updateQuantWarning();
   updateCurl();
