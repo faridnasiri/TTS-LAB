@@ -50,6 +50,8 @@ class EngineInfo:
     hf_repo: str                      # Primary HuggingFace repo
     hf_repo_alt: Optional[str]        # Secondary repo (e.g. I2V variant)
     params: list[dict]                # Parameter schema for the UI
+    image_input: str = "none"         # "none" | "reference" — can this engine
+                                      # natively consume an uploaded reference image?
     available: bool = False           # Set at startup after import checks
     loaded: bool    = False           # Set when model is resident in VRAM
     error: str      = ""              # Last error if unavailable
@@ -86,6 +88,7 @@ ENGINES: dict[str, EngineInfo] = {
             "Supports text-to-image and image-to-image (reference image)."
         ),
         output_type = "image",
+        image_input = "reference",   # FLUX.2 klein natively conditions on the ref image
         vram_gb     = 13.0,
         hf_repo     = "black-forest-labs/FLUX.2-klein-4B",
         hf_repo_alt = None,
@@ -127,6 +130,7 @@ ENGINES: dict[str, EngineInfo] = {
             "Quant ladder Q3_K_M…Q8_0 (default raised from Q4_K_M on 2026-09-04)."
         ),
         output_type = "image",
+        image_input = "reference",   # FLUX.2 klein natively conditions on the ref image
         vram_gb     = 13.5,
         hf_repo     = "QuantStack/FLUX.2-Klein-9B-KV-GGUF",
         hf_repo_alt = "black-forest-labs/FLUX.2-klein-4B",
@@ -190,6 +194,9 @@ ENGINES: dict[str, EngineInfo] = {
                     _p("prompt",                "textarea", "",     "Caption (JSON or plain text)",
                        required=True,
                        tooltip="JSON caption for Ideogram 4, or plain text if Magic Prompt is enabled (auto-expands via DeepSeek)."),
+                    _p("reference_image",       "file",     None,   "Reference image (optional)",
+                       tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                               "no native image conditioning exists."),
                     _p("use_magic_prompt",      "checkbox", False,  "Magic Prompt (expand via DeepSeek)",
                        tooltip="When enabled, your plain-text prompt is expanded into a structured JSON caption via DeepSeek API. When disabled, your prompt is sent directly (must be valid JSON)."),
                     _p("width",                 "int",      1024,   "Width (px)",
@@ -258,6 +265,9 @@ ENGINES: dict[str, EngineInfo] = {
             _p("negative_prompt",     "textarea", "",     "Negative prompt",
                tooltip="Used by the SANA 1.5 variant only — Sprint is trained "
                        "guidance-free and ignores it."),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                       "no native image conditioning exists."),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=2048, step=32,
                tooltip="Output width in pixels. Must be a multiple of 32 (DC-AE "
@@ -311,6 +321,9 @@ ENGINES: dict[str, EngineInfo] = {
                tooltip="Describe the image you want to generate. Long, detailed "
                        "instructions work best with the VLM encoder.",
                required=True),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                       "no native image conditioning exists."),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=1536, step=16,
                tooltip="Output width in pixels. Must be a multiple of 16 "
@@ -358,6 +371,9 @@ ENGINES: dict[str, EngineInfo] = {
                tooltip="Describe the image you want to generate. Plain prompt "
                        "friendly — no JSON caption required.",
                required=True),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                       "no native image conditioning exists."),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=1536, step=16),
             _p("height",              "int",      1024,   "Height (px)",
@@ -415,6 +431,9 @@ ENGINES: dict[str, EngineInfo] = {
                required=True),
             _p("negative_prompt",     "textarea", "",     "Negative prompt",
                tooltip="CFG path — what to avoid in the image."),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                       "no native image conditioning exists."),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=1536, step=16),
             _p("height",              "int",      1024,   "Height (px)",
@@ -463,6 +482,9 @@ ENGINES: dict[str, EngineInfo] = {
                tooltip="Describe the image. Long text prompts render at "
                        "pixel-level sharpness.",
                required=True),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                       "no native image conditioning exists."),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=2048, step=64),
             _p("height",              "int",      1024,   "Height (px)",
@@ -502,6 +524,9 @@ ENGINES: dict[str, EngineInfo] = {
                tooltip="Describe the poster / layout you want. CN+EN text is "
                        "the model's strength.",
                required=True),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Reference uploads are rejected: this checkpoint is text-only — "
+                       "no native image conditioning exists."),
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=1536, step=16),
             _p("height",              "int",      1024,   "Height (px)",

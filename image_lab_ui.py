@@ -184,6 +184,12 @@ UI_HTML = r"""<!DOCTYPE html>
   .eng-desc { padding: 12px 16px; font-size: 11px; color: var(--muted);
               border-top: 1px solid var(--border); line-height: 1.5; }
 
+  /* ---- Reference-image capability badge ---- */
+  .ref-badge { margin: 2px 16px 10px; padding: 4px 8px; border-radius: 6px;
+               font-size: 10px; line-height: 1.4; border: 1px solid; }
+  .ref-badge.ref-yes { color: var(--accent); border-color: var(--accent); opacity: .95; }
+  .ref-badge.ref-no  { color: var(--muted);  border-color: var(--muted);  opacity: .8; }
+
   /* ---- Status bar ---- */
   .statusbar { padding: 6px 16px; font-size: 11px; color: var(--muted);
                border-bottom: 1px solid var(--border); display: flex; gap: 16px; align-items: center; }
@@ -319,6 +325,7 @@ UI_HTML = r"""<!DOCTYPE html>
     </div>
     <button class="btn-generate" id="btnGenerate" onclick="doGenerate()">⚡ Generate</button>
     <div class="eng-desc" id="engDesc"></div>
+    <div class="ref-badge" id="refBadge" hidden></div>
 
     <!-- Live log panel -->
     <div class="log-panel" id="logPanel">
@@ -842,6 +849,17 @@ function renderParams(key) {
   if (!meta) { return; }
 
   document.getElementById('engDesc').textContent = meta.description;
+  const badge = document.getElementById('refBadge');
+  if (badge) {
+    badge.hidden = false;
+    if (meta.image_input === 'reference') {
+      badge.textContent = '🧬 Native reference support — an uploaded image conditions this model';
+      badge.className = 'ref-badge ref-yes';
+    } else {
+      badge.textContent = 'Text-only checkpoint — reference uploads are rejected';
+      badge.className = 'ref-badge ref-no';
+    }
+  }
   const area = document.getElementById('paramsArea');
   area.innerHTML = '';
   formValues = {};

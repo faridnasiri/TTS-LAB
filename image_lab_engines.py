@@ -2057,14 +2057,33 @@ def unload_engine():
 # ---------------------------------------------------------------------------
 
 def _load_ref_image(ref) -> Optional[Any]:
+    """Decode a reference image from upload bytes or a filesystem path.
+
+    Corrupt/undecodable uploads raise ValueError (surfaces as a 400 from the
+    API) instead of silently degrading to None — a silently dropped reference
+    would generate without the identity the caller asked for.
+    """
     if ref is None:
         return None
     from PIL import Image
-    if isinstance(ref, bytes):
-        import io as _io
-        return Image.open(_io.BytesIO(ref)).convert("RGB")
-    if isinstance(ref, str) and os.path.exists(ref):
-        return Image.open(ref).convert("RGB")
+    try:
+        if isinstance(ref, bytes):
+            if not ref:
+                raise ValueError("Reference image upload was empty.")
+            import io as _io
+            # img.load() forces the lazy decoder to actually read the bytes —
+            # Image.open alone accepts truncated/corrupt data silently.
+            img = Image.open(_io.BytesIO(ref))
+            img.load()
+            return img.convert("RGB")
+        if isinstance(ref, str) and os.path.exists(ref):
+            return Image.open(ref).convert("RGB")
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(
+            f"Reference image could not be decoded: {type(exc).__name__}: {exc}"
+        ) from exc
     return None
 
 

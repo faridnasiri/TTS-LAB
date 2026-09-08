@@ -44,6 +44,7 @@ async def status(brief: bool = False):
             item["description"] = eng.description
             item["output_type"] = eng.output_type
             item["vram_gb"]     = eng.vram_gb
+            item["image_input"] = eng.image_input
             item["params"]      = eng.params
         engine_list.append(item)
     return {
@@ -89,6 +90,9 @@ async def generate(
     ref_bytes: Optional[bytes] = None
     if reference_image is not None:
         ref_bytes = await reference_image.read()
+        if len(ref_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(
+                400, "Reference image exceeds the 10 MB upload limit.")
 
     params = {
         "prompt":               prompt,
@@ -108,6 +112,19 @@ async def generate(
         "use_magic_prompt":     use_magic_prompt,
         "magic_prompt_aspect_ratio": magic_prompt_aspect_ratio,
     }
+
+    # Capability enforcement: a reference upload only means something where a
+    # checkpoint can consume it natively. Text-only engines reject it up front
+    # with the capable alternatives named (never silently ignore the upload).
+    if ref_bytes is not None and ENGINES[engine_key].image_input == "none":
+        capable = [ENGINES[k].label for k, e in ENGINES.items()
+                   if e.image_input == "reference"]
+        raise HTTPException(
+            400,
+            f"{ENGINES[engine_key].label} is text-only — no checkpoint exists "
+            f"that consumes reference images. Native reference support: "
+            f"{', '.join(capable) or 'none right now'}.",
+        )
 
     try:
         if engine_key == "ideogram4":
@@ -366,6 +383,7 @@ async def list_engines():
             "output_type": e.output_type,
             "vram_gb":     e.vram_gb,
             "hf_repo":     e.hf_repo,
+            "image_input": e.image_input,
             "params":      e.params,
         }
         for key, e in ENGINES.items()
