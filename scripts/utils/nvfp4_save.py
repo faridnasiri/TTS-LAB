@@ -9,16 +9,12 @@ For each transformer this script:
   3. Saves the quantized transformer to /opt/arthur-img-models/nvfp4/<model>/<subfolder>/.
   4. Deletes the temporary BF16 cache to reclaim disk space immediately.
 
-Supported models:
-  - SD 3.5 Large     : stabilityai/stable-diffusion-3.5-large → nvfp4/sd35/transformer/
-  - Wan2.2 T2V       : Wan-AI/Wan2.2-T2V-A14B-Diffusers      → nvfp4/wan-t2v/transformer/
-                                                                  nvfp4/wan-t2v/transformer_2/
-  - Wan2.2 I2V       : Wan-AI/Wan2.2-I2V-A14B-Diffusers      → nvfp4/wan-i2v/transformer/
-                                                                  nvfp4/wan-i2v/transformer_2/
-
-Requirements:
-  - torchao installed in the env (pip install torchao)
-  - HF_TOKEN with access to gated models (stable-diffusion-3.5-large)
+SUPERSEDED 2026-09-07: sd35 + wan were the only NVFP4-torchao consumers and
+they were removed (see docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md).
+JOBS is empty and main() no-ops after the environment checks. The script is
+kept (deploy SCP list references it) as the reference implementation for
+torchao NVFP4WeightOnlyConfig baking — the ERNIE NVFP4 path (Phase B) uses
+pre-quantized nunchaku-lite weights from HF instead, so nothing re-enables it.
 
 Run (after service is stopped or alongside it):
     /opt/arthur-img-env/bin/python /opt/arthur-img/nvfp4_save.py
@@ -39,41 +35,9 @@ TEMP_BF16  = "/opt/arthur-img-models/temp_bf16"
 # ---------------------------------------------------------------------------
 # Job list  (label, hf_repo, subfolder, out_dir)
 # ---------------------------------------------------------------------------
-JOBS = [
-    # SD 3.5 Large — gated, needs HF_TOKEN with access to stabilityai/stable-diffusion-3.5-large
-    (
-        "sd35/transformer",
-        "stabilityai/stable-diffusion-3.5-large",
-        "transformer",
-        f"{NVFP4_ROOT}/sd35/transformer",
-    ),
-    # Wan2.2 T2V — two transformers (HighNoise + LowNoise)
-    (
-        "wan-t2v/transformer",
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        "transformer",
-        f"{NVFP4_ROOT}/wan-t2v/transformer",
-    ),
-    (
-        "wan-t2v/transformer_2",
-        "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        "transformer_2",
-        f"{NVFP4_ROOT}/wan-t2v/transformer_2",
-    ),
-    # Wan2.2 I2V — two transformers (HighNoise + LowNoise)
-    (
-        "wan-i2v/transformer",
-        "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-        "transformer",
-        f"{NVFP4_ROOT}/wan-i2v/transformer",
-    ),
-    (
-        "wan-i2v/transformer_2",
-        "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-        "transformer_2",
-        f"{NVFP4_ROOT}/wan-i2v/transformer_2",
-    ),
-]
+# EMPTY since 2026-09-07 — sd35 + wan (the only torchao-NVFP4 engines) were
+# removed. See the module docstring; this stays as a reference recipe.
+JOBS = []
 
 
 def _fmt_gb_path(path: str) -> str:

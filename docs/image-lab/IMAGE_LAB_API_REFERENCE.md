@@ -2,7 +2,8 @@
 
 **Base URL:** `http://192.168.0.87:8002`  
 **Protocol:** HTTP/1.1 — all generation requests are **synchronous** (connection held open until complete)  
-**Auth:** None (local network only)
+**Auth:** None (local network only)  
+**Revised:** 2026-09-07 — sd35 + wan removed; Z-Image, Qwen-Image 2512, HiDream O1, ERNIE-Image added (see `SESSION_2026-09-07_IMGLAB_T2I_SWAP.md`)
 
 ---
 
@@ -73,8 +74,10 @@ Returns live service state: all engine availability, which engine is loaded, VRA
       "error":       "",
       "params":      [ ... ]
     },
-    { "key": "sd35", "label": "SD 3.5 Large", "available": true, "loaded": false, "error": "" },
-    { "key": "wan",  "label": "Wan2.2",       "available": true, "loaded": false, "error": "" }
+    { "key": "zimage",    "label": "Z-Image Turbo",      "available": true, "loaded": false, "error": "" },
+    { "key": "qwenimage", "label": "Qwen-Image 2512",    "available": true, "loaded": false, "error": "" },
+    { "key": "hidream",   "label": "HiDream O1",         "available": true, "loaded": false, "error": "" },
+    { "key": "ernie",     "label": "ERNIE-Image",        "available": true, "loaded": false, "error": "" }
   ],
   "active_engine": "flux2klein",
   "active_quant":  "",
@@ -134,12 +137,17 @@ Runs image or video generation. **Synchronous — the connection is held open un
 |---|---|---|---|---|
 | `flux2klein` | BF16/NF4 | 1024×1024 | 4 | 50 s |
 | `flux2klein9b` | Q4_K_M | 1024×1024 | 4 | 40 s |
-| `sd35` | Q4_0 | 1024×1024 | 28 | 60–90 s |
-| `wan` | Q4_K_M | 720p, 49 frames | — | 5–10 min |
 | `ideogram4` | NF4 (API) | 1024×1024 | 20 | 30–60 s |
+| `zimage` | GGUF Q4_K_M | 1024×1024 | 8 | † |
+| `qwenimage` | GGUF Q4_K_M | 1024×1024 | 20 | 100–200 s † |
+| `hidream` | fp8_scaled | 1024×1024 | 28 | ~80 s @2048×1376 (comfy measured, 5060 Ti) † |
+| `ernie` | NVFP4 | 1024×1024 | 8 | ~4 s/img @1024 (measured on RTX PRO 6000) † |
 
-> `flux2` (FLUX.2 [dev] 32B) was REMOVED 2026-08-13 — see
-> `ARTHUR_IMAGE_LAB_REFERENCE.md` §4.1 for the full history.
+† = expected — the lab's own 5060 Ti timings get recorded in the T2I-swap
+session doc after live verification.
+
+> `flux2` (FLUX.2 [dev] 32B) was REMOVED 2026-08-13; `sd35` + `wan` were
+> REMOVED 2026-09-07 — see `ARTHUR_IMAGE_LAB_REFERENCE.md` §4 for the history.
 
 ### Content-Type
 
@@ -149,31 +157,27 @@ Runs image or video generation. **Synchronous — the connection is held open un
 
 | Parameter | Description |
 |---|---|
-| `engine` | `flux2klein` \| `flux2klein9b` \| `sd35` \| `wan` \| `ideogram4` |
+| `engine` | `flux2klein` \| `flux2klein9b` \| `ideogram4` \| `sana` \| `boogu` \| `zimage` \| `qwenimage` \| `hidream` \| `ernie` |
 
 ### Common Form Fields
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `prompt` | string | **required** | Text description of the image or video to generate |
-| `negative_prompt` | string | `""` | What NOT to include. Supported by `sd35` and `wan`. Ignored by the FLUX.2 Klein engines. |
+| `negative_prompt` | string | `""` | What NOT to include. Supported by the CFG engines (flux2klein ×2, qwenimage). Ignored elsewhere (CFG-free models force 0.0/1.0). |
 | `width` | int | `1024` | Output width in pixels. Must be a multiple of 64. |
 | `height` | int | `1024` | Output height in pixels. Must be a multiple of 64. |
 | `num_inference_steps` | int | engine default | Denoising steps. More = better quality, slower. |
 | `guidance_scale` | float | engine default | Prompt adherence strength. |
 | `seed` | int | `-1` | `-1` = random. Fixed value = reproducible output. |
 | `quant` | string | engine default | Quantization level. See [Engine Parameters Reference](#13-engine-parameters-reference). |
-| `reference_image` | file | `null` | Optional image upload for I2I (FLUX.2) or I2V first frame (Wan). |
+| `reference_image` | file | `null` | Optional image upload for I2I — FLUX.2 Klein engines only (wan I2V removed 2026-09-07). |
 
 ### Engine-Specific Fields
 
 | Field | Type | Default | Engines | Description |
 |---|---|---|---|---|
-| `num_images` | int | `1` | `sd35` only | How many images to generate per request (1–4). |
-| `mode` | string | `t2v` | `wan` only | `t2v` = text-to-video \| `i2v` = image-to-video |
-| `num_frames` | int | `49` | `wan` only | Number of video frames. At 16 fps, 49 frames ≈ 3 s. |
-| `fps` | int | `16` | `wan` only | Output video frame rate (8–24). |
-| `resolution` | string | `720p` | `wan` only | `480p` (854×480) or `720p` (1280×720). |
+| `num_images` | int | `1` | engines with num_images in §13 | How many images to generate per request (1–2 qwenimage, 1–4 others that expose it). |
 
 ### Success Response — 200
 
@@ -210,7 +214,7 @@ Runs image or video generation. **Synchronous — the connection is held open un
 ```
 
 **Notes:**
-- `results` is always an array. Most engines return 1 item; `sd35` returns up to 4.
+- `results` is always an array. Most engines return 1 item; engines exposing `num_images` return up to their per-engine max (1–4).
 - `base64` contains the full PNG encoded as base64. For videos, `base64` is `null` (too large).
 - `url` is a relative path — prepend the base URL to fetch the file.
 - `params.seed` is the actual seed used (even if you sent `-1`, the resolved random seed is returned).
@@ -238,8 +242,13 @@ Returns static engine metadata (no live state — for available/loaded, use `/st
 {
   "flux2klein": { ... },
   "flux2klein9b": { ... },
-  "sd35":      { ... },
-  "wan":       { ... }
+  "ideogram4": { ... },
+  "sana":      { ... },
+  "boogu":     { ... },
+  "zimage":    { ... },
+  "qwenimage": { ... },
+  "hidream":   { ... },
+  "ernie":     { ... }
 }
 ```
 
@@ -255,12 +264,12 @@ Pre-loads an engine into VRAM without generating anything. Useful for warming up
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `quant` | string | `""` | Quantization level to load (e.g. `"Q3_K_M"` for `wan`). Empty = engine default. Changing quant on an already-loaded engine reloads it. |
+| `quant` | string | `""` | Quantization level to load (e.g. `"Q4_K_M"` for `qwenimage`, or a SANA variant like `"1.5-1.6b"`). Empty = engine default. Changing quant on an already-loaded engine reloads it. |
 
 ### Response — 200
 
 ```json
-{ "loaded": "sd35", "quant": "Q4_0" }
+{ "loaded": "qwenimage", "quant": "Q4_K_M" }
 ```
 
 ### Response — 503 (server busy)
@@ -298,7 +307,7 @@ Returns `200` (not an error) when the engine is not resident — nothing to do.
 ### Response — 200 (not resident)
 
 ```json
-{ "evicted": false, "engine": "sd35", "note": "not resident" }
+{ "evicted": false, "engine": "ernie", "note": "not resident" }
 ```
 
 ### Response — 503 (server busy)
@@ -381,7 +390,7 @@ Returns a paginated list of past generations.
 |---|---|---|---|
 | `limit` | int | `50` | Max entries to return |
 | `offset` | int | `0` | Skip N entries (for pagination) |
-| `engine` | string | *(all)* | Filter by engine key (e.g. `?engine=sd35`) |
+| `engine` | string | *(all)* | Filter by engine key (e.g. `?engine=zimage`) |
 
 ### Response — 200
 
@@ -467,54 +476,95 @@ Deletes a gallery entry and its associated file from disk.
 
 ---
 
-### `sd35` — Stable Diffusion 3.5 Large
+### `zimage` — Z-Image Turbo
+
+| Parameter | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `prompt` | string | required | — | Plain-prompt friendly (no JSON caption needed) |
+| `width` | int | `1024` | 256–1536, step 16 | |
+| `height` | int | `1024` | 256–1536, step 16 | |
+| `num_inference_steps` | int | `8` | 1–8 | Distilled — 8 is the training target |
+| `guidance_scale` | float | `0.0` | fixed 0.0 | CFG-free model — server forces 0.0 (no negative prompt) |
+| `num_images` | int | `1` | 1–4 | |
+| `seed` | int | `-1` | -1 to 2³¹-1 | |
+| `quant` | string | `Q4_K_M` | see below | GGUF transformer (`jayn7/Z-Image-Turbo-GGUF`) |
+
+**`quant` options:** `Q4_K_M` (~5 GB) ✓ default · Q5_K_M · Q6_K — full ladder once verified on the VM.
+
+---
+
+### `qwenimage` — Qwen-Image 2512
+
+| Parameter | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `prompt` | string | required | — | Dense bilingual (EN/ZH) layouts are the strength |
+| `negative_prompt` | string | `""` | — | Supported (CFG path) |
+| `width` | int | `1024` | 256–1536, step 16 | |
+| `height` | int | `1024` | 256–1536, step 16 | |
+| `num_inference_steps` | int | `20` | 1–50 | 20 ≈ daily tier; 50 = max quality (100–200 s) |
+| `guidance_scale` | float | `4.0` | 1.0–8.0 | Maps to `true_cfg_scale` |
+| `num_images` | int | `1` | 1–2 | Full generation runs ~1–3 min per image |
+| `seed` | int | `-1` | -1 to 2³¹-1 | |
+| `quant` | string | `Q4_K_M` | see below | GGUF transformer (`unsloth/Qwen-Image-2512-GGUF`) |
+
+**`quant` options:** `Q4_K_M` (~12.3 GB) ✓ default · Q4_K_S · Q5_K_S · Q6_K — full ladder once verified on the VM.
+
+---
+
+### `hidream` — HiDream O1-Dev (ComfyUI sidecar)
 
 | Parameter | Type | Default | Range | Notes |
 |---|---|---|---|---|
 | `prompt` | string | required | — | |
-| `negative_prompt` | string | `""` | — | Supported |
-| `width` | int | `1024` | 256–1536, step 64 | |
-| `height` | int | `1024` | 256–1536, step 64 | |
-| `num_inference_steps` | int | `28` | 1–100 | |
-| `guidance_scale` | float | `4.5` | 1.0–20.0 | |
-| `num_images` | int | `1` | 1–4 | Images per request |
+| `width` | int | `1024` | 256–2048, step 64 | |
+| `height` | int | `1024` | 256–2048, step 64 | |
+| `num_inference_steps` | int | `28` | fixed 28 | Dev checkpoint — fixed-step sampler |
+| `guidance_scale` | float | `0.0` | fixed 0.0 | CFG-free — server forces 0.0 |
+| `num_images` | int | `1` | 1–4 | |
 | `seed` | int | `-1` | -1 to 2³¹-1 | |
-| `quant` | string | `Q4_0` | see below | |
 
-**`quant` options:**
-
-| Value | Transformer size | Notes |
-|---|---|---|
-| `Q4_0` | ~4.8 GB | ✓ Recommended |
-| `Q5_0` | ~5.8 GB | Higher quality |
-| `Q8_0` | ~8.8 GB | Near-lossless |
-| `nvfp4` | ~2 GB | Blackwell native — run `nvfp4_save.py` first |
+Generation runs **out-of-process**: the lab unloads its resident engine, POSTs
+the workflow JSON to the ComfyUI sidecar (port 8188, `arthur-comfy.service`),
+polls `/history`, pulls the PNG via `/view`, and hands VRAM back via
+`/free {"unload_models": true}`. No `quant` param — the Dev fp8_scaled
+checkpoint is fixed.
 
 ---
 
-### `wan` — Wan2.2 (Text-to-Video / Image-to-Video)
+### `ernie` — ERNIE-Image-Turbo
 
 | Parameter | Type | Default | Range | Notes |
 |---|---|---|---|---|
-| `prompt` | string | required | — | Describe motion and scene |
-| `negative_prompt` | string | `"low quality, blurry, distorted"` | — | |
-| `mode` | string | `t2v` | `t2v` \| `i2v` | |
-| `reference_image` | file | null | — | Required when `mode=i2v` |
-| `num_frames` | int | `49` | 16–120, step 8 | 49 ≈ 3 s at 16 fps |
-| `fps` | int | `16` | 8–24 | Output video frame rate |
-| `resolution` | string | `720p` | `480p` \| `720p` | 480p = 854×480 \| 720p = 1280×720 |
+| `prompt` | string | required | — | CN+EN poster/layout strength |
+| `width` | int | `1024` | 256–1536, step 16 | |
+| `height` | int | `1024` | 256–1536, step 16 | |
+| `num_inference_steps` | int | `8` | fixed 8 | Distilled — fixed 8-step sampler |
+| `guidance_scale` | float | `1.0` | fixed 1.0 | Distilled guidance-free — server forces 1.0 (no negative prompt) |
+| `num_images` | int | `1` | 1–4 | |
 | `seed` | int | `-1` | -1 to 2³¹-1 | |
-| `quant` | string | `Q4_K_M` | see below | Applies to both HighNoise + LowNoise transformers |
 
-**`quant` options:**
+No `quant` param — pre-quantised Nunchaku-Lite NVFP4 transformer + bnb-4bit
+Ministral-3 text encoder (lite-infer repo), fp8/bf16 fallback if that route
+can't load.
 
-| Value | Per-transformer size | Total (×2) | Notes |
-|---|---|---|---|
-| `Q3_K_M` | ~7.2 GB | ~14.4 GB | Smallest |
-| `Q4_K_M` | ~9.7 GB | ~19.4 GB | ✓ Recommended |
-| `Q5_K_M` | ~10.8 GB | ~21.6 GB | Higher quality |
-| `Q8_0` | ~15.4 GB | ~30.8 GB | Near-lossless |
-| `nvfp4` | ~4 GB | ~8 GB | Blackwell native — run `nvfp4_save.py` first |
+---
+
+### `sd35` — Stable Diffusion 3.5 Large — 🗑️ REMOVED
+
+> Removed 2026-09-07 — superseded by the Z-Image / Qwen-Image-2512 /
+> HiDream-O1 / ERNIE-Image round. Former params: prompt / negative_prompt /
+> width-height 256-1536 step 64 / steps 1-100 (28) / guidance 1.0-20.0 (4.5) /
+> num_images 1-4 / seed / quant (Q4_0 ~4.8 GB · Q5_0 ~5.8 GB · Q8_0 ~8.8 GB ·
+> nvfp4 ~2 GB). History: `ARTHUR_IMAGE_LAB_REFERENCE.md` §4.2.
+
+---
+
+### `wan` — Wan2.2 (Text-to-Video / Image-to-Video) — 🗑️ REMOVED
+
+> Removed 2026-09-07 — video engines dropped (user decision); the lab is
+> all-image. Former fields: mode (t2v/i2v) / reference_image (i2v) /
+> num_frames 16-120 / fps 8-24 / resolution 480p-720p / quant (Q3_K_M–Q8_0 +
+> nvfp4 per dual transformer). History: `ARTHUR_IMAGE_LAB_REFERENCE.md` §4.3.
 
 ---
 
@@ -525,7 +575,7 @@ Deletes a gallery entry and its associated file from disk.
 ```typescript
 {
   id:         string;        // UUID — use this for gallery DELETE
-  engine:     string;        // "flux2klein" | "flux2klein9b" | "sd35" | "wan" | "ideogram4"
+  engine:     string;        // any key from GET /engines (e.g. "zimage" | "qwenimage" | "hidream" | "ernie")
   filename:   string;        // e.g. "flux2klein_3f2a1b9c-....png"
   url:        string;        // Relative URL — prepend base URL to fetch
   base64:     string | null; // PNG as base64 string; null for videos
@@ -607,16 +657,13 @@ All errors follow FastAPI's default shape:
 
 ```
 CUDA out of memory. Tried to allocate X GiB.
-  → Switch to a smaller quant (e.g. Q3_K_M instead of Q4_K_M)
-
-NVFP4 transformer not found at /opt/arthur-img-models/nvfp4/sd35/transformer.
-  → Run nvfp4_save.py on the VM first
-
-SD 3.5 shared pipeline components not found at: .../quantized/sd35/shared
-  → Run preq_save.py on the VM first
+  → Evict other engines (POST /evict-all), or switch to a smaller quant
 
 Server is busy
   → Poll /status until generating=false, then retry
+
+ComfyUI sidecar unreachable (hidream)
+  → Check arthur-comfy.service + http://127.0.0.1:8188/system_stats
 ```
 
 ---
@@ -632,25 +679,27 @@ curl -X POST http://192.168.0.87:8002/generate/flux2klein \
   -F "seed=42"
 ```
 
-### High quality image — SD 3.5 with negative prompt
+### High quality image — Qwen-Image 2512 with negative prompt
 
 ```bash
-curl -X POST http://192.168.0.87:8002/generate/sd35 \
+curl -X POST http://192.168.0.87:8002/generate/qwenimage \
   -F "prompt=a golden retriever in a meadow at sunset, golden hour, bokeh" \
   -F "negative_prompt=blurry, low quality, watermark" \
-  -F "num_inference_steps=28" \
-  -F "guidance_scale=4.5" \
-  -F "quant=Q4_0"
+  -F "num_inference_steps=20" \
+  -F "guidance_scale=4.0" \
+  -F "quant=Q4_K_M"
 ```
 
-### Multiple images — SD 3.5 (up to 4)
+### Typographic poster — Z-Image Turbo (plain prompt, 8 steps)
 
 ```bash
-curl -X POST http://192.168.0.87:8002/generate/sd35 \
-  -F "prompt=portrait of a mountain climber" \
-  -F "num_images=4" \
+curl -X POST http://192.168.0.87:8002/generate/zimage \
+  -F "prompt=a minimal concert poster with the text 'ARTHUR LAB' in bold white letters" \
+  -F "num_images=2" \
   -F "seed=100"
 ```
+
+### Multiple images — Z-Image Turbo (up to 4)
 
 ### Fast high-quality — FLUX.2 Klein 4B (distilled)
 
@@ -670,27 +719,24 @@ curl -X POST http://192.168.0.87:8002/generate/flux2klein \
   -F "reference_image=@/path/to/input.png"
 ```
 
-### Text-to-video — Wan2.2
+### Out-of-process — HiDream O1 (ComfyUI sidecar)
 
 ```bash
-curl -X POST http://192.168.0.87:8002/generate/wan \
-  -F "prompt=a red fox running through a snowy forest, cinematic, slow motion" \
-  -F "negative_prompt=low quality, blurry" \
-  -F "mode=t2v" \
-  -F "num_frames=49" \
-  -F "resolution=720p" \
-  -F "quant=Q4_K_M"
+# The lab unloads its own engine, runs the job in the ComfyUI sidecar,
+# pulls the PNG, and frees ComfyUI's VRAM afterwards.
+curl -X POST http://192.168.0.87:8002/generate/hidream \
+  -F "prompt=editorial illustration with the headline 'ARTHUR' in huge pixel-sharp type" \
+  -F "width=1024" \
+  -F "height=1024" \
+  -F "seed=7"
 ```
 
-### Image-to-video — Wan2.2
+### Fixed-8-step fast — ERNIE-Image-Turbo (NVFP4)
 
 ```bash
-curl -X POST http://192.168.0.87:8002/generate/wan \
-  -F "prompt=the fox slowly turns its head and looks at the camera" \
-  -F "mode=i2v" \
-  -F "reference_image=@/path/to/fox.png" \
-  -F "num_frames=49" \
-  -F "resolution=480p"
+curl -X POST http://192.168.0.87:8002/generate/ernie \
+  -F "prompt=event poster layout, CN+EN bilingual text, autumn colors" \
+  -F "seed=2026"
 ```
 
 ### Save image from response (jq)
@@ -706,14 +752,14 @@ curl -s -X POST http://192.168.0.87:8002/generate/flux2klein \
 ### Preload engine before generating
 
 ```bash
-# Preload sd35 into VRAM (~35 s load time)
-curl -X POST http://192.168.0.87:8002/engines/sd35/load
+# Preload zimage into VRAM (~30-60 s load time)
+curl -X POST http://192.168.0.87:8002/engines/zimage/load
 
 # Poll until loading=false
 watch -n 2 'curl -s http://192.168.0.87:8002/status | jq "{loading,active_engine}"'
 
 # Now generate instantly (model already loaded)
-curl -X POST http://192.168.0.87:8002/generate/sd35 \
+curl -X POST http://192.168.0.87:8002/generate/zimage \
   -F "prompt=a futuristic city at night"
 ```
 
@@ -749,8 +795,8 @@ curl -s -X POST http://192.168.0.87:8002/refresh
 ### Preload with a specific quant
 
 ```bash
-curl -s -X POST http://192.168.0.87:8002/engines/wan/load \
-  -F "quant=Q3_K_M"     # async — /status reports loading:true while it runs
+curl -s -X POST http://192.168.0.87:8002/engines/qwenimage/load \
+  -F "quant=Q4_K_M"     # async — /status reports loading:true while it runs
 ```
 
 ### Filter gallery by engine
@@ -842,46 +888,27 @@ def wait_for_idle(poll_interval: float = 3.0, timeout: float = 300.0):
         time.sleep(poll_interval)
     raise TimeoutError("Server did not become idle within timeout")
 
-# Preload sd35 then generate
-requests.post(f"{BASE}/engines/sd35/load", timeout=10)
+# Preload zimage then generate
+requests.post(f"{BASE}/engines/zimage/load", timeout=10)
 wait_for_idle()
 
-results = generate("sd35",
+results = generate("zimage",
     prompt="a photorealistic forest in autumn",
-    num_inference_steps=28,
-    quant="Q4_0",
+    num_inference_steps=8,
 )
 ```
 
-### Download video (no base64 for videos)
-
-```python
-def save_video_result(result: dict, output_path: str):
-    url = f"{BASE}{result['url']}"          # e.g. /files/videos/wan_uuid.mp4
-    resp = requests.get(url, stream=True, timeout=60)
-    resp.raise_for_status()
-    with open(output_path, "wb") as f:
-        for chunk in resp.iter_content(chunk_size=65536):
-            f.write(chunk)
-    print(f"Saved {output_path} ({result['num_frames']} frames @ {result['fps']} fps)")
-
-results = generate("wan",
-    prompt="ocean waves crashing on a beach, cinematic",
-    mode="t2v",
-    num_frames=49,
-    resolution="720p",
-    quant="Q4_K_M",
-)
-save_video_result(results[0], "ocean.mp4")
-```
+> Wan/video cookbook entries removed with the engine (2026-09-07). All current
+> engines return `type: "image"` with base64 — the download-video helper is no
+> longer needed until a future video engine lands.
 
 ### Batch with automatic engine switching
 
 ```python
 tasks = [
     ("flux2klein", dict(prompt="a cat on a rooftop", num_inference_steps=4)),
-    ("flux2klein", dict(prompt="a dog in a park",    num_inference_steps=4)),
-    ("sd35",       dict(prompt="abstract digital art, neon colours", quant="Q4_0")),
+    ("qwenimage",  dict(prompt="a bilingual poster, CN+EN text", quant="Q4_K_M")),
+    ("ernie",      dict(prompt="abstract digital art, neon colours")),
 ]
 
 for engine, params in tasks:

@@ -46,6 +46,15 @@ anything. sd35 + wan stay live and untouched.
 
 ## 3. Z-Image Turbo — drop rationale (recorded for the record)
 
+> **SUPERSEDED 2026-09-07** — the drop verdict is obsolete. The next-day research
+> report (`OPENWEIGHTS_T2I_16GB_FIT_2026-09-07.md`) re-ran the fit screen against
+> the **GGUF transformer route** (`jayn7/Z-Image-Turbo-GGUF`, Q4_K_M ~5 GB via
+> diffusers `ZImageTransformer2DModel.from_single_file`) with the in-repo Qwen3-4B
+> encoder **encode-then-park** (the same embed-cache trick klein uses) — the
+> offload rule is no longer triggered because nothing streams. User approved
+> including it; the engine is implemented in the 2026-09-07 T2I swap. The
+> historical rationale below is kept for the record.
+
 - **What it is:** Z-Image Turbo (Apache-2.0) — a 7B-ish DiT distilled for ≤8-step
   generation. Attractive on paper: distilled, open, and the only entry in its row of
   the source table that wasn't obviously closed or huge.
@@ -59,15 +68,16 @@ anything. sd35 + wan stay live and untouched.
   deepseek? if not ignore this model."* It cannot → dropped.
 - **Revisit condition:** only if a diffusers-layout **fp8/int8 Z-Image checkpoint**
   appears (encoder + DiT quantized, ~9-10 GB total like Boogu's layout). None exists
-  today — the official repo ships FP32-on-disk (~33 GB).
+  today — the official repo ships FP32-on-disk (~33 GB). *(Met via GGUF — see the
+  supersede note above.)*
 
 ## 4. Watchlist (not implemented, for the next landscape round)
 
 | Item | Watch for | Trigger to act |
 |---|---|---|
 | **FLUX 3 [dev] weights** | "later in 2026" announcement on black-forest-labs HF org / X | Weights exist AND a 16 GB-runnable variant (GGUF/nf4/fp8 community ladder like Klein 9B's) appears |
-| **Z-Image fp8/int8 diffusers layout** | upstream repo or community quant | Would unlock the model that the offload rule blocked (§3) |
-| **SD 3.5 Flash / Ultra open weights** | stabilityai HF org | If Flash-class weights ever ship self-hostable, they'd be a fast/quality add |
+| ~~**Z-Image fp8/int8 diffusers layout**~~ | — | ✅ Met via GGUF — **implemented 2026-09-07** (§3 superseded) |
+| ~~**SD 3.5 Flash / Ultra open weights**~~ | — | Moot — sd35 itself was removed 2026-09-07 (typography superseded by Z-Image/Qwen-Image/HiDream/ERNIE) |
 | **Wan 2.6 open release** | Wan-AI HF org | Currently API-only; if it ever opens, re-screen for 16 GB + disk |
 | **Ideogram 4 text-editing follow-up** | Ideogram HF org | Upstream text-editing is the one Ideogram-4 capability the lab doesn't serve (T2I + partial edit only); watch for a distilled/edit-tuned checkpoint |
 | **SANA 4.8B / 4K variants** | Efficient-Large-Model HF org | Config is already variant-extensible (`quant` field) — adding a 4.8B or 4K checkpoint later is a config + tooltip change, no new machinery |

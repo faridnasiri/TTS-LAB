@@ -379,11 +379,13 @@ UI_HTML = r"""<!DOCTYPE html>
           <option value="">All engines</option>
           <option value="flux2klein">FLUX.2 Klein</option>
           <option value="flux2klein9b">Klein 9B-KV</option>
-          <option value="sd35">SD 3.5 Large</option>
-          <option value="wan">Wan2.2</option>
           <option value="ideogram4">Ideogram 4</option>
           <option value="sana">SANA 1.6B</option>
           <option value="boogu">Boogu Turbo</option>
+          <option value="zimage">Z-Image Turbo</option>
+          <option value="qwenimage">Qwen-Image 2512</option>
+          <option value="hidream">HiDream O1</option>
+          <option value="ernie">ERNIE-Image</option>
         </select>
       </div>
       <div class="gallery-grid" id="galleryGrid"></div>
@@ -720,8 +722,8 @@ async function refreshAvailability() {
 // ============================================================
 function buildEngineTabs() {
   const tabs = document.getElementById('engineTabs');
-  const keys = ['flux2klein', 'flux2klein9b', 'sd35', 'wan', 'ideogram4', 'sana', 'boogu'];
-  const labels = { flux2klein: 'FLUX.2 Klein', flux2klein9b: 'Klein 9B-KV', sd35: 'SD 3.5 Large', wan: 'Wan2.2', ideogram4: 'Ideogram 4', sana: 'SANA 1.6B', boogu: 'Boogu Turbo' };
+  const keys = ['flux2klein', 'flux2klein9b', 'ideogram4', 'sana', 'boogu', 'zimage', 'qwenimage', 'hidream', 'ernie'];
+  const labels = { flux2klein: 'FLUX.2 Klein', flux2klein9b: 'Klein 9B-KV', ideogram4: 'Ideogram 4', sana: 'SANA 1.6B', boogu: 'Boogu Turbo', zimage: 'Z-Image Turbo', qwenimage: 'Qwen-Image 2512', hidream: 'HiDream O1', ernie: 'ERNIE-Image' };
   tabs.innerHTML = keys.map(k => `
     <div class="engine-tab" id="tab-${k}" onclick="selectEngine('${k}')">
       ${labels[k]}
@@ -766,10 +768,6 @@ function renderParams(key) {
     } else {
       area.appendChild(buildParam(p));
     }
-  }
-  if (key === 'sd35') {
-    const preset = formValues['speed_preset'] || 'standard';
-    applySd35Preset(preset);
   }
   // Initialise magic prompt visibility for ideogram4
   if (key === 'ideogram4') {
@@ -868,33 +866,11 @@ function buildParam(p) {
     formValues[p.name] = el.value;
     updateCurl();
     if (p.name === 'quant') updateQuantWarning();
-    if (currentEngine === 'sd35' && p.name === 'speed_preset') applySd35Preset(el.value);
     if (currentEngine === 'sana' && p.name === 'quant') applySanaVariant(el.value);
   };
   formValues[p.name] = el.value ?? el.options?.[el.selectedIndex]?.value ?? '';
   wrap.appendChild(el);
   return wrap;
-}
-
-function applySd35Preset(preset) {
-  const presets = {
-    standard:  {steps: 28, guidance: 4.5},
-    turbo:     {steps: 4,  guidance: 4.5},
-    lightning: {steps: 8,  guidance: 4.5},
-  };
-  const data = presets[preset];
-  if (!data) return;
-
-  const stepEl = document.querySelector('[data-param="num_inference_steps"]');
-  const guideEl = document.querySelector('[data-param="guidance_scale"]');
-  if (stepEl) {
-    stepEl.value = data.steps;
-    stepEl.dispatchEvent(new Event('input', { bubbles: true }));
-  }
-  if (guideEl) {
-    guideEl.value = data.guidance;
-    guideEl.dispatchEvent(new Event('input', { bubbles: true }));
-  }
 }
 
 // SANA variant preset — switch the step default with the checkpoint. Sprint is

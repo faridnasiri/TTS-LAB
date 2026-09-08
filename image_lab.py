@@ -169,7 +169,7 @@ async def _preload_ideogram4():
 app = FastAPI(
     title       = "Arthur Image & Video Lab",
     version     = "1.0.0",
-    description = "FLUX.2 Klein · SD 3.5 Large · Wan2.2 · Ideogram 4  — port 8002",
+    description = "FLUX.2 Klein · Klein 9B-KV · Ideogram 4 · SANA 1.6B · Boogu Turbo · Z-Image · Qwen-Image 2512 · HiDream O1 · ERNIE-Image  — port 8002",
     lifespan    = lifespan,
 )
 

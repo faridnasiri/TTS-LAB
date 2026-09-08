@@ -72,18 +72,13 @@ async def generate(
     guidance_scale:       float         = Form(4.0),
     num_images:           int           = Form(1),
     seed:                 int           = Form(-1),
-    # Wan-specific
-    mode:                 str           = Form("t2v"),
-    num_frames:           int           = Form(49),
-    fps:                  int           = Form(16),
-    resolution:           str           = Form("720p"),
     # Ideogram 4-specific
     preset:               str           = Form("V4_DEFAULT_20"),
     mu:                   float         = Form(0.0),
     std:                  float         = Form(1.75),
     use_magic_prompt:     bool          = Form(False),
     magic_prompt_aspect_ratio: str      = Form("1:1"),
-    # Optional reference image (FLUX.2 I2I / Wan I2V)
+    # Optional reference image (FLUX.2 I2I)
     reference_image:      Optional[UploadFile] = File(None),
     # Quantization format (engine-specific; empty = use engine default)
     quant:                str           = Form(""),
@@ -104,10 +99,6 @@ async def generate(
         "guidance_scale":       guidance_scale,
         "num_images":           num_images,
         "seed":                 seed,
-        "mode":                 mode,
-        "num_frames":           num_frames,
-        "fps":                  fps,
-        "resolution":           resolution,
         "reference_image":      ref_bytes,
         "quant":                quant,
         # Ideogram 4-specific

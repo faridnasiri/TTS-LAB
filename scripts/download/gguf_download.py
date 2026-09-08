@@ -23,32 +23,11 @@ GGUF_ROOT = "/opt/arthur-img-models/gguf"
 # ---------------------------------------------------------------------------
 # Download list  (repo_id, filename_in_repo, local_dir)
 # ---------------------------------------------------------------------------
-DOWNLOADS = [
-    # ── SD 3.5 Large ─────────────────────────────────────────────────────────
-    ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q4_0.gguf", f"{GGUF_ROOT}/sd35"),
-    ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q5_0.gguf", f"{GGUF_ROOT}/sd35"),
-    ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q8_0.gguf", f"{GGUF_ROOT}/sd35"),
-
-    # ── Wan2.2 T2V ───────────────────────────────────────────────────────────
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "HighNoise/Wan2.2-T2V-A14B-HighNoise-Q3_K_M.gguf", f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "HighNoise/Wan2.2-T2V-A14B-HighNoise-Q4_K_M.gguf", f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "HighNoise/Wan2.2-T2V-A14B-HighNoise-Q5_K_M.gguf", f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "HighNoise/Wan2.2-T2V-A14B-HighNoise-Q8_0.gguf",   f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "LowNoise/Wan2.2-T2V-A14B-LowNoise-Q3_K_M.gguf",  f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "LowNoise/Wan2.2-T2V-A14B-LowNoise-Q4_K_M.gguf",  f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "LowNoise/Wan2.2-T2V-A14B-LowNoise-Q5_K_M.gguf",  f"{GGUF_ROOT}/wan-t2v"),
-    ("QuantStack/Wan2.2-T2V-A14B-GGUF", "LowNoise/Wan2.2-T2V-A14B-LowNoise-Q8_0.gguf",    f"{GGUF_ROOT}/wan-t2v"),
-
-    # ── Wan2.2 I2V ───────────────────────────────────────────────────────────
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "HighNoise/Wan2.2-I2V-A14B-HighNoise-Q3_K_M.gguf", f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "HighNoise/Wan2.2-I2V-A14B-HighNoise-Q4_K_M.gguf", f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "HighNoise/Wan2.2-I2V-A14B-HighNoise-Q5_K_M.gguf", f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "HighNoise/Wan2.2-I2V-A14B-HighNoise-Q8_0.gguf",   f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "LowNoise/Wan2.2-I2V-A14B-LowNoise-Q3_K_M.gguf",  f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "LowNoise/Wan2.2-I2V-A14B-LowNoise-Q4_K_M.gguf",  f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "LowNoise/Wan2.2-I2V-A14B-LowNoise-Q5_K_M.gguf",  f"{GGUF_ROOT}/wan-i2v"),
-    ("QuantStack/Wan2.2-I2V-A14B-GGUF", "LowNoise/Wan2.2-I2V-A14B-LowNoise-Q8_0.gguf",    f"{GGUF_ROOT}/wan-i2v"),
-]
+# sd35 + wan GGUF entries REMOVED 2026-09-07 (engines deleted — see
+# docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md). Remaining GGUF
+# engines (flux2klein9b + zimage) download on first use via _ensure_gguf(),
+# so this pre-downloader has no entries left unless one is added explicitly.
+DOWNLOADS = []
 
 
 def _fmt_gb(path: str) -> str:

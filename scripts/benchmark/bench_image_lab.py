@@ -47,11 +47,10 @@ HEIGHT     = 1024
 NUM_IMAGES = 3
 
 # (engine_key, quant, num_inference_steps, label)
-# Use shorter 'turbo-style' runs for SD to measure steady-state inference quickly
-# (steps reduced to 4 and 8 to emulate distilled / lightning checkpoints)
+# sd35/wan runs REMOVED 2026-09-07 (engines deleted — see the T2I-swap session
+# doc); the 4 new engines (zimage/qwenimage/hidream/ernie) get rows here once
+# their live-verified step defaults are settled.
 RUNS = [
-    ("sd35",       "Q4_0",    4, "SD 3.5 Large · GGUF Q4_0 (turbo-style, 4 steps)"),
-    ("sd35",       "nvfp4",   8, "SD 3.5 Large · NVFP4 (lightning, 8 steps)"),
     ("flux2klein", "",        4, "FLUX.2 Klein 4B · BF16 (distilled, 4 steps)"),
     ("flux2klein9b", "",      4, "FLUX.2 Klein 9B-KV · GGUF (distilled, 4 steps)"),
 ]
@@ -168,7 +167,7 @@ for engine_key, quant, steps, label in RUNS:
                 "width":                str(WIDTH),
                 "height":               str(HEIGHT),
                 "num_inference_steps":  str(steps),
-                "guidance_scale":       "4.5" if engine_key == "sd35" else "3.5",
+                "guidance_scale":       "3.5",
                 "seed":                 str(run_seed),
                 "num_images":           "1",
             }

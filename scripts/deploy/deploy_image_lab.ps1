@@ -26,6 +26,12 @@
     .\deploy_image_lab.ps1 -Phase 5          # Re-deploy code only (~20 s)
     .\deploy_image_lab.ps1 -Phase 6          # Restart service only
     .\deploy_image_lab.ps1 -SkipPhases "4"  # Skip model download
+
+.NOTES
+    The HiDream O1-Dev engine needs the ComfyUI sidecar (arthur-comfy.service,
+    port 8188) — a SEPARATE one-off bootstrap this script does not cover:
+    ssh $User@$VM 'bash -s' < .\bootstrap_comfy.sh
+    (own venv + ComfyUI + the fp8_scaled checkpoint, ~25 min on first run.)
 #>
 param(
     [string]  $VM         = "192.168.0.87",
@@ -149,8 +155,18 @@ sudo bash -c 'if [ ! -d /opt/arthur-img-env ]; then python3.11 -m venv /opt/arth
 Run-Phase 3 "Engine Python packages" {
     $pip = "/opt/arthur-img-env/bin/pip"
 
-    # Core inference stack
-    Invoke-SSH "$pip install diffusers transformers accelerate safetensors sentencepiece protobuf -q"
+    # Core inference stack — floors reflect the verified live pairing on the
+    # VM (2026-09-07→08): diffusers 0.40.0 + transformers 5.9.0 + hub 1.30.0.
+    # The T2I swap first shipped on 0.38.0 (enough for ErnieImagePipeline/
+    # ZImagePipeline/QwenImagePipeline + both GGUF transformer classes), but
+    # ERNIE's NVFP4 route needs NunchakuLite — first released in diffusers
+    # 0.40.0 (PyPI). The 0.38→0.40 bump pulls huggingface-hub ≥1.23 (1.30.0
+    # live) + accelerate ≥0.31 and was regression-swept across all 6 kept
+    # engines (2026-09-08, all green).
+    #   diffusers >= 0.40 — NunchakuLiteQuantizer floor (ernie NVFP4 path)
+    #   transformers >= 5.0 — ErnieImagePipeline raises ImportError at module
+    #     import below 5.0 (hard gate, verified in diffusers main)
+    Invoke-SSH "$pip install 'diffusers>=0.40.0' 'transformers>=5.0.0' accelerate safetensors sentencepiece protobuf -q"
 
     # Quantisation (for FLUX.2 4-bit)
     Invoke-SSH "$pip install bitsandbytes -q"
@@ -167,7 +183,8 @@ Run-Phase 3 "Engine Python packages" {
     # Requests (remote T5 encoder for FLUX.2)
     Invoke-SSH "$pip install requests -q"
 
-    # GGUF loading support (required for SD3.5 and FLUX.2 GGUF checkpoints)
+    # GGUF loading support (required for FLUX.2 Klein 9B-KV, Z-Image and
+    # Qwen-Image 2512 single-file GGUF transformers)
     Invoke-SSH "$pip install 'gguf>=0.10.0' -q"
 
     # Ideogram 4 (cloned from GitHub, install as editable)
@@ -191,12 +208,19 @@ Run-Phase 3 "Engine Python packages" {
     # AutoTokenizer handles missing optional files gracefully with network access,
     # but local_files_only=True turns that into a hard error. The tokenizer makes
     # a few cheap HEAD requests on first load, then caches results.
-    Invoke-SSH @'
-# Patch: AutoModel (quantized + non-quantized) — skip network checks for transformer weights
-sed -i "/trust_remote_code=True,$/s/trust_remote_code=True,/trust_remote_code=True, local_files_only=True,/" /opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py
-sed -i "/trust_remote_code=True, low_cpu_mem_usage=True,/s/trust_remote_code=True, low_cpu_mem_usage=True/trust_remote_code=True, local_files_only=True, low_cpu_mem_usage=True/" /opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py
-echo "ideogram4 pipeline patched for offline mode (transformer weights only)"
-'@
+    # Patch ideogram4 pipelines for offline mode. Run from a FILE (not passed
+    # through Invoke-SSH): Invoke-Expression re-parses the composed command
+    # line, which mangled quoted heredocs twice on 2026-09-07.
+    $patchScript = Join-Path $env:TEMP "ideogram4_patch.sh"
+    @'
+#!/bin/bash
+sed -i '/trust_remote_code=True,$/s/trust_remote_code=True,/trust_remote_code=True, local_files_only=True,/' /opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py
+sed -i '/trust_remote_code=True, low_cpu_mem_usage=True,/s/trust_remote_code=True, low_cpu_mem_usage=True/trust_remote_code=True, local_files_only=True, low_cpu_mem_usage=True/' /opt/arthur-img/ideogram4/src/ideogram4/pipeline_ideogram4.py
+echo 'ideogram4 pipeline patched for offline mode (transformer weights only)'
+'@ | Set-Content -Path $patchScript -Encoding UTF8
+    Invoke-SCP $patchScript "/tmp/ideogram4_patch.sh"
+    Remove-Item $patchScript -Force
+    Invoke-SSH "bash /tmp/ideogram4_patch.sh"
 
     Write-Host "  All packages installed."
 }
@@ -218,31 +242,78 @@ Run-Phase 4 "Model pre-download (large — skip with -SkipPhases 4)" {
     Invoke-SSH "sudo chown -R arthur:arthur /opt/models/"
 
     $dlScript = @"
-import os, sys
+import os, shutil
 # Use HF_HOME so from_pretrained() will find cached models automatically
 os.environ['HF_HOME'] = '/opt/arthur-img-models/huggingface'
-from huggingface_hub import snapshot_download
+from huggingface_hub import snapshot_download, hf_hub_download
 
-models = [
-    'stabilityai/stable-diffusion-3.5-large',
-    'Wan-AI/Wan2.2-T2V-A14B-Diffusers',
-    'Wan-AI/Wan2.2-I2V-A14B-Diffusers',
-    # SANA — two 1.6B variants share the Gemma-2-2B encoder shards, so the HF
-    # cache dedups the second download down to ~4.5 GB net.
-    'Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers',
-    'Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers',
-    # Boogu Turbo fp8 (~21 GB) — mllm + bf16 DiT + FLUX.1 VAE
-    'Boogu/Boogu-Image-0.1-Turbo-fp8',
+# Generic HF junk excluded for every repo.
+GENERIC = ['*.msgpack', '*.h5', 'flax_model*', '*.onnx']
+
+# (repo, extra_ignore_patterns) — weight dirs the lab never loads are
+# excluded from the cache to save disk:
+#   * Z-Image + Qwen-Image 2512 transformers ride the GGUF route (pre-warmed
+#     below); only transformer/config.json is read from the diffusers repos.
+#   * Qwen-Image 2512 in-repo bf16 text_encoder (~16 GB) is never used — the
+#     OzzyGT bnb-4bit mirror below replaces it (the ONLY encoder the loader
+#     reads). Its VAE/tokenizer/scheduler shards stay.
+#   * lite-infer ERNIE: pe (Ministral3-3B, ~7.2 GB) IS downloaded — the
+#     loader drops it right after from_pretrained, but from_pretrained would
+#     fetch it on first load anyway, so pre-downloading keeps loads offline.
+downloads = [
+    # Kept engines — SANA: the two 1.6B variants share the Gemma-2-2B encoder
+    # shards, so the HF cache dedups the second download down to ~4.5 GB net.
+    ('Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers', []),
+    ('Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers', []),
+    ('Boogu/Boogu-Image-0.1-Turbo-fp8', []),  # mllm + bf16 DiT + FLUX.1 VAE
+    # --- 2026-09-07 T2I swap additions (zimage / qwenimage / ernie) ---
+    ('Tongyi-MAI/Z-Image-Turbo',
+     ['transformer/*.safetensors', 'transformer/*.bin']),
+    ('Qwen/Qwen-Image-2512',
+     ['transformer/*.safetensors', 'transformer/*.bin',
+      'text_encoder/*.safetensors', 'text_encoder/*.bin']),
+    ('OzzyGT/Qwen-Image-2512-bnb-4bit-text-encoder', []),
+    ('lite-infer/ERNIE-Image-Turbo-nunchaku-lite-nvfp4-bnb4-text-encoder', []),
 ]
 
 token = '$HFToken'
-for repo in models:
+for repo, extra in downloads:
     print(f'Downloading {repo} ...', flush=True)
     try:
-        snapshot_download(repo_id=repo, token=token, ignore_patterns=['*.msgpack','*.h5','flax_model*'])
+        snapshot_download(repo_id=repo, token=token,
+                          ignore_patterns=GENERIC + extra)
         print(f'  OK: {repo}', flush=True)
     except Exception as e:
         print(f'  FAILED: {repo}: {e}', file=sys.stderr, flush=True)
+
+# GGUF single-file pre-warm — drops the default quant + transformer configs
+# at the exact paths the lab checks (GGUF_ROOT/<key>/...), so the first load
+# of each engine runs offline. Mirrors image_lab_engines._ensure_gguf and
+# _component_config_dir (GGUF_ROOT = /opt/arthur-img-models/gguf).
+GGUF_ROOT = '/opt/arthur-img-models/gguf'
+jobs = [
+    # (repo, filename, subfolder, destination)
+    ('jayn7/Z-Image-Turbo-GGUF', 'z_image_turbo-Q4_K_M.gguf', None,
+     GGUF_ROOT + '/zimage/z_image_turbo-Q4_K_M.gguf'),
+    ('unsloth/Qwen-Image-2512-GGUF', 'qwen-image-2512-Q4_K_M.gguf', None,
+     GGUF_ROOT + '/qwenimage/qwen-image-2512-Q4_K_M.gguf'),
+    ('Tongyi-MAI/Z-Image-Turbo', 'config.json', 'transformer',
+     GGUF_ROOT + '/zimage/transformer_cfg/config.json'),
+    ('Qwen/Qwen-Image-2512', 'config.json', 'transformer',
+     GGUF_ROOT + '/qwenimage/transformer_cfg/config.json'),
+]
+for repo, fname, subfolder, dest in jobs:
+    label = (subfolder + '/' if subfolder else '') + fname
+    print(f'Pre-warming {repo}:{label} -> {dest} ...', flush=True)
+    try:
+        p = hf_hub_download(repo_id=repo, filename=fname, subfolder=subfolder,
+                            token=token)
+        if os.path.realpath(p) != os.path.realpath(dest):
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copyfile(p, dest)
+        print(f'  OK: {dest}', flush=True)
+    except Exception as e:
+        print(f'  FAILED: {dest}: {e}', file=sys.stderr, flush=True)
 "@
     Set-Content -Path $localScript -Value $dlScript -Encoding UTF8
     Write-Host "  » SCP download script → /tmp/imglab_download.py"
@@ -265,7 +336,8 @@ Run-Phase 5 "SCP code files to VM" {
         "$repoRoot\scripts\download\gguf_download.py",
         "$repoRoot\scripts\utils\nvfp4_save.py",
         "$repoRoot\ideogram4_lab_engine.py",
-        "$repoRoot\boogu_lab_engine.py"
+        "$repoRoot\boogu_lab_engine.py",
+        "$repoRoot\hidream_comfy_bridge.py"
     )
 
     foreach ($f in $files) {
@@ -283,8 +355,18 @@ Run-Phase 5 "SCP code files to VM" {
 
     # Write .env with the runtime environment for the service.
     # If HF_TOKEN is provided, include it; otherwise still create the file so GPU-only mode is enforced.
+    # HF_HUB_CACHE (added 2026-09-08): hub >= 1.20 writes $HF_HOME/hub/ and
+    # hub >= 1.23 has NO legacy fallback — without this, the direct-layout
+    # repos (flux2klein, ideogram4, Qwen3-8B …) read as MISSING and ~40 GB
+    # silently re-downloads. Point it at the direct layout explicitly.
+    # DIFFUSERS_TRUST_REMOTE_KERNELS (added 2026-09-08, user-approved): the
+    # 0.40 nunchaku quantizer refuses to fetch/execute the remote
+    # rootonchair/nunchaku-lite-kernels CUDA kernel repo without it (ernie
+    # NVFP4 fails with a misleading "OOM" ValueError otherwise).
     $envLines = @(
         "HF_HOME=/opt/arthur-img-models/huggingface",
+        "HF_HUB_CACHE=/opt/arthur-img-models/huggingface",
+        "DIFFUSERS_TRUST_REMOTE_KERNELS=true",
         "IMGLAB_MODELS_ROOT=/opt/models/image",
         "IMGLAB_OUTPUT_ROOT=/opt/arthur-gen",
         "IMGLAB_PORT=8002",
@@ -449,15 +531,11 @@ Write-Host "══════════════════════�
 Write-Host ""
 Write-Host "  Logs:   ssh $User@$VM journalctl -u arthur-imglab.service -f"
 Write-Host "  UI:     http://${VM}:8002"
-Write-Host "  API:    POST http://${VM}:8002/generate/flux2klein"
-Write-Host "          POST http://${VM}:8002/generate/flux2klein9b"
-Write-Host "          POST http://${VM}:8002/generate/sd35"
-Write-Host "          POST http://${VM}:8002/generate/wan"
-Write-Host "          POST http://${VM}:8002/generate/ideogram4"
-Write-Host "          POST http://${VM}:8002/generate/sana"
-Write-Host "          POST http://${VM}:8002/generate/boogu"
+Write-Host "  API:    POST http://${VM}:8002/generate/{engine}"
+Write-Host "          (flux2klein · flux2klein9b · ideogram4 · sana · boogu"
+Write-Host "           · zimage · qwenimage · hidream · ernie)"
 Write-Host ""
-Write-Host "  LICENSES — accept BEFORE running Phase 4 download:"
-Write-Host "    https://huggingface.co/stabilityai/stable-diffusion-3.5-large" -ForegroundColor Yellow
+Write-Host "  LICENSES — accept BEFORE running Phase 4 download:" -ForegroundColor Yellow
+Write-Host "    Z-Image Apache-2.0 · Qwen-Image 2512 Apache-2.0 · HiDream MIT · ERNIE Apache-2.0"
 Write-Host "    (SANA Apache-2.0 + Gemma terms; Boogu Apache-2.0 research-only — ungated)" -ForegroundColor DarkGray
 Write-Host ""

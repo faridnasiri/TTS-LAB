@@ -75,60 +75,6 @@ def _p(name, type_, default, label, min_=None, max_=None, step=None,
 
 ENGINES: dict[str, EngineInfo] = {
 
-    "sd35": EngineInfo(
-        key         = "sd35",
-        label       = "SD 3.5 Large",
-        description = (
-            "Stable Diffusion 3.5 Large — 8B MMDiT text-to-image model. "
-            "GGUF quantised transformer (city96/stable-diffusion-3.5-large-gguf). "
-            "Text encoders and VAE reused from pre-saved shared directory on disk. "
-            "Q4_0 uses ~5 GB VRAM for the transformer alone. "
-            "Supports speed-presets for turbo / lightning fast runs on the same model weights."
-        ),
-        output_type = "image",
-        vram_gb     = 12.0,
-        hf_repo     = "stabilityai/stable-diffusion-3.5-large",
-        hf_repo_alt = None,
-        params      = [
-            _p("prompt",              "textarea", "",     "Prompt",
-               tooltip="Describe the image you want to generate.", required=True),
-            _p("negative_prompt",     "textarea", "",     "Negative prompt",
-               tooltip="Describe what you do NOT want in the image."),
-            _p("speed_preset",        "select",   "standard", "Mode",
-               options=[
-                   {"value": "standard",  "label": "Standard — 28 steps (default quality)"},
-                   {"value": "turbo",     "label": "Turbo — 4 steps (fast preview)"},
-                   {"value": "lightning", "label": "Lightning — 8 steps (fast)"},
-               ],
-               tooltip="Choose a speed/quality profile for SD 3.5 Large. Turbo and Lightning use fewer steps on the same model weights.",
-               client_only=True),
-            _p("width",               "int",      1024,   "Width (px)",
-               min_=256, max_=1536, step=64),
-            _p("height",              "int",      1024,   "Height (px)",
-               min_=256, max_=1536, step=64),
-            _p("num_inference_steps", "int",      28,     "Steps",
-               min_=1, max_=100, step=1),
-            _p("guidance_scale",      "float",    4.5,    "Guidance scale",
-               min_=1.0, max_=20.0, step=0.5),
-            _p("num_images",          "int",      1,      "Images per request",
-               min_=1, max_=4, step=1),
-            _p("seed",                "int",      -1,     "Seed (-1 = random)",
-               min_=-1, max_=2**31-1, step=1),
-            _p("quant",               "select",   "Q4_0", "Quantization",
-               options=[
-                   {"value": "Q4_0",  "label": "Q4_0  — 4.8 GB transformer  ✓ recommended GGUF"},
-                   {"value": "Q5_0",  "label": "Q5_0  — 5.8 GB transformer  (higher quality GGUF)"},
-                   {"value": "Q8_0",  "label": "Q8_0  — 8.8 GB transformer  (near-lossless GGUF)"},
-                   {"value": "nvfp4", "label": "NVFP4 — ~2 GB transformer  ⚡ Blackwell native (run nvfp4_save.py first)"},
-               ],
-               tooltip=(
-                   "GGUF quantisation uses city96/stable-diffusion-3.5-large-gguf, downloaded on first use. "
-                   "NVFP4 uses torchao NVFP4WeightOnlyConfig baked from BF16 by nvfp4_save.py — "
-                   "fastest on RTX 5060 Ti (Blackwell SM100+)."
-               )),
-        ],
-    ),
-
     "flux2klein": EngineInfo(
         key         = "flux2klein",
         label       = "FLUX.2 Klein 4B",
@@ -224,54 +170,6 @@ ENGINES: dict[str, EngineInfo] = {
                )),
         ],
     ),
-
-    "wan": EngineInfo(
-        key         = "wan",
-        label       = "Wan2.2",
-        description = (
-            "Wan2.2 text-to-video and image-to-video model from Alibaba. "
-            "T2V-A14B generates up to 5 s of cinematic video from a text prompt. "
-            "I2V-A14B animates a reference image. Uses two GGUF-quantised transformers "
-            "(HighNoise + LowNoise) from QuantStack, loaded with model_cpu_offload."
-        ),
-        output_type = "video",
-        vram_gb     = 14.0,
-        hf_repo     = "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-        hf_repo_alt = "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
-        params      = [
-            _p("prompt",              "textarea", "",     "Prompt",
-               tooltip="Describe the motion and scene you want to generate.", required=True),
-            _p("negative_prompt",     "textarea",
-               "low quality, blurry, distorted", "Negative prompt"),
-            _p("mode",                "select",   "t2v",  "Mode",
-               options=["t2v", "i2v"],
-               tooltip="t2v = text-to-video | i2v = image-to-video (requires reference image)."),
-            _p("reference_image",     "file",     None,   "Reference image (I2V mode)",
-               tooltip="Required when mode=i2v. First frame to animate."),
-            _p("num_frames",          "int",      49,     "Frames",
-               min_=16, max_=120, step=8,
-               tooltip="Number of video frames. At 16 fps, 49 frames ≈ 3 s."),
-            _p("fps",                 "int",      16,     "FPS",
-               min_=8, max_=24, step=1),
-            _p("resolution",          "select",   "720p", "Resolution",
-               options=["480p", "720p"]),
-            _p("seed",                "int",      -1,     "Seed (-1 = random)",
-               min_=-1, max_=2**31-1, step=1),
-            _p("quant",               "select",   "Q4_K_M", "Quantization",
-               options=[
-                   {"value": "Q3_K_M", "label": "Q3_K_M — 7.2 GB × 2 transformers  (smallest GGUF)"},
-                   {"value": "Q4_K_M", "label": "Q4_K_M — 9.7 GB × 2 transformers  ✓ recommended GGUF"},
-                   {"value": "Q5_K_M", "label": "Q5_K_M — 10.8 GB × 2 transformers  (higher quality GGUF)"},
-                   {"value": "Q8_0",   "label": "Q8_0   — 15.4 GB × 2 transformers  (near-lossless GGUF)"},
-                   {"value": "nvfp4",  "label": "NVFP4  — ~4 GB × 2 transformers  ⚡ Blackwell native (run nvfp4_save.py first)"},
-               ],
-               tooltip=(
-                   "GGUF quantisation uses QuantStack repos, downloaded on first use. "
-                   "NVFP4 uses torchao NVFP4WeightOnlyConfig baked from BF16 by nvfp4_save.py — "
-                   "fastest on RTX 5060 Ti (Blackwell SM100+). Both HighNoise + LowNoise transformers quantized."
-               )),
-        ],
-            ),
 
             "ideogram4": EngineInfo(
                 key         = "ideogram4",
@@ -438,7 +336,190 @@ ENGINES: dict[str, EngineInfo] = {
                min_=-1, max_=2**31-1, step=1),
         ],
     ),
-        }
+
+    "zimage": EngineInfo(
+        key         = "zimage",
+        label       = "Z-Image Turbo",
+        description = (
+            "Z-Image Turbo — Tongyi ~6B single-stream S3-DiT with a Qwen3-4B "
+            "text encoder, distilled to 8 steps at CFG 0.0 (no negative "
+            "prompt). Apache-2.0, plain-prompt friendly, strong EN/ZH "
+            "in-image text (LongText-Bench 0.922). Runs GGUF-quantised "
+            "transformer (jayn7/Z-Image-Turbo-GGUF); the Qwen3-4B encoder is "
+            "loaded on demand for uncached prompts, then parked (embed "
+            "cache)."
+        ),
+        output_type = "image",
+        vram_gb     = 10.0,
+        hf_repo     = "Tongyi-MAI/Z-Image-Turbo",
+        hf_repo_alt = "jayn7/Z-Image-Turbo-GGUF",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image you want to generate. Plain prompt "
+                       "friendly — no JSON caption required.",
+               required=True),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=1536, step=16),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=1536, step=16),
+            _p("num_inference_steps", "int",      8,      "Steps",
+               min_=1, max_=8, step=1,
+               tooltip="Distilled turbo model — 8 steps is the training target."),
+            _p("guidance_scale",      "float",    0.0,    "Guidance (fixed 0.0)",
+               min_=0.0, max_=0.0, step=0.1,
+               tooltip="Z-Image Turbo is distilled guidance-free — CFG is "
+                       "disabled. The server forces 0.0."),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=4, step=1),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+            _p("quant",               "select",   "Q4_K_M", "Quantization",
+               options=[
+                   {"value": "Q3_K_S", "label": "Q3_K_S — ~3.5 GB transformer  fastest"},
+                   {"value": "Q3_K_M", "label": "Q3_K_M — ~3.8 GB transformer"},
+                   {"value": "Q4_K_S", "label": "Q4_K_S — ~4.3 GB transformer"},
+                   {"value": "Q4_K_M", "label": "Q4_K_M — ~4.6 GB transformer  ✓ recommended"},
+                   {"value": "Q5_K_S", "label": "Q5_K_S — ~4.8 GB transformer"},
+                   {"value": "Q5_K_M", "label": "Q5_K_M — ~5.1 GB transformer"},
+                   {"value": "Q6_K",   "label": "Q6_K — ~5.5 GB transformer"},
+                   {"value": "Q8_0",   "label": "Q8_0 — ~6.7 GB transformer  best quality"},
+               ],
+               tooltip="GGUF quantisation via jayn7/Z-Image-Turbo-GGUF. Any tier "
+                       "fits the 16 GB card; Q4_K_M is the quality/speed "
+                       "sweet spot, Q8_0 the near-lossless ceiling."),
+        ],
+    ),
+
+    "qwenimage": EngineInfo(
+        key         = "qwenimage",
+        label       = "Qwen-Image 2512",
+        description = (
+            "Qwen-Image-2512 — Alibaba ~20B MMDiT, Apache-2.0. Strongest "
+            "independently-verified bilingual (EN/ZH) long-text rendering of "
+            "any fully-open model (LongText-Bench 0.956 EN / 0.965 ZH). "
+            "Runs a GGUF Q4_K_S transformer (~11.5 GB, unsloth) with the "
+            "in-repo Qwen2.5-VL-family text encoder quantised for the 16 GB "
+            "card; encoder loads on demand and parks after encoding (embed "
+            "cache). Measured 2026-09-08: ~5 s/it → ~110 s at the 20-step "
+            "default; Q4_K_S is the only tier that fits (Q4_K_M's load alone "
+            "OOMs the card)."
+        ),
+        output_type = "image",
+        vram_gb     = 13.8,  # measured gen process peak 14,136 MiB (2026-09-08)
+        hf_repo     = "Qwen/Qwen-Image-2512",
+        hf_repo_alt = "unsloth/Qwen-Image-2512-GGUF",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image. Dense bilingual layouts (posters, "
+                       "slides, infographics) are this model's strength.",
+               required=True),
+            _p("negative_prompt",     "textarea", "",     "Negative prompt",
+               tooltip="CFG path — what to avoid in the image."),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=1536, step=16),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=1536, step=16),
+            _p("num_inference_steps", "int",      20,     "Steps",
+               min_=1, max_=50, step=1,
+               tooltip="20 steps ≈ fast daily tier; up to 50 for max quality."),
+            _p("guidance_scale",      "float",    4.0,    "Guidance scale",
+               min_=1.0, max_=8.0, step=0.5),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=2, step=1,
+               tooltip="Max 2 — a full generation runs the whole resident "
+                       "transformer for ~1-3 min."),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+            _p("quant",               "select",   "Q4_K_S", "Quantization",
+               options=[
+                   {"value": "Q4_K_S", "label": "Q4_K_S — ~11.5 GB transformer  ✓ recommended"},
+               ],
+               tooltip="GGUF quantisation via unsloth/Qwen-Image-2512-GGUF. "
+                       "Q4_K_S is the ONLY tier that fits the 16 GB card — "
+                       "Q4_K_M (12.3 GB) was removed 2026-09-08: its load "
+                       "alone OOMs (14.2 GiB process floor vs 14.28 GiB "
+                       "usable with the TTS containers' CUDA contexts)."),
+        ],
+    ),
+
+    "hidream": EngineInfo(
+        key         = "hidream",
+        label       = "HiDream O1",
+        description = (
+            "HiDream-O1-Image-Dev — 8B pixel-space unified UiT (no VAE → no "
+            "latent glyph blur). MIT. Runs OUT-OF-PROCESS via a headless "
+            "ComfyUI sidecar on port 8188 (hidream_comfy_bridge.py). Dev "
+            "checkpoint: fp8_scaled (~8.1 GB), 28 steps, cfg 1.0 (CFG-free "
+            "with 7.6 noise scaling). The lab unloads its own resident "
+            "engine first and hands VRAM back to ComfyUI after each "
+            "generation."
+        ),
+        output_type = "image",
+        vram_gb     = 11.5,
+        hf_repo     = "HiDream-ai/HiDream-O1-Image-Dev",
+        hf_repo_alt = "Comfy-Org/HiDream-O1-Image",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image. Long text prompts render at "
+                       "pixel-level sharpness.",
+               required=True),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=2048, step=64),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=2048, step=64),
+            _p("num_inference_steps", "int",      28,     "Steps (fixed 28)",
+               min_=28, max_=28, step=1,
+               tooltip="Dev checkpoint — fixed 28-step sampler."),
+            _p("guidance_scale",      "float",    1.0,    "Guidance (fixed 1.0)",
+               min_=1.0, max_=1.0, step=0.1,
+               tooltip="HiDream-O1-Dev is CFG-free — the ComfyUI graph runs "
+                       "SamplerCustom at cfg 1.0 with 7.6 noise scaling "
+                       "(ModelNoiseScale). The server forces 1.0."),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=4, step=1),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+        ],
+    ),
+
+    "ernie": EngineInfo(
+        key         = "ernie",
+        label       = "ERNIE-Image",
+        description = (
+            "ERNIE-Image-Turbo — Baidu ~8B single-stream DiT + Ministral-3-3B "
+            "text encoder, distilled to 8 steps at CFG 1.0. Apache-2.0. "
+            "Poster/layout bilingual CN+EN text at low latency. Primary route "
+            "is the pre-quantised Nunchaku-Lite NVFP4 transformer with a "
+            "bnb-4bit text encoder (lite-infer repo); falls back to an fp8 / "
+            "bf16 diffusers layout when the NVFP4 route can't load."
+        ),
+        output_type = "image",
+        vram_gb     = 10.0,
+        hf_repo     = "lite-infer/ERNIE-Image-Turbo-nunchaku-lite-nvfp4-bnb4-text-encoder",
+        hf_repo_alt = "baidu/ERNIE-Image-Turbo",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the poster / layout you want. CN+EN text is "
+                       "the model's strength.",
+               required=True),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=1536, step=16),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=1536, step=16),
+            _p("num_inference_steps", "int",      8,      "Steps (fixed 8)",
+               min_=8, max_=8, step=1,
+               tooltip="Distilled turbo — fixed 8-step sampler."),
+            _p("guidance_scale",      "float",    1.0,    "Guidance (fixed 1.0)",
+               min_=1.0, max_=1.0, step=0.1,
+               tooltip="ERNIE-Image-Turbo is distilled guidance-free — CFG is "
+                       "forced 1.0. The server enforces it."),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=4, step=1),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+        ],
+    ),
+}
 
         # ---------------------------------------------------------------------------
         # Global runtime state  (mutated by engines + dispatch at runtime)
@@ -448,7 +529,6 @@ class LabState:
     active_engine: Optional[str]  = None   # key of model currently in VRAM
     active_quant:  str            = ""     # quantization of the loaded model
     loaded_model:  Optional[Any]  = None   # the pipeline object
-    loaded_pipe2:  Optional[Any]  = None   # second pipeline (Wan I2V variant)
     loading:       bool           = False  # True while a load is in progress
     generating:    bool           = False  # True while generation runs
     last_used:     float          = 0.0   # time.time() of last generate call

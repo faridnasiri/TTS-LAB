@@ -109,27 +109,31 @@ Ranked by leaderboard rank. ✅ = installable on 16 GB and relevant · 🟡 = ma
 
 ## 4. Recommended additions — deep dive
 
-### #1 — Z-Image Turbo (Elo 928) — *easiest win, plain prompts, fast*
+> **All four implemented 2026-09-07** — see
+> `docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md` for the change set,
+> live-verified numbers, and gate recalibrations.
+
+### #1 — Z-Image Turbo (Elo 928) — *easiest win, plain prompts, fast* — ✅ IMPLEMENTED
 - **Arch:** ~6B single-stream S3-DiT + Qwen3-4B text encoder + FLUX-style 16-ch VAE. Distilled to **8 steps, CFG must be 0.0**.
 - **License:** Apache-2.0, ungated — `Tongyi-MAI/Z-Image-Turbo` (HF/ModelScope). Commercial-safe.
 - **16 GB:** BF16 ~14-16 GB (tight but fits); **fp8 ~8 GB; GGUF Q4 ~5-6 GB**. Easiest fit of any text-capable model on the list. ~2-3 s/img @1024px on a 4090 → roughly 5-8 s on the 5060 Ti.
 - **Typography:** native EN+ZH in-image text (LongText-Bench **0.922** Turbo / 0.936 base — I). Strongest for short-to-medium phrases and bilingual signage; below Ideogram for dense multi-font design layouts (C). Plain-prompt friendly — no JSON caption requirement (unlike Ideogram 4).
 - **Note:** Turbo is not LoRA-trainable; the base (Z-Image Base, 28-50 steps) is the fine-tune target. ComfyUI native (CLIPLoader `lumina2`).
 
-### #2 — Qwen-Image-2512 (Elo 972) — *best verified bilingual long text, fully open*
+### #2 — Qwen-Image-2512 (Elo 972) — *best verified bilingual long text, fully open* — ✅ IMPLEMENTED
 - **Arch:** ~20B MMDiT (+ ~4B VL encoder, Wan-VAE-derived VAE in 2512; original used Qwen2.5-VL-7B). Apache-2.0. ComfyUI-native since Aug 2025; GGUF via `city96/Qwen-Image-gguf`; diffusers pipeline exists.
 - **16 GB:** BF16 ~40 GB+ / **FP8 ~20 GB → OOMs on 16 GB**. Working path: **GGUF Q4_K_M ~13.3 GB peak** — proven on an RTX 4060 Ti 16 GB and on a **sm_120 RTX 5080 16 GB** (same Blackwell arch as your 5060 Ti). Expect **~100-200 s/image at 50 steps**; halve with CFG 1.0; a **4-step Lightning LoRA cuts this to tens of seconds**.
 - **Typography:** strongest *independently verified* bilingual long-text of any fully-open model — LongText-Bench **0.956 EN / 0.965 ZH** (I, cited in ERNIE tech report). Original Qwen-Image scored 0.945. Bilingual infographics/slides/posters; English alone still trails Ideogram for design-grade typography.
 - **Why not the original "Qwen Image" row (878)?** 2512 is the December-2025 refresh, materially better at dense text layouts — pick 2512.
 
-### #3 — HiDream-O1-Image / -Dev (Elo 978 / 874) — *pixel-native sharpness, most permissive*
+### #3 — HiDream-O1-Image / -Dev (Elo 978 / 874) — *pixel-native sharpness, most permissive* — ✅ IMPLEMENTED (Dev, ComfyUI sidecar)
 - **Arch:** **8B pixel-space "UiT" — no VAE, no separate text encoder**; unified decoder-only transformer over raw pixel tokens (extends Qwen3-VL-8B). No latent compression ⇒ no glyph blur on small type.
 - **License:** **MIT**, ungated — `HiDream-ai/HiDream-O1-Image` / `-Dev`.
 - **16 GB:** FP8-mixed **~10 GB fits comfortably**; BF16 ~17-20 GB needs offload. FP8 conversions on HF (e.g. `drbaph/HiDream-O1-Image-BF16`). Pixel-space ⇒ higher compute per image than latent DiTs — expect slower gens (no 16 GB timing data found).
 - **Typography:** vendor-reported **LongText-Bench 0.979 EN / 0.978 ZH — highest open-weights numbers published (V)**; CVTG-2K 0.9128 (V); community notes residual long-text errors and less independent confirmation. **Dev** variant = 28 steps, CFG 0.0, rank 874 — best speed/quality balance.
 - **Recommendation:** start with the **Dev** checkpoint on this GPU.
 
-### #4 — ERNIE-Image-Turbo (Elo 923) — *poster/layout bilingual, 8-step*
+### #4 — ERNIE-Image-Turbo (Elo 923) — *poster/layout bilingual, 8-step* — ✅ IMPLEMENTED (Nunchaku-Lite NVFP4)
 - **Arch:** ~8B single-stream DiT (ERNIE-ViLG 3.0 lineage) + Ministral-3-3B encoder + FLUX-2 VAE. Turbo = 8 steps, CFG 1.0.
 - **License:** Apache-2.0, ungated (`baidu/ERNIE-Image-Turbo`). Community GGUF q8/q6/q4 UNet on Civitai; ComfyUI workflows published.
 - **16 GB:** BF16 full stack ≈ 24 GB → no. **GGUF q8 UNet (~8.5 GB) + quantized encoder + VAE ≈ 14-15 GB — fits** (estimate from param count; not officially published).

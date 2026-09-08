@@ -2,18 +2,23 @@
 image_lab_engines.py — Load / unload / generate functions for all engines:
   flux2klein  — FLUX.2 Klein 4B (custom NF4 encoder assembly)
   flux2klein9b — FLUX.2 Klein 9B-KV GGUF (Q4_K_M) via QuantStack
-  sd35        — Stable Diffusion 3.5 Large GGUF (Q4_0 / Q5_0 / Q8_0) via city96
-  wan         — Wan2.2 T2V / I2V GGUF (Q3_K_M / Q4_K_M / Q5_K_M / Q8_0) via QuantStack
   ideogram4   — Ideogram 4 (API)
   sana        — SANA 1.6B (Sprint + SANA 1.5 variants, variant rides `quant`)
   boogu       — Boogu-Image-0.1-Turbo-fp8 (CPU-offload exception; boogu_lab_engine)
+  zimage      — Z-Image Turbo (GGUF ladder via jayn7 + lazy bnb Qwen3-4B encoder)
+  qwenimage   — Qwen-Image 2512 (GGUF ladder via unsloth + bnb4 VL encoder,
+                encode-without-transformer on cache miss)
+  hidream     — HiDream O1-Dev (OUT-OF-PROCESS ComfyUI sidecar, port 8188 —
+                hidream_comfy_bridge.py)
+  ernie       — ERNIE-Image-Turbo (Nunchaku-Lite NVFP4 primary, fp8 fallback)
 
-Note: flux2 (FLUX.2 [dev] 32B) was REMOVED 2026-08-13 — its ~27 GB footprint
-cannot fit the 15.5 GiB card and the GPU-only policy forbids CPU fallback.
+Removed: sd35 + wan 2026-09-07 (see docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md);
+flux2 (FLUX.2 [dev] 32B) removed 2026-08-13 — ~27 GB footprint cannot fit the
+15.5 GiB card and the GPU-only policy forbids CPU fallback.
 
-GGUF files are downloaded from HuggingFace on first use and cached under GGUF_ROOT.
-Non-transformer pipeline components (text encoders, VAE, scheduler, tokenizers)
-are loaded from the pre-saved shared directories written by preq_save.py.
+Model weights are downloaded from HuggingFace on first use (GGUF files cached
+under GGUF_ROOT, HF repos under HF_HOME); text encoders / VAEs / schedulers
+come from the same repos. Nothing uses preq_save.py shared dirs any more.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ import time
 from typing import Any, Optional
 
 from image_lab_config import ENGINES, STATE, OUTPUT_ROOT, HF_TOKEN, HF_HOME, GPU_ONLY
-from image_lab_utils import free_vram, random_seed, save_image, save_images, save_video
+from image_lab_utils import free_vram, random_seed, save_image, save_images
 
 # Local directory for cached GGUF model files
 GGUF_ROOT = "/opt/arthur-img-models/gguf"
@@ -36,12 +41,11 @@ GGUF_ROOT = "/opt/arthur-img-models/gguf"
 # Also used by the dispatch-layer /evict-all for the UI "Evict VRAM" button.
 TTS_EVICT_ALL_URL = "http://localhost:8009/evict-all"
 
-# Pre-saved shared pipeline components (text encoders, VAE, configs)
-# These were written by preq_save.py and contain everything except the transformer.
-PREQ_ROOT = "/opt/arthur-img-models/quantized"
-
-# NVFP4-quantized transformers saved by nvfp4_save.py (torchao NVFP4WeightOnlyConfig)
-NVFP4_ROOT = "/opt/arthur-img-models/nvfp4"
+# Headless ComfyUI sidecar for the HiDream O1 engine (arthur-comfy.service,
+# own venv, port 8188 — see hidream_comfy_bridge.py). The lab and the sidecar
+# share the card OUT-OF-PROCESS: VRAM hand-off goes through the bridge module
+# (_poke_comfy_free here, comfy_free in the bridge), never in-process tensors.
+IMGLAB_COMFY_URL = os.environ.get("IMGLAB_COMFY_URL", "http://127.0.0.1:8188")
 
 # ── Prompt-embedding disk cache ─────────────────────────────────────────────
 # prompt_embeds depend ONLY on the prompt text (and the fixed encoder) — they
@@ -161,6 +165,14 @@ _ENCODER_NEED_MB: dict[str, int] = {
     "flux2klein":   4000,  # Qwen3-4B — ~2.75 GiB staging + margin
     "flux2klein9b": 6000,  # Qwen3-8B — ~5.2 GiB staging; evicts a resident
                            # TTS model, spares the idle-contexts state
+    "zimage":       4000,  # Qwen3-4B (Z-Image's encoder) — same ~2.75 GiB
+                           # staging burst as flux2klein; encode runs with the
+                           # ~4.6 GiB GGUF transformer resident
+    "qwenimage":    8000,  # Qwen2.5-VL-7B-family bnb4 encoder — measured
+                           # 7.3 GiB resident (2026-09-08); the miss flow
+                           # unloads the ~12 GiB GGUF transformer first so
+                           # free VRAM ≈ idle (~14.2 GiB) and this gate only
+                           # guards the case where a TTS model is resident
 }
 
 
@@ -206,6 +218,11 @@ def _ensure_klein_encoder(pipe: Any, engine_key: str) -> None:
         return
     if engine_key == "flux2klein":
         repo, extra, label = "black-forest-labs/FLUX.2-klein-4B", {"subfolder": "text_encoder"}, "Qwen3 (klein-4B)"
+    elif engine_key == "zimage":
+        # Z-Image's encoder lives in-repo (Tongyi-MAI/Z-Image-Turbo subfolder
+        # "text_encoder") and is the SAME Qwen3-4B architecture — the NF4
+        # on-demand load + encode + park flow is identical to the klein path.
+        repo, extra, label = "Tongyi-MAI/Z-Image-Turbo", {"subfolder": "text_encoder"}, "Qwen3-4B (Z-Image)"
     else:
         repo, extra, label = "Qwen/Qwen3-8B", {}, "Qwen3-8B"
     from transformers import AutoModel, BitsAndBytesConfig
@@ -292,22 +309,6 @@ def _park_klein_encoder(pipe) -> None:
 # GGUF file catalogue
 # ---------------------------------------------------------------------------
 
-# (repo_id, filename_in_repo)  — for flat-layout repos (SD35)
-_SD35_GGUF: dict[str, tuple[str, str]] = {
-    "Q4_0": ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q4_0.gguf"),
-    "Q5_0": ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q5_0.gguf"),
-    "Q8_0": ("city96/stable-diffusion-3.5-large-gguf", "sd3.5_large-Q8_0.gguf"),
-}
-
-# Wan has HighNoise (=transformer) and LowNoise (=transformer_2) sub-directories
-def _wan_gguf(variant: str, noise: str, quant: str) -> tuple[str, str]:
-    """Return (repo_id, filename_in_repo) for a Wan GGUF file."""
-    # variant: "t2v" | "i2v"    noise: "HighNoise" | "LowNoise"
-    tag = "T2V" if variant == "t2v" else "I2V"
-    repo = f"QuantStack/Wan2.2-{tag}-A14B-GGUF"
-    fname = f"Wan2.2-{tag}-A14B-{noise}-{quant}.gguf"
-    return (repo, f"{noise}/{fname}")
-
 log = logging.getLogger("image_lab")
 
 # ---------------------------------------------------------------------------
@@ -319,7 +320,7 @@ def _ensure_gguf(repo_id: str, filename_in_repo: str, local_dir: str) -> str:
     Return the local path to a GGUF file.  If not present, downloads it from
     HuggingFace Hub into `local_dir` (preserving any sub-folder in the name).
     """
-    # filename_in_repo may include a sub-folder, e.g. "HighNoise/Wan2.2-...gguf"
+    # filename_in_repo may include a sub-folder; it is preserved on disk.
     local_path = os.path.join(local_dir, filename_in_repo)
     if os.path.isfile(local_path):
         log.info("GGUF cached locally: %s", local_path)
@@ -351,29 +352,35 @@ def _gguf_quant_config(dtype=None):
     return GGUFQuantizationConfig(compute_dtype=compute_dtype)
 
 
-def _load_nvfp4_transformer(model_key: str, subfolder: str):
-    """
-    Load a pre-saved NVFP4-quantized transformer from disk.
-    The transformer must have been saved by nvfp4_save.py first.
-    `model_key`  — e.g. "sd35", "wan-t2v", "wan-i2v"
-    `subfolder`  — "transformer" or "transformer_2"
-    """
-    import torch
-    from diffusers import AutoModel
+def _component_config_dir(repo_id: str, subfolder: str, engine_key: str) -> str:
+    """Local transformer-config dir for a GGUF single-file load.
 
-    path = os.path.join(NVFP4_ROOT, model_key, subfolder)
-    if not os.path.isfile(os.path.join(path, "config.json")):
-        raise RuntimeError(
-            f"NVFP4 transformer not found at {path}.\n"
-            f"Run nvfp4_save.py first to download and quantize it."
-        )
-    log.info("Loading NVFP4 transformer from %s …", path)
-    return AutoModel.from_pretrained(
-        path,
-        torch_dtype     = torch.bfloat16,
-        device_map      = "cuda",
-        use_safetensors = False,
+    GGUF files carry the raw weights but not always a diffusers-side
+    `config.json` the from_single_file machinery can auto-derive (the klein9b
+    GGUF needed an explicit hand-derived config for that reason). This helper
+    fetches the ARCHITECTURE's own config.json from the model repo into
+    GGUF_ROOT/<engine_key>/transformer_cfg/ and hands the dir to
+    `<Model>2DModel.from_single_file(..., config=cfg_dir)`. All ladder quants
+    share the one architecture → one config dir per engine.
+    """
+    import shutil as _shutil
+    from huggingface_hub import hf_hub_download
+    cfg_dir  = os.path.join(GGUF_ROOT, engine_key, "transformer_cfg")
+    target   = os.path.join(cfg_dir, "config.json")
+    if os.path.isfile(target):
+        return cfg_dir
+    os.makedirs(cfg_dir, exist_ok=True)
+    log.info("Fetching %s %s/config.json → %s …", repo_id, subfolder, cfg_dir)
+    fetched = hf_hub_download(
+        repo_id   = repo_id,
+        filename  = "config.json",
+        subfolder = subfolder,
+        token     = None,          # public repo — see the hf_hub 1.16.1 note
     )
+    # Copy out of the HF snapshot cache into the GGUF dir, atomically.
+    _shutil.copyfile(fetched, target + ".tmp")
+    os.replace(target + ".tmp", target)
+    return cfg_dir
 
 
 # ---------------------------------------------------------------------------
@@ -383,8 +390,13 @@ def _load_nvfp4_transformer(model_key: str, subfolder: str):
 def _unload_current():
     """Destroy the currently-loaded pipeline and free VRAM."""
     if STATE.active_engine is None:
+        # Nothing resident in-process — but the ComfyUI sidecar may still hold
+        # its ~8 GiB from before a lab restart, so hand the card back anyway.
+        _poke_comfy_free()
         return
     log.info("Unloading engine: %s (quant=%s)", STATE.active_engine, STATE.active_quant)
+    if STATE.active_engine == "hidream":
+        log.info("Unloading HiDream: releasing the ComfyUI sidecar's models …")
 
     # Explicitly move GPU components to CPU before dropping references.
     # PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True prevents the caching
@@ -398,28 +410,28 @@ def _unload_current():
         # staged on the card; the failure path must release them.
         'mllm', 'processor',
     ]
-    for ref in [STATE.loaded_model, STATE.loaded_pipe2]:
-        if ref is None:
-            continue
-        for attr in _gpu_attrs:
-            comp = getattr(ref, attr, None)
-            if comp is not None:
-                try:
-                    setattr(ref, attr, comp.to('cpu'))
-                except Exception:
-                    pass
-                try:
-                    setattr(ref, attr, None)
-                except Exception:
-                    pass
+    for attr in _gpu_attrs:
+        comp = getattr(STATE.loaded_model, attr, None)
+        if comp is not None:
+            try:
+                setattr(STATE.loaded_model, attr, comp.to('cpu'))
+            except Exception:
+                pass
+            try:
+                setattr(STATE.loaded_model, attr, None)
+            except Exception:
+                pass
 
     STATE.loaded_model  = None
-    STATE.loaded_pipe2  = None
     STATE.active_engine = None
     STATE.active_quant  = ""
     free_vram()
     for k in ENGINES:
         ENGINES[k].loaded = False
+    # Any non-hidream unload frees the card for whoever loads next — if that
+    # is the ComfyUI sidecar, hand it a clean card (its own models may also
+    # still be resident from an earlier hidream generation).
+    _poke_comfy_free()
 
 
 def _ensure_engine(key: str, quant: str = ""):
@@ -503,9 +515,16 @@ _VRAM_NEED_MB: dict[str, int] = {
     # (12500/14800) assumed the encoder was resident.
     "flux2klein":   10500,
     "flux2klein9b": 10500,
-    "sd35":         12500,  # GGUF transformer + shared encoders/VAE ≈ 11-12 GiB
-    "wan":          14800,  # two A14B transformers — needs the card to itself
-    "ideogram4":    12000,  # nf4 transformer + Qwen3-VL encoder + VAE; load peak ≈ 11 GiB
+    # ideogram4 (own pip package, bnb nf4): load-ready state is cheap — 5,953
+    # MiB used / 9,895 free after the loader's offloads (2026-09-08), so the
+    # gate governs LOAD and stays moderate. But CFG generation pulls the
+    # unconditional transformer AND encoder back onto the card → process peak
+    # 14,036 MiB (nvidia-smi) — the engine needs the whole card mid-gen
+    # (single-engine-at-a-time dispatch handles coexistence). Warm gen 236 s
+    # @1024²/28 steps; same-seed reruns differ (bnb nf4 matmul noise — an
+    # engine property, like ernie's nunchaku). Cold load ~500 s the first run
+    # after a cache heal (2×5.2 GB re-download); ~90 s thereafter.
+    "ideogram4":    12500,
     # SANA: whole bf16 pipeline incl. Gemma-2-2B encoder resident. Measured
     # 2026-09-07 (1024², both variants): resident 8,968 MiB, gen proc peak
     # 9,886 MiB, device peak 10,866 MiB. 11500 still sits between the
@@ -519,6 +538,34 @@ _VRAM_NEED_MB: dict[str, int] = {
     # 2026-09-07: 12,640 MiB (1024², 4 steps, TTS evicted) → 13200 clears it
     # yet still sits under the idle free state, so an idle TTS is left alone.
     "boogu":        13200,
+    # ── 2026-09-07 additions — all four "calibrate live" pending Phase E ──────
+    "zimage":       10500,  # GGUF Q4_K_M transformer + VAE + activations.
+                            # Measured 2026-09-08: 4.90 GiB CUDA at ready (16.3 s
+                            # load), warm gen 48 s @1024²/8 steps on diffusers
+                            # 0.40. Lazy Qwen3-4B encode staging on cache miss
+                            # (~10.6 GiB worst-case peak, klein-4B precedent).
+    "qwenimage":    14000,  # Q4_K_S only (see _QWENIMAGE_GGUF — higher tiers
+                            # OOM). Resident ~12.0 GiB torch-alloc at ready;
+                            # measured gen peak 12.19 GiB torch-alloc / 14,166
+                            # MiB driver-accounted (nvidia-smi) at 1024²/20
+                            # steps CFG 4.0 (2026-09-08) → the pipeline needs
+                            # the whole card: idle free ~14.2 GiB passes the
+                            # gate untouched, a resident TTS model trips it
+                            # and evicts. Cache-miss encodes run with the
+                            # transformer UNLOADED.
+    "hidream":      11500,  # Out-of-process ComfyUI sidecar (fp8_scaled ~8.1
+                            # GiB + pixel-space activations at ≤2048²). The
+                            # gate runs after _unload_current pokes comfy
+                            # /free, so it measures the true idle free state.
+                            # Calibrate live against the sidecar's peak.
+    "ernie":        13000,  # NVFP4 transformer 4.71 + bnb4 encoder 2.74 + VAE.
+                            # Measured 2026-09-08 on the 5060 Ti: load 31.2 s,
+                            # 7.18 GiB torch-alloc at ready BUT 12,418 MiB
+                            # process resident (nunchaku scratch sits outside
+                            # torch's allocator); card peak 12,993 MiB at
+                            # 1024²/8 steps CFG 1.0. 13000 forces a TTS
+                            # eviction when TTS holds ~10.8 GiB, passes the
+                            # idle state (~14.2 GiB) untouched.
 }
 
 def _ensure_vram_headroom(need_mb: int, key: str) -> None:
@@ -963,237 +1010,6 @@ def _probe_flux2klein9b():
 
 
 # ---------------------------------------------------------------------------
-# Stable Diffusion 3.5 Large
-# ---------------------------------------------------------------------------
-
-def _load_sd35(quant: str = "Q4_0"):
-    import torch
-    from diffusers import StableDiffusion3Pipeline, SD3Transformer2DModel
-
-    quant = quant or "Q4_0"
-    shared_path = f"{PREQ_ROOT}/sd35/shared"
-
-    if not os.path.isdir(shared_path):
-        raise RuntimeError(
-            f"SD 3.5 shared pipeline components not found at: {shared_path}\n"
-            f"Run preq_save.py first to create this directory."
-        )
-
-    t0 = time.time()
-
-    if quant == "nvfp4":
-        transformer = _load_nvfp4_transformer("sd35", "transformer")
-    else:
-        if quant not in _SD35_GGUF:
-            raise RuntimeError(
-                f"SD 3.5 quant '{quant}' not recognised. "
-                f"Valid options: {list(_SD35_GGUF)} + ['nvfp4']"
-            )
-        repo_id, fname = _SD35_GGUF[quant]
-        gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "sd35"))
-        log.info("Loading SD 3.5 Large transformer from GGUF — quant=%s …", quant)
-        transformer = SD3Transformer2DModel.from_single_file(
-            gguf_path,
-            quantization_config = _gguf_quant_config(),
-            torch_dtype         = torch.bfloat16,
-        )
-
-    pipe = StableDiffusion3Pipeline.from_pretrained(
-        shared_path,
-        transformer = transformer,
-        torch_dtype = torch.bfloat16,
-    )
-    if GPU_ONLY:
-        log.info("GPU-only mode enabled: moving SD 3.5 Large pipeline to CUDA …")
-        pipe = pipe.to("cuda")
-    else:
-        pipe.enable_model_cpu_offload()
-    pipe.vae.enable_slicing()
-
-    STATE.loaded_model  = pipe
-    STATE.active_engine = "sd35"
-    STATE.active_quant  = quant
-    ENGINES["sd35"].loaded = True
-    log.info("SD 3.5 Large ready (quant=%s) in %.1f s", quant, time.time() - t0)
-
-
-def _generate_sd35(params: dict) -> list[dict]:
-    import torch
-
-    pipe = STATE.loaded_model
-    seed = params.get("seed", -1)
-    if seed == -1:
-        seed = random_seed()
-
-    n = int(params.get("num_images", 1))
-    generator = [
-        torch.Generator(device="cpu").manual_seed(seed + i)
-        for i in range(n)
-    ]
-
-    result = pipe(
-        prompt              = params["prompt"],
-        negative_prompt     = params.get("negative_prompt", ""),
-        width               = int(params.get("width",  1024)),
-        height              = int(params.get("height", 1024)),
-        num_inference_steps = int(params.get("num_inference_steps", 28)),
-        guidance_scale      = float(params.get("guidance_scale", 4.5)),
-        num_images_per_prompt = n,
-        generator           = generator,
-    )
-
-    final_params = {**params, "seed": seed}
-    return save_images(result.images, "sd35", final_params)
-
-
-# ---------------------------------------------------------------------------
-# Wan2.2  (T2V + I2V)
-# ---------------------------------------------------------------------------
-
-_WAN_VALID_QUANTS = ("Q3_K_M", "Q4_K_M", "Q5_K_M", "Q8_0")
-
-
-def _load_wan(quant: str = "Q4_K_M"):
-    import torch
-    from diffusers import WanPipeline, WanImageToVideoPipeline
-    try:
-        from diffusers import WanTransformer3DModel
-    except ImportError:
-        from diffusers.models import WanTransformer3DModel
-
-    quant = quant or "Q4_K_M"
-    log.info("Loading Wan2.2 (%s) — quant=%s …", "NVFP4" if quant == "nvfp4" else "GGUF", quant)
-    t0 = time.time()
-
-    # Inner helper — only defined (and used) for GGUF paths
-    def _load_wan_gguf_transformer(variant: str, noise: str) -> Any:
-        repo_id, fname_in_repo = _wan_gguf(variant, noise, quant)
-        gguf_path = _ensure_gguf(
-            repo_id, fname_in_repo,
-            os.path.join(GGUF_ROOT, f"wan-{variant}"),
-        )
-        log.info("  Loading Wan %s %s transformer from %s …", variant.upper(), noise, gguf_path)
-        return WanTransformer3DModel.from_single_file(
-            gguf_path,
-            quantization_config = _gguf_quant_config(),
-            torch_dtype         = torch.bfloat16,
-        )
-
-    if quant == "nvfp4":
-        t2v_tf  = _load_nvfp4_transformer("wan-t2v", "transformer")
-        t2v_tf2 = _load_nvfp4_transformer("wan-t2v", "transformer_2")
-    else:
-        if quant not in _WAN_VALID_QUANTS:
-            raise RuntimeError(
-                f"Wan quant '{quant}' not recognised. "
-                f"Valid options: {_WAN_VALID_QUANTS} + ['nvfp4']"
-            )
-        t2v_tf  = _load_wan_gguf_transformer("t2v", "HighNoise")
-        t2v_tf2 = _load_wan_gguf_transformer("t2v", "LowNoise")
-
-    # T2V pipeline — HighNoise = transformer, LowNoise = transformer_2
-    t2v_shared = f"{PREQ_ROOT}/wan-t2v/shared"
-    if not os.path.isdir(t2v_shared):
-        raise RuntimeError(
-            f"Wan T2V shared pipeline components not found at: {t2v_shared}\n"
-            f"Run preq_save.py first to create this directory."
-        )
-    pipe_t2v = WanPipeline.from_pretrained(
-        t2v_shared,
-        transformer   = t2v_tf,
-        transformer_2 = t2v_tf2,
-        torch_dtype   = torch.bfloat16,
-    )
-    if GPU_ONLY:
-        log.info("GPU-only mode enabled: moving Wan T2V pipeline to CUDA …")
-        pipe_t2v = pipe_t2v.to("cuda")
-    else:
-        pipe_t2v.enable_model_cpu_offload()
-    pipe_t2v.vae.enable_slicing()
-
-    # I2V pipeline — same structure, separate weights
-    pipe_i2v = None
-    i2v_shared = f"{PREQ_ROOT}/wan-i2v/shared"
-    try:
-        if quant == "nvfp4":
-            i2v_tf  = _load_nvfp4_transformer("wan-i2v", "transformer")
-            i2v_tf2 = _load_nvfp4_transformer("wan-i2v", "transformer_2")
-        else:
-            i2v_tf  = _load_wan_gguf_transformer("i2v", "HighNoise")
-            i2v_tf2 = _load_wan_gguf_transformer("i2v", "LowNoise")
-        pipe_i2v = WanImageToVideoPipeline.from_pretrained(
-            i2v_shared,
-            transformer   = i2v_tf,
-            transformer_2 = i2v_tf2,
-            torch_dtype   = torch.bfloat16,
-        )
-        if GPU_ONLY:
-            log.info("GPU-only mode enabled: moving Wan I2V pipeline to CUDA …")
-            pipe_i2v = pipe_i2v.to("cuda")
-        else:
-            pipe_i2v.enable_model_cpu_offload()
-        pipe_i2v.vae.enable_slicing()
-    except Exception as exc:
-        log.warning("Wan I2V load failed (T2V still available): %s", exc)
-
-    STATE.loaded_model  = pipe_t2v
-    STATE.loaded_pipe2  = pipe_i2v
-    STATE.active_engine = "wan"
-    STATE.active_quant  = quant
-    ENGINES["wan"].loaded = True
-    log.info("Wan2.2 ready (quant=%s) in %.1f s", quant, time.time() - t0)
-
-
-def _generate_wan(params: dict) -> list[dict]:
-    import torch
-    from diffusers.utils import export_to_video
-
-    mode = params.get("mode", "t2v")
-    seed = params.get("seed", -1)
-    if seed == -1:
-        seed = random_seed()
-
-    fps       = int(params.get("fps", 16))
-    n_frames  = int(params.get("num_frames", 49))
-    res_str   = params.get("resolution", "720p")
-    width, height = (1280, 720) if res_str == "720p" else (854, 480)
-
-    generator = torch.Generator(device="cpu").manual_seed(seed)
-
-    if mode == "i2v" and STATE.loaded_pipe2 is not None:
-        pipe = STATE.loaded_pipe2
-        ref  = _load_ref_image(params.get("reference_image"))
-        if ref is None:
-            raise ValueError("I2V mode requires a reference_image upload.")
-        ref_resized = ref.resize((width, height))
-        output = pipe(
-            image               = ref_resized,
-            prompt              = params["prompt"],
-            negative_prompt     = params.get("negative_prompt", ""),
-            num_frames          = n_frames,
-            guidance_scale      = float(params.get("guidance_scale", 5.0)),
-            generator           = generator,
-        )
-    else:
-        pipe   = STATE.loaded_model
-        output = pipe(
-            prompt              = params["prompt"],
-            negative_prompt     = params.get("negative_prompt", ""),
-            height              = height,
-            width               = width,
-            num_frames          = n_frames,
-            guidance_scale      = float(params.get("guidance_scale", 5.0)),
-            generator           = generator,
-        )
-
-    frames      = output.frames[0]
-    final_params = {**params, "seed": seed, "fps": fps,
-                    "width": width, "height": height}
-    entry = save_video(frames, fps, "wan", final_params)
-    return [entry]
-
-
-# ---------------------------------------------------------------------------
 # Ideogram 4
 # ---------------------------------------------------------------------------
 
@@ -1417,6 +1233,691 @@ def _probe_boogu():
 
 
 # ---------------------------------------------------------------------------
+# ComfyUI sidecar hand-off (HiDream O1 — out-of-process engine)
+# ---------------------------------------------------------------------------
+
+def _poke_comfy_free() -> None:
+    """Ask the ComfyUI sidecar to release its models from VRAM (best effort).
+
+    Runs on EVERY lab unload (both branches of _unload_current): the lab and
+    the sidecar share the card across processes, so whichever engine loads
+    next gets a clean card. Cheap when the sidecar is idle (it unloads
+    nothing); a no-op when comfy is down (debug-log only — it fires on every
+    unload, so failures must stay quiet).
+    """
+    try:
+        import importlib
+        bridge = importlib.import_module("hidream_comfy_bridge")
+        bridge.comfy_free()
+    except Exception as exc:
+        log.debug("ComfyUI sidecar free skipped (%s)", exc)
+
+
+# ---------------------------------------------------------------------------
+# Z-Image Turbo  (GGUF ladder via jayn7 + lazy NF4 Qwen3-4B encoder)
+# ---------------------------------------------------------------------------
+
+# GGUF quant ladder — all tiers share one architecture-derived config dir
+# (from Tongyi's own transformer/config.json via _component_config_dir); only
+# the file differs. Quant rides the API `quant` form field; "" resolves to
+# the loader default (Q4_K_M — the quality/speed sweet spot on the 16 GB
+# card; Q8_0 is the near-lossless ceiling and still fits).
+_ZIMAGE_GGUF: dict[str, tuple[str, str]] = {
+    "Q3_K_S": ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q3_K_S.gguf"),
+    "Q3_K_M": ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q3_K_M.gguf"),
+    "Q4_K_S": ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q4_K_S.gguf"),
+    "Q4_K_M": ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q4_K_M.gguf"),
+    "Q5_K_S": ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q5_K_S.gguf"),
+    "Q5_K_M": ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q5_K_M.gguf"),
+    "Q6_K":   ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q6_K.gguf"),
+    "Q8_0":   ("jayn7/Z-Image-Turbo-GGUF", "z_image_turbo-Q8_0.gguf"),
+}
+
+
+def _load_zimage(quant: str = "Q4_K_M"):
+    import torch
+    from diffusers import ZImagePipeline
+    from diffusers.models import AutoencoderKL, ZImageTransformer2DModel
+    from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+    from transformers import AutoTokenizer
+
+    if not GPU_ONLY:
+        raise RuntimeError(
+            "Z-Image Turbo only has a GPU-only path (GGUF transformer + lazy "
+            "NF4 encoder) — no CPU/offload fallback was written for it.")
+    use_quant = quant or "Q4_K_M"
+    if use_quant not in _ZIMAGE_GGUF:
+        raise RuntimeError(
+            f"Z-Image Turbo quant '{use_quant}' not recognised. "
+            f"Valid options: {list(_ZIMAGE_GGUF)}"
+        )
+    t0 = time.time()
+    # Public repos (jayn7 GGUF + Tongyi components) — token=None per the
+    # hf_hub 1.16.1 semantics documented in the klein loaders.
+    repo_id, fname = _ZIMAGE_GGUF[use_quant]
+    repo = ENGINES["zimage"].hf_repo       # Tongyi-MAI/Z-Image-Turbo
+
+    log.info("Loading Z-Image Turbo transformer from GGUF — quant=%s …", use_quant)
+    gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "zimage"))
+    transformer = ZImageTransformer2DModel.from_single_file(
+        gguf_path,
+        config              = _component_config_dir(repo, "transformer", "zimage"),
+        quantization_config = _gguf_quant_config(),
+        torch_dtype         = torch.bfloat16,
+    ).to("cuda")
+
+    # Text encoder loads LAZILY (same pattern as the klein engines): Z-Image's
+    # encoder is the in-repo Qwen3-4B, and prompt embeddings are cached to
+    # disk (_zimage_prompt_embeds), so the NF4 encoder only loads for prompts
+    # never seen before and is parked again afterwards. Resident set without
+    # it: GGUF transformer (~4.6 GiB @ Q4_K_M) + VAE.
+    text_encoder = None
+
+    log.info("Loading Z-Image Turbo tokenizer / VAE / scheduler …")
+    tokenizer = AutoTokenizer.from_pretrained(repo, subfolder="tokenizer")
+    vae       = AutoencoderKL.from_pretrained(
+        repo, subfolder="vae", torch_dtype=torch.bfloat16, token=None,
+    )
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+        repo, subfolder="scheduler", torch_dtype=torch.bfloat16, token=None,
+    )
+
+    log.info("Assembling Z-Image Turbo pipeline …")
+    pipe = ZImagePipeline(
+        scheduler    = scheduler,
+        vae          = vae,
+        text_encoder = text_encoder,
+        tokenizer    = tokenizer,
+        transformer  = transformer,
+    ).to("cuda")
+    if hasattr(pipe.vae, "enable_slicing"):
+        pipe.vae.enable_slicing()
+
+    # See the klein loaders: the pipeline resolves its execution device from
+    # the FIRST module's location, which falls back to self.device and reads
+    # the __init__ signature order (text_encoder first). With precomputed
+    # embeds the encoder is never called during generation, so the pipeline
+    # genuinely executes on cuda — cement it to keep latent placement sane.
+    pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+
+    # Store the CALLER's quant verbatim ("" = default) — _ensure_engine
+    # compares active_quant against the request string.
+    STATE.loaded_model       = pipe
+    STATE.active_engine      = "zimage"
+    STATE.active_quant       = quant
+    ENGINES["zimage"].loaded = True
+    log.info("Z-Image Turbo ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
+
+
+def _zimage_prompt_embeds(pipe, text: str):
+    """Return Z-Image's masked prompt embedding for `text` (CUDA tensor).
+
+    Cache hit → embeds from disk, the Qwen3-4B encoder never loads. Cache
+    miss → lazy-load the encoder (_ensure_klein_encoder's zimage branch),
+    encode through the pipeline's own chat-template encode_prompt (returns a
+    LIST of per-prompt attention-masked tensors — Z-Image's transformer takes
+    variable-length rows, unlike the padded-batch klein/FLUX embeds), save
+    the single masked row, then park the encoder (see _klein_prompt_embeds
+    for why encode runs under no_grad).
+    """
+    import torch
+    path = _embed_cache_path("zimage", text)
+    cached = _embed_cache_load(path)
+    if cached is not None:
+        log.info("Z-Image prompt-embedding cache hit — skipping the text encoder")
+        return cached.to("cuda")
+    _ensure_encoder_headroom("zimage")
+    _ensure_klein_encoder(pipe, "zimage")
+    with torch.no_grad():
+        embeds, _negative = pipe.encode_prompt(
+            prompt=[text],
+            device="cuda",
+            do_classifier_free_guidance=False,   # distilled — no CFG encode
+        )
+    emb = embeds[0]                               # [masked_len, 2560] bf16
+    log.info("Z-Image encoded %d-token prompt (Qwen3-4B, NF4) → embed cache",
+             emb.shape[0])
+    _embed_cache_save(path, emb)
+    _park_klein_encoder(pipe)
+    return emb.to("cuda")
+
+
+def _generate_zimage(params: dict) -> list[dict]:
+    import torch
+
+    pipe = STATE.loaded_model
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+
+    # Step-distilled turbo: 8 steps is the training target; clamp instead of
+    # erroring (mirrors the _generate_sana clamp) — a caller pasting 20 would
+    # otherwise silently get an invalid schedule.
+    steps = int(params.get("num_inference_steps", 8))
+    if steps > 8:
+        log.info("Z-Image Turbo steps=%d exceeds the distilled 1-8 range — "
+                 "clamping to 8", steps)
+        steps = 8
+    steps = max(1, steps)
+    n = int(params.get("num_images", 1))
+
+    emb = _zimage_prompt_embeds(pipe, params["prompt"])
+
+    images = []
+    for i in range(n):
+        # Per-image loop with seed+i (single generator per call) — the
+        # pipeline's num_images semantics differ per model; a loop is the
+        # deterministic common denominator (see the qwenimage/ernie notes).
+        generator = torch.Generator(device="cpu").manual_seed(seed + i)
+        result = pipe(
+            prompt_embeds       = [emb],   # masked row(s); prompt must be None
+            width               = int(params.get("width",  1024)),
+            height              = int(params.get("height", 1024)),
+            num_inference_steps = steps,
+            guidance_scale      = 0.0,     # distilled — CFG forced off
+            generator           = generator,
+        )
+        images.append(result.images[0])
+
+    final_params = {**params, "seed": seed}
+    return save_images(images, "zimage", final_params)
+
+
+def _probe_zimage():
+    try:
+        from diffusers import ZImagePipeline                    # noqa: F401
+        from diffusers.models import ZImageTransformer2DModel   # noqa: F401
+        ENGINES["zimage"].available = True
+    except Exception as exc:
+        ENGINES["zimage"].available = False
+        ENGINES["zimage"].error     = str(exc)
+        log.warning("Z-Image Turbo unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Qwen-Image 2512  (GGUF via unsloth; encoder encodes WITHOUT the transformer
+# resident — the ~12 GiB Q4_K_S GGUF and the ~7.3 GiB bnb4 encoder never
+# coexist on the 16 GB card)
+# ---------------------------------------------------------------------------
+
+# Q4_K_S is the ONLY tier that fits this card — verified live 2026-09-08:
+# Q4_K_M (12.34 GB) loads to a ~14.2 GiB process floor on a 15.48 GiB card
+# that already hosts ~1.2 GiB of TTS-container CUDA contexts — its load
+# OOMs at the final pipeline .to("cuda") and generation is unreachable
+# (measured 3×, standalone and in-lab). Q4_K_S (~11.5 GB) loads and
+# generates at native CFG 4.0, 1024²/20 steps, peak 12.19 GiB torch-alloc.
+# Q5_K_S/Q5_K_M sit between the two and have no path. Higher tiers removed
+# 2026-09-08; keep the dict shape (loader + UI enumerate it) in case a
+# smaller Qwen-Image sibling ever ships.
+_QWENIMAGE_GGUF: dict[str, tuple[str, str]] = {
+    "Q4_K_S": ("unsloth/Qwen-Image-2512-GGUF", "qwen-image-2512-Q4_K_S.gguf"),
+}
+
+# The full in-repo Qwen2.5-VL-family encoder is ~16.6 GB bf16 — never fits.
+# This is the pre-quantised bnb-4bit mirror of the same text encoder (hidden
+# states identical for our purposes: Qwen-Image only reads hidden_states[-1]).
+_QWENIMAGE_ENCODER_REPO = "OzzyGT/Qwen-Image-2512-bnb-4bit-text-encoder"
+
+# The Qwen-Image prompt template + prefix-drop the diffusers pipeline
+# hardcodes (verified against diffusers main, 2026-09-07). Encode replicates
+# QwenImagePipeline._get_qwen_prompt_embeds statically — template-wrap →
+# tokenize at 1024+34 → hidden_states[-1] → attention-mask extraction →
+# drop the 34 template-prefix tokens → zero-pad stack. The pipeline's own
+# __call__ re-slices [:1024], which the drop above already guarantees.
+_QWENIMAGE_PROMPT_TEMPLATE = (
+    "<|im_start|>system\nDescribe the image by detailing the color, shape, "
+    "size, texture, quantity, text, spatial relationships of the objects and "
+    "background:<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n"
+    "<|im_start|>assistant\n"
+)
+_QWENIMAGE_TEMPLATE_DROP_IDX = 34
+
+# The tokenizer is tiny and CPU-only — keep one around for the encode-without-
+# transformer path (the pipeline object is destroyed while the encoder is in
+# VRAM). Loaded by _load_qwenimage; None before the first load.
+_QWENIMAGE_TOKENIZER = None
+
+
+def _qwenimage_encode_texts(encoder, tokenizer, texts: list, device, dtype):
+    """Static replication of QwenImagePipeline._get_qwen_prompt_embeds.
+
+    Returns the zero-padded stack (B, ≤1024, hidden) + attention mask; the
+    pipeline's encode_prompt turns an all-ones mask into None, so a single
+    unpadded text gets mask=None downstream (kept for parity either way).
+    """
+    import torch
+    wrapped = [_QWENIMAGE_PROMPT_TEMPLATE.format(t) for t in texts]
+    tokens = tokenizer(
+        wrapped,
+        max_length = 1024 + _QWENIMAGE_TEMPLATE_DROP_IDX,
+        padding    = True,
+        truncation = True,
+        return_tensors = "pt",
+    ).to(device)
+    hidden = encoder(
+        input_ids       = tokens.input_ids,
+        attention_mask  = tokens.attention_mask,
+        output_hidden_states = True,
+    ).hidden_states[-1]
+    mask = tokens.attention_mask.bool()
+    valid_lengths = mask.sum(dim=1)
+    rows = torch.split(hidden[mask], valid_lengths.tolist(), dim=0)
+    rows = [r[_QWENIMAGE_TEMPLATE_DROP_IDX:] for r in rows]  # drop prefix
+    max_len = max(r.size(0) for r in rows)
+    prompt_embeds = torch.stack([
+        torch.cat([r, r.new_zeros(max_len - r.size(0), r.size(1))])
+        for r in rows
+    ])
+    prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+    return prompt_embeds, mask
+
+
+def _qwenimage_load_encoder():
+    """Load the bnb-4bit Qwen2.5-VL text encoder onto CUDA.
+
+    The OzzyGT repo is a full ForConditionalGeneration checkpoint
+    (language_model.* / lm_head keys + vision tower). Loading it via
+    AutoModel would build the BASE Qwen2_5_VLModel, whose key layout can
+    never match — every weight comes back UNEXPECTED/MISSING (random init,
+    then a 'normal_kernel_cuda' not implemented for 'Byte' crash on the
+    mismatched 4-bit dispatch; measured ~2 min wasted + a ~7.7 GiB random
+    model resident through the retry). Load the declared architecture
+    directly (12 s, 729 shards, ~7.3 GiB resident — measured 2026-09-08).
+    """
+    import torch
+    from transformers import Qwen2_5_VLForConditionalGeneration
+    return Qwen2_5_VLForConditionalGeneration.from_pretrained(
+        _QWENIMAGE_ENCODER_REPO,
+        device_map    = "cuda",
+        torch_dtype   = torch.bfloat16,
+    )
+
+
+def _load_qwenimage(quant: str = "Q4_K_S"):
+    import torch
+    from diffusers import QwenImagePipeline
+    from diffusers.models import (AutoencoderKLQwenImage,
+                                  QwenImageTransformer2DModel)
+    from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+    from transformers import Qwen2Tokenizer
+
+    if not GPU_ONLY:
+        raise RuntimeError(
+            "Qwen-Image 2512 only has a GPU-only path (GGUF transformer + "
+            "bnb4 encoder) — no CPU/offload fallback was written for it.")
+    use_quant = quant or "Q4_K_S"
+    if use_quant not in _QWENIMAGE_GGUF:
+        raise RuntimeError(
+            f"Qwen-Image 2512 quant '{use_quant}' not recognised. "
+            f"Valid options: {list(_QWENIMAGE_GGUF)}"
+        )
+    t0 = time.time()
+    repo_id, fname = _QWENIMAGE_GGUF[use_quant]
+    repo = ENGINES["qwenimage"].hf_repo    # Qwen/Qwen-Image-2512
+
+    log.info("Loading Qwen-Image 2512 transformer from GGUF — quant=%s …",
+             use_quant)
+    gguf_path = _ensure_gguf(repo_id, fname, os.path.join(GGUF_ROOT, "qwenimage"))
+    transformer = QwenImageTransformer2DModel.from_single_file(
+        gguf_path,
+        config              = _component_config_dir(repo, "transformer", "qwenimage"),
+        quantization_config = _gguf_quant_config(),
+        torch_dtype         = torch.bfloat16,
+    ).to("cuda")
+
+    # Text encoder NEVER loads in-process with the transformer resident —
+    # cache-miss encodes run with the pipeline unloaded (_generate_qwenimage
+    # unloads, encodes via _qwenimage_load_encoder, saves, reloads).
+    text_encoder = None
+
+    log.info("Loading Qwen-Image 2512 tokenizer / VAE / scheduler …")
+    # Slow Qwen2Tokenizer — the Qwen-Image-2512 repo ships no tokenizer.json
+    # (verified 2026-09-07); this is exactly what the pipeline itself loads.
+    tokenizer = Qwen2Tokenizer.from_pretrained(repo, subfolder="tokenizer")
+    global _QWENIMAGE_TOKENIZER
+    _QWENIMAGE_TOKENIZER = tokenizer
+    # MUST load via the concrete AutoencoderKLQwenImage class: the 2512
+    # repo's vae/config.json is Cosmos-style (base_dim/dim_mult keys, no
+    # in_channels/block_out_channels), and generic AutoencoderKL.from_pretrained
+    # does NOT dispatch on the config's _class_name — it builds the base
+    # class from defaults and dies on decoder.conv_in.bias 64-vs-384
+    # (verified 2026-09-08 on diffusers 0.38.0).
+    vae       = AutoencoderKLQwenImage.from_pretrained(
+        repo, subfolder="vae", torch_dtype=torch.bfloat16, token=None,
+    )
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+        repo, subfolder="scheduler", torch_dtype=torch.bfloat16, token=None,
+    )
+
+    log.info("Assembling Qwen-Image 2512 pipeline …")
+    pipe = QwenImagePipeline(
+        scheduler    = scheduler,
+        vae          = vae,
+        text_encoder = text_encoder,
+        tokenizer    = tokenizer,
+        transformer  = transformer,
+    ).to("cuda")
+    for enable in ("enable_slicing", "enable_tiling"):   # 1536² decode safety
+        if hasattr(pipe.vae, enable):
+            getattr(pipe.vae, enable)()
+
+    # See the klein loaders — with a None text encoder the pipeline's
+    # _execution_device can fall back to a cpu reading of the signature
+    # order; precomputed embeds mean generation never calls the encoder, so
+    # cement cuda.
+    pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+
+    # Store the CALLER's quant verbatim ("" = default), never the resolved
+    # default — see the klein9b loader for the reload-loop rationale.
+    STATE.loaded_model       = pipe
+    STATE.active_engine      = "qwenimage"
+    STATE.active_quant       = quant
+    ENGINES["qwenimage"].loaded = True
+    log.info("Qwen-Image 2512 ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
+
+
+def _generate_qwenimage(params: dict) -> list[dict]:
+    import torch
+
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+    steps = int(params.get("num_inference_steps", 20))
+    steps = max(1, min(steps, 50))
+    guidance = float(params.get("guidance_scale", 4.0))
+    n = int(params.get("num_images", 1))
+    quant = params.get("quant", "")
+
+    # Prompts to encode: positive always; the negative (CFG side) only when
+    # true_cfg_scale > 1 — at guidance ≤ 1 the pipeline warns and ignores it,
+    # and encoding it would be wasted VRAM churn. The negative default "" is
+    # a constant, so its cache file is written once per engine.
+    need_neg = guidance > 1
+    to_encode: dict = {"prompt": params["prompt"]}
+    if need_neg:
+        to_encode["negative"] = params.get("negative_prompt", "") or ""
+
+    # ── Embedding cache ─────────────────────────────────────────────────────
+    # Hit → embeds from disk, encoder never loads. Miss → the cache-miss
+    # flow runs the encoder with the ~12 GiB Q4_K_S GGUF transformer
+    # UNLOADED: the two never coexist on the 16 GB card. That means the
+    # whole pipeline reloads afterwards (~15-25 s GGUF read) — paid once per
+    # (quant, prompt).
+    embeds: dict = {}
+    missing: list = []
+    for label, text in to_encode.items():
+        cached = _embed_cache_load(_embed_cache_path("qwenimage", text))
+        if cached is not None:
+            embeds[label] = cached
+        else:
+            missing.append((label, text))
+    if missing:
+        log.info("Qwen-Image prompt-embedding cache miss (%d prompt(s)) — "
+                 "unloading the transformer to encode …", len(missing))
+        _unload_current()
+        _ensure_encoder_headroom("qwenimage")
+        encoder = _qwenimage_load_encoder()
+        try:
+            for label, text in missing:
+                texts = [text]
+                # no_grad is MANDATORY here: without it the output row keeps
+                # the autograd graph alive, and the graph's leaf refs hold the
+                # encoder's ~5.5 GiB of weights past `del encoder` — the reload
+                # gate then measures ~8.4 GiB free and the load 503s (measured
+                # 2026-09-08; a gate pass would OOM the gen instead).
+                with torch.no_grad():
+                    encoded, _mask = _qwenimage_encode_texts(
+                        encoder, _QWENIMAGE_TOKENIZER, texts,
+                        device="cuda", dtype=torch.bfloat16)
+                # Single-text batch → keep the (1, ≤1024, hidden) row. The
+                # all-ones mask collapses to None inside the pipeline.
+                row = encoded[0]
+                _embed_cache_save(_embed_cache_path("qwenimage", text), row)
+                embeds[label] = row
+        finally:
+            del encoder
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        log.info("Qwen-Image encode done — reloading the transformer …")
+        _ensure_engine("qwenimage", quant)
+    pipe = STATE.loaded_model
+
+    images = []
+    for i in range(n):
+        generator = torch.Generator(device="cpu").manual_seed(seed + i)
+        kw = dict(
+            prompt              = None,     # precomputed embeds — no re-encode
+            prompt_embeds       = embeds["prompt"].to("cuda").unsqueeze(0),
+            negative_prompt     = None,
+            negative_prompt_embeds = (embeds["negative"].to("cuda").unsqueeze(0)
+                                      if need_neg else None),
+            width               = int(params.get("width",  1024)),
+            height              = int(params.get("height", 1024)),
+            num_inference_steps = steps,
+            true_cfg_scale      = guidance,
+            generator           = generator,
+        )
+        result = pipe(**kw)
+        images.append(result.images[0])
+
+    final_params = {**params, "seed": seed}
+    return save_images(images, "qwenimage", final_params)
+
+
+def _probe_qwenimage():
+    try:
+        from diffusers import QwenImagePipeline                     # noqa: F401
+        from diffusers.models import QwenImageTransformer2DModel    # noqa: F401
+        ENGINES["qwenimage"].available = True
+    except Exception as exc:
+        ENGINES["qwenimage"].available = False
+        ENGINES["qwenimage"].error     = str(exc)
+        log.warning("Qwen-Image 2512 unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# ERNIE-Image-Turbo  (Nunchaku-Lite NVFP4 primary, fp8 mirror fallback)
+# ---------------------------------------------------------------------------
+
+# Primary: Baidu's pre-quantised suite — NVFP4 transformer (sm_120-native via
+# nunchaku-lite) + bnb-4bit Mistral3 encoder + Flux2 VAE, ~9.6 GB total,
+# measured 9.572 GB peak at 1024²/8 steps on an RTX PRO 6000. Fallback (load
+# failure — e.g. no nunchaku backend in this venv): the fp8 diffusers-layout
+# mirror of the same transformer/encoder pair. The bf16 original (baidu)
+# does not fit alongside its encoder and is deliberately NOT in the ladder.
+_ERNIE_FALLBACK_REPO = "rootlocalghost/ERNIE-Image-Turbo-FP8"
+
+
+def _load_ernie(quant: str = ""):
+    import gc as _gc
+    import torch
+    from diffusers import ErnieImagePipeline
+
+    if not GPU_ONLY:
+        raise RuntimeError(
+            "ERNIE-Image-Turbo only has a GPU-only path (NVFP4/fp8 pipeline) "
+            "— no CPU/offload fallback was written for it.")
+    t0 = time.time()
+    # quant is accepted for interface parity but unused — the ladder is
+    # internal (repo fallback), not user-selectable. The VRAM headroom gate
+    # ran before this loader (via _ensure_engine), so _VRAM_NEED_MB governs.
+    repo = ENGINES["ernie"].hf_repo       # lite-infer nunchaku suite
+    try:
+        pipe = ErnieImagePipeline.from_pretrained(
+            repo, torch_dtype=torch.bfloat16, token=None,
+        )
+    except Exception as exc:
+        log.warning("ERNIE primary repo %s failed to load (%s) — "
+                    "falling back to fp8 mirror %s", repo, exc,
+                    _ERNIE_FALLBACK_REPO)
+        pipe = ErnieImagePipeline.from_pretrained(
+            _ERNIE_FALLBACK_REPO, torch_dtype=torch.bfloat16, token=None,
+        )
+
+    # Drop the PE prompt-enhancer (Ministral3-3B, ~7.66 GB bf16) BEFORE any
+    # .to("cuda") — the lab generates from plain prompts and the pipeline
+    # gates PE on self.pe being not None (it is in _optional_components), so
+    # a None pe is fully supported. Saves the load path from ever staging it.
+    pe = getattr(pipe, "pe", None)
+    if pe is not None:
+        log.info("ERNIE: dropping pe (Ministral3-3B prompt enhancer, ~7.7 GB) "
+                 "— lab generation runs plain-prompt, use_pe path disabled")
+        try:
+            pipe.pe = None
+        except Exception:
+            pass
+        del pe
+        _gc.collect()
+
+    log.info("Moving ERNIE-Image-Turbo pipeline to CUDA …")
+    pipe = pipe.to("cuda")
+
+    STATE.loaded_model       = pipe
+    STATE.active_engine      = "ernie"
+    STATE.active_quant       = quant
+    ENGINES["ernie"].loaded  = True
+    log.info("ERNIE-Image-Turbo ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
+
+
+def _generate_ernie(params: dict) -> list[dict]:
+    import torch
+
+    pipe = STATE.loaded_model
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+
+    # Distilled turbo: 8 steps / CFG 1.0 (do_classifier_free_guidance is
+    # guidance > 1.0 → false at exactly 1.0, so no negative encode happens
+    # and use_pe needs no pe). Fixed by the schema (min=max); clamp anyway so
+    # a raw-API caller can't ask for an invalid schedule.
+    steps = int(params.get("num_inference_steps", 8))
+    if steps != 8:
+        log.info("ERNIE steps=%d differs from the distilled 8-step schedule — "
+                 "forcing 8", steps)
+        steps = 8
+    guidance = float(params.get("guidance_scale", 1.0))
+    if guidance != 1.0:
+        log.info("ERNIE guidance=%s differs from the distilled CFG-1.0 "
+                 "schedule — forcing 1.0", guidance)
+        guidance = 1.0
+    n = int(params.get("num_images", 1))
+
+    images = []
+    for i in range(n):
+        generator = torch.Generator(device="cpu").manual_seed(seed + i)
+        result = pipe(
+            prompt               = params["prompt"],
+            width                = int(params.get("width",  1024)),
+            height               = int(params.get("height", 1024)),
+            num_inference_steps  = steps,
+            guidance_scale       = guidance,
+            generator            = generator,
+        )
+        images.append(result.images[0])
+
+    final_params = {**params, "seed": seed}
+    return save_images(images, "ernie", final_params)
+
+
+def _probe_ernie():
+    try:
+        # ErnieImagePipeline itself raises ImportError on transformers<5.0.0
+        # (Ministral3ForCausalLM gate) — the probe surfaces that clearly.
+        from diffusers import ErnieImagePipeline  # noqa: F401
+        ENGINES["ernie"].available = True
+    except Exception as exc:
+        ENGINES["ernie"].available = False
+        ENGINES["ernie"].error     = str(exc)
+        log.warning("ERNIE-Image-Turbo unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# HiDream O1-Dev  (OUT-OF-PROCESS via the ComfyUI sidecar + bridge)
+# ---------------------------------------------------------------------------
+
+# Nothing diffusers-side: the Dev fp8_scaled checkpoint (~8.1 GB) runs inside
+# the headless ComfyUI sidecar (own venv, arthur-comfy.service, port 8188)
+# with the official Dev template graph (28 steps, cfg 1.0 + 7.6 noise scale).
+# The lab delegates the whole graph to hidream_comfy_bridge.py and only
+# collects the output PNGs. active_engine is still set (loaded_model stays
+# None) so the idle-eviction path releases the sidecar's VRAM via the
+# _unload_current comfy poke — see _load_hidream.
+
+def _hidream_make_headroom(need_mb: int) -> int:
+    """Bridge callback: evict the TTS containers, return free VRAM in MiB."""
+    free_mb = _evict_tts_engines()
+    if free_mb < need_mb:
+        raise RuntimeError(
+            f"HiDream (ComfyUI sidecar) needs ~{need_mb} MiB free VRAM; only "
+            f"{free_mb} MiB after evicting the TTS engine containers.")
+    return free_mb
+
+
+def _load_hidream(quant: str = ""):
+    # Thin loader — everything happens in the sidecar. Set active_engine so
+    # the dispatcher's warm-path check skips reloads between hidream requests
+    # and the idle-eviction loop (keyed on active_engine) can release comfy's
+    # VRAM; loaded_model stays None (no in-process pipeline exists to unload).
+    STATE.loaded_model  = None
+    STATE.active_engine = "hidream"
+    STATE.active_quant  = quant
+    ENGINES["hidream"].loaded = True
+    log.info("HiDream delegated to the ComfyUI sidecar (%s)", IMGLAB_COMFY_URL)
+
+
+def _generate_hidream(params: dict) -> list[dict]:
+    import importlib
+    bridge = importlib.import_module("hidream_comfy_bridge")
+
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+    steps = int(params.get("num_inference_steps", 28))   # Dev is 28 fixed
+    if steps != 28:
+        log.info("HiDream steps=%d differs from the Dev 28-step sampler — "
+                 "forcing 28", steps)
+        steps = 28
+    n = int(params.get("num_images", 1))
+
+    images = []
+    for i in range(n):
+        images.append(bridge.generate(
+            prompt        = params["prompt"],
+            width         = int(params.get("width",  1024)),
+            height        = int(params.get("height", 1024)),
+            seed          = seed + i,
+            steps         = steps,
+            make_headroom = _hidream_make_headroom,
+        ))
+
+    final_params = {**params, "seed": seed}
+    return save_images(images, "hidream", final_params)
+
+
+def _probe_hidream():
+    try:
+        import importlib
+        bridge = importlib.import_module("hidream_comfy_bridge")
+        result = bridge.probe()
+        if result.get("available"):
+            ENGINES["hidream"].available = True
+            ENGINES["hidream"].error     = ""
+        else:
+            ENGINES["hidream"].available = False
+            ENGINES["hidream"].error     = result.get("error", "sidecar unreachable")
+            log.warning("HiDream unavailable: %s", ENGINES["hidream"].error)
+    except Exception as exc:
+        ENGINES["hidream"].available = False
+        ENGINES["hidream"].error     = str(exc)
+        log.warning("HiDream unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Availability probe (called at startup)
 # ---------------------------------------------------------------------------
 
@@ -1427,56 +1928,13 @@ def probe_availability():
     """
     _probe_flux2klein()
     _probe_flux2klein9b()
-    _probe_sd35()
-    _probe_wan()
     _probe_ideogram4()
     _probe_sana()
     _probe_boogu()
-    _strip_missing_nvfp4_options()
-
-
-def _nvfp4_shard_size_bytes(transformer_dir: str) -> int:
-    """Return total bytes of all .bin shard files under transformer_dir."""
-    total = 0
-    for fname in os.listdir(transformer_dir) if os.path.isdir(transformer_dir) else []:
-        if fname.endswith(".bin"):
-            total += os.path.getsize(os.path.join(transformer_dir, fname))
-    return total
-
-
-def _strip_missing_nvfp4_options():
-    """Remove the nvfp4 quant choice for any engine whose saved files are missing or corrupted.
-
-    A save is considered corrupted if the total .bin shard size is < MIN_SHARD_BYTES,
-    which catches the meta-tensor bug from nvfp4_save.py when device_map='auto' caused
-    disk offloading and most weights were serialised as empty meta tensors.
-    """
-    # Minimum total .bin shard size (bytes) to consider a save valid.
-    # Corrupted SD3.5 save had 530 MB (only non-meta tensors); valid NVFP4 saves are ≥ 2 GB.
-    MIN_SHARD_BYTES = 1 * 1024 ** 3  # 1 GB
-
-    checks = {
-        "sd35":  os.path.join(NVFP4_ROOT, "sd35",    "transformer"),
-        "wan":   os.path.join(NVFP4_ROOT, "wan-t2v", "transformer"),
-    }
-    for engine_key, transformer_dir in checks.items():
-        config_path = os.path.join(transformer_dir, "config.json")
-        missing = not os.path.isfile(config_path)
-        if not missing:
-            shard_size = _nvfp4_shard_size_bytes(transformer_dir)
-            if shard_size < MIN_SHARD_BYTES:
-                missing = True
-                log.warning(
-                    "NVFP4 save for %s appears corrupted (shard size %.0f MB < 1 GB) "
-                    "— removing from quant options. Re-run nvfp4_save.py to fix.",
-                    engine_key, shard_size / 1024 ** 2,
-                )
-        if missing:
-            for p in ENGINES[engine_key].params:
-                if p.get("name") == "quant" and "options" in p:
-                    p["options"] = [o for o in p["options"] if o.get("value") != "nvfp4"]
-            if not log.isEnabledFor(logging.WARNING):
-                log.info("NVFP4 not saved for %s — removed from quant options", engine_key)
+    _probe_zimage()
+    _probe_qwenimage()
+    _probe_hidream()
+    _probe_ernie()
 
 
 def _probe_flux2klein():
@@ -1487,27 +1945,6 @@ def _probe_flux2klein():
         ENGINES["flux2klein"].available = False
         ENGINES["flux2klein"].error     = str(exc)
         log.warning("FLUX.2 Klein 4B unavailable: %s", exc)
-
-
-def _probe_sd35():
-    try:
-        from diffusers import StableDiffusion3Pipeline  # noqa: F401
-        ENGINES["sd35"].available = True
-    except Exception as exc:
-        ENGINES["sd35"].available = False
-        ENGINES["sd35"].error     = str(exc)
-        log.warning("SD 3.5 Large unavailable: %s", exc)
-
-
-def _probe_wan():
-    try:
-        from diffusers import WanPipeline  # noqa: F401
-        import imageio                     # noqa: F401
-        ENGINES["wan"].available = True
-    except Exception as exc:
-        ENGINES["wan"].available = False
-        ENGINES["wan"].error     = str(exc)
-        log.warning("Wan2.2 unavailable: %s", exc)
 
 
 def _probe_ideogram4():
@@ -1638,19 +2075,23 @@ def _load_ref_image(ref) -> Optional[Any]:
 _LOADERS = {
     "flux2klein":    _load_flux2klein,
     "flux2klein9b":  _load_flux2klein9b,
-    "sd35":          _load_sd35,
-    "wan":           _load_wan,
     "ideogram4":     _load_ideogram4,
     "sana":          _load_sana,
     "boogu":         _load_boogu,
+    "zimage":        _load_zimage,
+    "qwenimage":     _load_qwenimage,
+    "hidream":       _load_hidream,
+    "ernie":         _load_ernie,
 }
 
 _GENERATORS = {
     "flux2klein":    _generate_flux2klein,
     "flux2klein9b":  _generate_flux2klein9b,
-    "sd35":          _generate_sd35,
-    "wan":           _generate_wan,
     "ideogram4":     _generate_ideogram4,
     "sana":          _generate_sana,
     "boogu":         _generate_boogu,
+    "zimage":        _generate_zimage,
+    "qwenimage":     _generate_qwenimage,
+    "hidream":       _generate_hidream,
+    "ernie":         _generate_ernie,
 }

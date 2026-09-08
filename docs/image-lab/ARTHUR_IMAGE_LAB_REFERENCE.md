@@ -1,6 +1,6 @@
 # Arthur Image & Video Generation Lab — Complete Engineering Reference
 
-> **Version:** May 2026  
+> **Version:** May 2026 — **revised 2026-09-07** (sd35 + wan removed; Z-Image, Qwen-Image 2512, HiDream O1, ERNIE-Image added — see `docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md`)
 > **Service:** `arthur-imglab.service` — FastAPI on port **8002**  
 > **Host VM:** Ubuntu 22.04 — `192.168.0.87`  
 > **GPU:** NVIDIA RTX 5060 Ti 16 GB GDDR7 (driver 580.159.03, CUDA 12.8)  
@@ -39,8 +39,7 @@ The **Arthur Image & Video Generation Lab** is a self-hosted AI generation servi
 
 - **Text-to-Image** generation using state-of-the-art diffusion models
 - **Image-to-Image editing** (provide a reference image, describe changes)
-- **Text-to-Video** generation (cinematic motion from a text description)
-- **Image-to-Video animation** (make a still image come alive)
+- ~~Text-to-Video / Image-to-Video~~ — video engines (Wan2.2) **removed 2026-09-07**; the video plumbing (`save_video`, `/files/videos`, UI type-driven rendering) stays for a future video engine
 
 The entire system is a **single Python FastAPI process** (`image_lab.py`) that listens on port 8002. It serves both a browser-based Web UI and a JSON REST API. Models are loaded into GPU VRAM on demand and swapped as needed.
 
@@ -78,11 +77,12 @@ Think of it as a private version of services like Midjourney or Runway — runni
 │  ┌─────────────────────────┐   ┌──────────────────────────┐    │
 │  │  GPU: RTX 5060 Ti 16 GB │   │  Model cache (sda1)      │    │
 │  │  CUDA 12.8 / PyTorch    │   │  /opt/arthur-img-models/ │    │
-│  │  diffusers 0.38.0       │   │  ~32 GB FLUX.2           │    │
-│  │  BitsAndBytes 4-bit     │   │  ~40 GB SD 3.5 Large     │    │
-│  │  accelerate 1.13.0      │   │  ~49 GB Wan2.2 T2V       │    │
-│  └─────────────────────────┘   │  ~50 GB Wan2.2 I2V       │    │
-│                                 └──────────────────────────┘    │
+│  │  diffusers ≥0.40.0      │   │  SANA ×2 (9.1 G each)    │    │
+│  │  BitsAndBytes 4-bit     │   │  Boogu (20 G)            │    │
+│  │  accelerate 1.13.0      │   │  ideogram-4-nf4 (16 G)   │    │
+│  └─────────────────────────┘   │  + zimage/qwenimage/ernie│    │
+│                                │  + ComfyUI sidecar models │    │
+│                                └──────────────────────────┘    │
 │                                                                  │
 │  Monitoring Stack (port 3000 / 9090 / 9835 / 9100)             │
 │  Grafana ← Prometheus ← nvidia_gpu_exporter + node-exporter    │
@@ -130,13 +130,14 @@ This is the **single source of truth** for what models exist, what parameters th
 ```python
 @dataclass
 class EngineInfo:
-    key: str          # "flux2klein" | "sd35" | "wan"
+    key: str          # "flux2klein" | "flux2klein9b" | "ideogram4" | "sana" | "boogu"
+                      #  | "zimage" | "qwenimage" | "hidream" | "ernie"
     label: str        # Human-readable display name
     description: str  # Shown in the UI sidebar
     output_type: str  # "image" | "video"
     vram_gb: float    # VRAM estimate when loaded (for display only)
     hf_repo: str      # Primary HuggingFace repo ID
-    hf_repo_alt: str  # Secondary repo (Wan I2V variant)
+    hf_repo_alt: str  # Secondary repo (GGUF / quantised variant)
     params: list      # Parameter schema (drives the UI dynamically)
     available: bool   # Set True at startup after import checks
     loaded: bool      # Set True when model is in VRAM
@@ -149,7 +150,6 @@ class LabState:
     active_engine: str   # Which engine is currently in VRAM
     active_quant: str    # Quant of the loaded engine ("" = BF16/default)
     loaded_model: Any    # The loaded pipeline object
-    loaded_pipe2: Any    # Second pipeline (Wan T2V + I2V pair)
     loading: bool        # True during model load
     generating: bool     # True during inference
     run_started: float   # wall clock when a generate() run began (incl. load)
@@ -181,10 +181,11 @@ _ensure_engine(key)
     ├── if active_engine == key: return (already loaded)
     ├── _unload_current()
     │       ├── STATE.loaded_model = None
-    │       ├── STATE.loaded_pipe2 = None
     │       ├── STATE.active_engine = None
     │       └── free_vram()  (gc.collect + torch.cuda.empty_cache)
-    └── _LOADERS[key]()  → _load_flux2klein() / _load_sd35() / _load_wan()
+    └── _LOADERS[key]()  → _load_flux2klein() / _load_flux2klein9b() / _load_ideogram4()
+                          / _load_sana() / _load_boogu() / _load_zimage()
+                          / _load_qwenimage() / _load_ernie() / _load_hidream()
 ```
 
 **Public entry point:**
@@ -224,7 +225,7 @@ def generate(engine_key: str, params: dict) -> list[dict]:
 A single Python string constant `UI_HTML` containing the entire frontend — HTML, CSS, and JavaScript — returned by `GET /`. No build step, no npm, no separate static files.
 
 **UI capabilities:**
-- Engine selector tabs (FLUX.2 Klein / Klein 9B-KV / SD 3.5 / Wan2.2 / Ideogram 4)
+- Engine selector tabs (FLUX.2 Klein / Klein 9B-KV / Ideogram 4 / SANA 1.6B / Boogu Turbo / Z-Image / Qwen-Image 2512 / HiDream O1 / ERNIE-Image)
 - Dynamic parameter form (generated from `engine.params` schema via the `/status` API)
 - **VRAM/system report strip** (TTS-Lab-style, polled every 4 s with `?brief=1`): host RAM bar, device-wide VRAM bar with % + "hot" state, GPU badge, per-process "who holds the VRAM" line (container names resolved via `/proc/<pid>/cgroup` + `docker ps`), resident-engine chip with ✕ evict, **Evict VRAM** (whole card incl. TTS containers) and **🔄 Refresh** buttons
 - **⬇ Preload / ⏏ Unload** buttons per engine tab (load honors the selected quant; load is async so the UI stays live — the status dot pulses amber while `loading: true`)
@@ -335,73 +336,25 @@ and BnB cache, and unblock the probe check.
 
 ---
 
-### 4.2 Stable Diffusion 3.5 Large — `sd35`
+### 4.2 Stable Diffusion 3.5 Large — `sd35` — 🗑️ REMOVED
 
 | Property | Value |
 |---|---|
-| **HuggingFace repo** | `stabilityai/stable-diffusion-3.5-large` |
-| **Architecture** | 8B MMDiT (Multimodal Diffusion Transformer) |
-| **Text encoders** | CLIP-L, CLIP-G, T5-XXL |
-| **Quantization** | None — runs in bfloat16 |
-| **Disk size** | ~40 GB |
-| **VRAM when loaded** | ~12 GB (uses `enable_model_cpu_offload()`) |
-| **Output type** | Image (PNG), up to 4 per request |
-| **Supports I2I** | No (text-to-image only in current implementation) |
-| **License** | Stability AI Community License |
-| **Requires HF token** | Yes (gated model) |
+| **Status** | **REMOVED 2026-09-07** — superseded by the Z-Image / Qwen-Image-2512 / HiDream-O1 / ERNIE-Image round (docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md) |
+| **Why** | "dated — latent VAE blurs glyphs" (user research doc); the four additions all out-type it on the typography criteria the lab cares about |
 
-**Loading strategy:**
-
-```python
-pipe = StableDiffusion3Pipeline.from_pretrained(
-    "stabilityai/stable-diffusion-3.5-large",
-    torch_dtype = torch.bfloat16,
-    token       = HF_TOKEN,
-)
-pipe.enable_model_cpu_offload()   # T5-XXL lives in CPU RAM; moves to GPU only during encoding
-```
-
-The T5-XXL text encoder is ~9 GB in bfloat16. Without `enable_model_cpu_offload()`, it would OOM a 16 GB card alongside the 8B transformer. With offloading, the T5 runs on GPU during text encoding, then transfers back to CPU; the transformer and VAE then run on GPU.
+Historical: 8B MMDiT + CLIP-L/CLIP-G/T5-XXL encoders, Stability AI Community License (gated), ran city96 GGUF-quantised transformer with pre-saved shared encoders (`preq_save.py`) or torchao NVFP4 (`nvfp4_save.py` — both scripts SUPERSEDED). Code, engine entry, UI tab, GGUF/NVFP4/quantized VM files all deleted; HF cache cleanup under Phase F.
 
 ---
 
-### 4.3 Wan2.2 — `wan`
+### 4.3 Wan2.2 — `wan` — 🗑️ REMOVED
 
 | Property | Value |
 |---|---|
-| **T2V HuggingFace repo** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` |
-| **I2V HuggingFace repo** | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` |
-| **Architecture** | 14B causal video diffusion model (Alibaba) |
-| **Disk size** | ~49 GB (T2V) + ~50 GB (I2V) = ~99 GB total |
-| **VRAM when loaded** | ~14 GB (both pipelines with CPU offload + VAE slicing) |
-| **Output type** | Video (MP4) |
-| **Modes** | `t2v` (text-to-video) and `i2v` (image-to-video) |
-| **License** | Apache 2.0 |
-| **Requires HF token** | No |
+| **Status** | **REMOVED 2026-09-07** — video engines dropped from the lab (user decision; see the T2I-swap session doc) |
+| **Why** | Wan2.2 is a video model, not text-first — the lab is now all-image. Video *plumbing* (save_video, /files/videos, UI type-driven rendering) remains for a future video engine. |
 
-**Loading strategy:**
-
-```python
-pipe_t2v = WanPipeline.from_pretrained(t2v_repo, torch_dtype=torch.bfloat16)
-pipe_t2v.enable_model_cpu_offload()
-pipe_t2v.vae.enable_slicing()
-
-pipe_i2v = WanImageToVideoPipeline.from_pretrained(i2v_repo, torch_dtype=torch.bfloat16)
-pipe_i2v.enable_model_cpu_offload()
-pipe_i2v.vae.enable_slicing()
-```
-
-Both pipelines are kept in RAM simultaneously (`STATE.loaded_model` = T2V, `STATE.loaded_pipe2` = I2V), allowing mode switching without reloading. If I2V fails to load (e.g., insufficient disk), T2V continues to work.
-
-**Default parameters:**
-
-| Parameter | Default | Notes |
-|---|---|---|
-| `mode` | `t2v` | `t2v` or `i2v` |
-| `num_frames` | 49 | At 16 fps ≈ 3 seconds |
-| `fps` | 16 | Output video frame rate |
-| `resolution` | `720p` | `720p` (1280×720) or `480p` (854×480) |
-| `guidance_scale` | 5.0 | |
+Historical: 14B causal video diffusion (Alibaba), two GGUF-quantised transformers (HighNoise + LowNoise) per mode from QuantStack, T2V (`STATE.loaded_model`) + I2V (`STATE.loaded_pipe2`) pair. `loaded_pipe2` removed from `LabState`; the Wan Form fields (`mode`/`num_frames`/`fps`/`resolution`) removed from `image_lab_dispatch.py`.
 
 ---
 
@@ -496,17 +449,20 @@ validated. A failed generation can't strand components GPU-pinned: `mllm` and
 
 ### Engine Comparison Summary
 
-| Feature | FLUX.2 Klein 4B | FLUX.2 Klein 9B-KV | SD 3.5 Large | Wan2.2 | Ideogram 4 | SANA 1.6B | Boogu Turbo |
-|---|---|---|---|---|---|---|---|
-| Output | Image | Image | Image | Video | Image | Image | Image |
-| Model | 4B DiT + Qwen3-4B | 9B-KV DiT + Qwen3-8B | 8B MMDiT | 14B ×2 (T2V+I2V) | 9.3B DiT + Qwen3-VL | 1.6B DiT + Gemma-2-2B | mllm (fp8) + DiT (bf16) |
-| VRAM when loaded | ~10 GB | ~10 GB | ~12 GB | ~14 GB | 6–10 GB (quant) | ~11 GB (measured 10.9 GB peak) | ~13 GB transient peak, CPU-offloaded |
-| Steps | distilled (4) | distilled (4) | 4–40 | — | — | Sprint 1–4 / 1.5 ≤ 24 | 1–8 (default 4) |
-| Text rendering | poor | poor | poor | poor | **native** | poor | poor |
-| Reference image | ✓ I2I | ✓ I2I (KV) | ✗ | ✓ I2V | ✓ | ✗ | ✗ |
-| Negative prompt | ✓ | ✓ | ✓ | ✗ | ✗ | 1.5 only (Sprint is CFG-free) | ✗ (CFG 1.0) |
-| License | Apache 2.0 | Apache 2.0 | Community | Apache 2.0 | Apache 2.0 | Apache 2.0 + Gemma terms | Apache 2.0 (research) |
-| Quantization | GGUF | GGUF Q6_K | GGUF | NVFP4 | NF4/FP8/BF16 | none (bf16) | fp8 mllm + bf16 DiT |
+| Feature | FLUX.2 Klein 4B | FLUX.2 Klein 9B-KV | Ideogram 4 | SANA 1.6B | Boogu Turbo | Z-Image | Qwen-Image 2512 | HiDream O1 | ERNIE-Image |
+|---|---|---|---|---|---|---|---|---|---|
+| Output | Image | Image | Image | Image | Image | Image | Image | Image | Image |
+| Model | 4B DiT + Qwen3-4B | 9B-KV DiT + Qwen3-8B | 9.3B DiT + Qwen3-VL | 1.6B DiT + Gemma-2-2B | mllm (fp8) + DiT (bf16) | Z-Image Turbo (MM-DiT) + Qwen3-4B | 20B DiT + Qwen2.5-VL | HiDream-O1-Dev (UiT) | ERNIE-Image-Turbo (DiT + VL encoder) |
+| Route | diffusers | diffusers + GGUF | diffusers (module) | diffusers | boogu module | diffusers + GGUF | diffusers + GGUF | **ComfyUI sidecar** (port 8188) | diffusers + NVFP4 |
+| VRAM when loaded | ~10 GB | ~10 GB | 6–10 GB (quant) | ~11 GB (measured 10.9 GB peak) | ~13 GB transient peak, CPU-offloaded | ~10–11 GB† | ~14 GB† (encoder-park peak) | ~11–12 GB† (fp8_scaled 8.1 GB + activations) | ~10–11 GB† |
+| Steps | distilled (4) | distilled (4) | — | Sprint 1–4 / 1.5 ≤ 24 | 1–8 (default 4) | 1–8 (default 8, CFG 0.0) | 1–50 (default 20, guidance 4.0) | 28 (fixed, CFG 0.0) | 8 (fixed, CFG 1.0) |
+| Text rendering | poor | poor | **native** | poor | poor | **native** | **native** | **native** | **native** |
+| Reference image | ✓ I2I | ✓ I2I (KV) | ✓ | ✗ | ✗ | ✗ | ✗ | ✗ | ✗ |
+| Negative prompt | ✓ | ✓ | ✗ | 1.5 only (Sprint is CFG-free) | ✗ (CFG 1.0) | ✗ (CFG 0.0) | ✓ | ✗ (CFG 0.0) | ✗ (CFG 1.0) |
+| License | Apache 2.0 | Apache 2.0 | Apache 2.0 | Apache 2.0 + Gemma terms | Apache 2.0 (research) | Apache 2.0 | Apache 2.0 | MIT | Apache 2.0 |
+| Quantization | GGUF | GGUF Q6_K | NF4/FP8/BF16 | none (bf16) | fp8 mllm + bf16 DiT | GGUF (Q4_K_M default) | GGUF (Q4_K_M default) | fp8_scaled | NVFP4 (+bnb4 encoder) |
+
+† = initial estimate — **calibrate live** (measured numbers recorded in the T2I-swap session doc after verification).
 
 ---
 
@@ -547,17 +503,17 @@ validated. A failed generation can't strand components GPU-pinned: `mllm` and
 |---|---|---|
 | Python | 3.11 | System-installed, venv at `/opt/arthur-img-env/` |
 | PyTorch | 2.11.0+cu128 | CUDA 12.8 build |
-| diffusers | 0.38.0 | Includes Flux2Pipeline, WanPipeline |
+| diffusers | ≥ 0.40.0 | Bumped in the 2026-09-07 swap deploy — ZImagePipeline (≥0.37), QwenImagePipeline (≥0.35), ErnieImagePipeline (≥0.38); see session doc |
 | transformers | latest | Includes Mistral3ForConditionalGeneration |
 | accelerate | 1.13.0 | Required for `device_map="balanced"` |
-| bitsandbytes | latest | BnB NF4 4-bit quantization |
+| bitsandbytes | latest | BnB NF4 4-bit quantization (qwenimage bnb-4bit encoder) |
 | FastAPI | latest | Web framework |
 | uvicorn | latest (standard) | ASGI server with websocket support |
 
 ### Environment Variables (`.env` file at `/opt/arthur-img/.env`)
 
 ```bash
-HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx    # Required for SD 3.5 (gated)
+HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxx    # Optional — all current engines are public repos (sd35 gate removed 2026-09-07)
 HF_HOME=/opt/arthur-img-models/huggingface
 IMGLAB_MODELS_ROOT=/opt/models/image   # Legacy, not actively used
 IMGLAB_OUTPUT_ROOT=/opt/arthur-gen
@@ -612,22 +568,29 @@ Installs the full ML inference stack:
 
 Pre-downloads the new models into the HF cache at
 `/opt/arthur-img-models/huggingface/` (top-level `models--*` directories —
-hf_hub ≥ 1.0 layout, NOT a `hub/` subdirectory). sd35/Wan entries are cached
-no-ops on an existing VM; the old `diffusers/FLUX.2-dev-bnb-4bit` entry was
-removed (flux2 deleted 2026-08-13):
+hf_hub ≥ 1.0 layout, NOT a `hub/` subdirectory). Updated 2026-09-07: sd35/Wan
+entries removed; Z-Image / Qwen-Image 2512 / ERNIE / HiDream repos added.
+The old `diffusers/FLUX.2-dev-bnb-4bit` entry was removed earlier (flux2
+deleted 2026-08-13):
 
 | Model | Download Size | Destination |
 |---|---|---|
-| `stabilityai/stable-diffusion-3.5-large` | ~40 GB (cached no-op) | `models--stabilityai--stable-diffusion-3.5-large` |
-| `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ~49 GB (cached no-op) | `models--Wan-AI--Wan2.2-T2V-A14B-Diffusers` |
-| `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ~50 GB (cached no-op) | `models--Wan-AI--Wan2.2-I2V-A14B-Diffusers` |
 | `Efficient-Large-Model/Sana_Sprint_1.6B_1024px_diffusers` | ~9.7 GB | `models--Efficient-Large-Model--Sana_Sprint_1.6B_1024px_diffusers` |
 | `Efficient-Large-Model/SANA1.5_1.6B_1024px_diffusers` | ~9.7 GB (~4.5 GB net — shares the Gemma-2-2B encoder shards already cached) | `models--Efficient-Large-Model--SANA1.5_1.6B_1024px_diffusers` |
 | `Boogu/Boogu-Image-0.1-Turbo-fp8` | ~21 GB | `models--Boogu--Boogu-Image-0.1-Turbo-fp8` |
+| `Tongyi-MAI/Z-Image-Turbo` | text encoder + VAE only (transformer excluded — GGUF route) | `models--Tongyi-MAI--Z-Image-Turbo` |
+| `jayn7/Z-Image-Turbo-GGUF` | Q4_K_M ~5 GB (default tier) | `gguf/zimage/` |
+| `Qwen/Qwen-Image-2512` | VL encoder + VAE (transformer excluded — GGUF route) | `models--Qwen--Qwen-Image-2512` |
+| `unsloth/Qwen-Image-2512-GGUF` | Q4_K_M ~12.3 GB (default tier) | `gguf/qwenimage/` |
+| encoder-quant repo (chosen in Phase B) | ~4–8 GB | HF cache |
+| `lite-infer/ERNIE-Image-Turbo-…-nvfp4-…` | ~9.6 GB | `models--lite-infer--…` |
+| `Comfy-Org/HiDream-O1-Image` | Dev fp8_scaled ~8.1 GB | comfy `models/checkpoints/` |
 
-**New-model total ≈ 36 GB net.** Uses `snapshot_download()` with
-`ignore_patterns=['*.msgpack','*.h5','flax_model*']`. Snapshot files are
-symlinks into each repo's content-addressed `blobs/` directory.
+**New-model total (2026-09-07 additions) ≈ 45–55 GB.** Uses
+`snapshot_download()` with `ignore_patterns=['*.msgpack','*.h5','flax_model*']`
+(+ transformer exclusions for the GGUF-route repos; exact ignore list lives in
+the deploy script, Phase 4). Snapshot files are symlinks into each repo's
+content-addressed `blobs/` directory.
 
 > **Note:** This phase uses SCP to transfer the download script to `/tmp/imglab_download.py` first, then executes it via SSH. This was necessary because multi-line heredocs in PowerShell SSH commands caused quoting failures.
 
@@ -699,30 +662,21 @@ Returns the current state of all engines and hardware. Supports `?brief=1` (drop
 
 Triggers image or video generation. Accepts multipart/form-data. Runs in a worker thread — the HTTP response stays open, but `/status` keeps serving.
 
-**URL parameters:** `engine_key` = `flux2klein` | `flux2klein9b` | `sd35` | `wan` | `ideogram4`
+**URL parameters:** `engine_key` = `flux2klein` | `flux2klein9b` | `ideogram4` | `sana` | `boogu` | `zimage` | `qwenimage` | `hidream` | `ernie`
 
 **Common form fields:**
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `prompt` | string | required | Text description of desired output |
-| `negative_prompt` | string | `""` | What NOT to include (SD35, Wan) |
+| `negative_prompt` | string | `""` | What NOT to include (flux2klein, flux2klein9b, qwenimage) |
 | `width` | int | 1024 | Output width in pixels |
 | `height` | int | 1024 | Output height in pixels |
-| `num_inference_steps` | int | 28 | Denoising steps |
-| `guidance_scale` | float | 4.0 | Prompt adherence strength |
+| `num_inference_steps` | int | engine default | Denoising steps (clamped per engine; fixed for zimage/hidream/ernie — see §4) |
+| `guidance_scale` | float | engine default | Prompt adherence strength (fixed 0.0 for zimage/hidream, 1.0 for ernie/boogu) |
 | `seed` | int | -1 | -1 for random, fixed value for reproducibility |
 | `quant` | string | engine default | Quantization level (see the engine tables in §4) |
-| `reference_image` | file | null | Optional image upload (FLUX.2 Klein I2I, Wan I2V) |
-
-**Wan-specific fields:**
-
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `mode` | string | `t2v` | `t2v` (text-to-video) or `i2v` (image-to-video) |
-| `num_frames` | int | 49 | Number of video frames (49 ≈ 3 s at 16 fps) |
-| `fps` | int | 16 | Output video frame rate |
-| `resolution` | string | `720p` | `720p` (1280×720) or `480p` (854×480) |
+| `reference_image` | file | null | Optional image upload (FLUX.2 Klein I2I) |
 
 **Response (success, 200):**
 
@@ -769,8 +723,8 @@ Access the UI at **`http://192.168.0.87:8002`** from any browser on the local ne
 ┌──────────────────────────┬────────────────────────────────────────────────┐
 │ Sidebar (300 px)         │ Main pane                                      │
 │                          │  ┌──────────────────────────────────────────┐ │
-│ [FLUX.K][9B][SD35][Wan]  │  │ VRAM/system report strip                 │ │
-│ [Ideogram 4]             │  │ ● Ready · Loaded: FLUX.2 Klein ...        │ │
+│ [FLUX.K][9B][Ideogram4]  │  │ VRAM/system report strip                 │ │
+│ [SANA][Boogu][ZImg] …    │  │ ● Ready · Loaded: FLUX.2 Klein ...        │ │
 │                          │  │            [Evict VRAM][🔄 Refresh]       │ │
 │ ┌──────────────────────┐ │  │ RAM ▓▓▓░░ 8.1/31.2 GiB                   │ │
 │ │ Parameter form       │ │  │ VRAM ▓▓▓▓▓ 6.4/15.9 GiB (40%)  🟢RTX5060 │ │
@@ -825,7 +779,7 @@ Clicking a **gallery thumbnail** opens the same stats in a detail **modal** (lar
 
 ### Reference Image Upload
 
-For FLUX.2 and Wan I2V: click the dashed file drop zone to upload a reference image. The file is sent as multipart form data with the generation request. In FLUX.2 mode, it enables image editing. In Wan I2V mode, it becomes the first frame to animate.
+For FLUX.2 Klein (I2I / image editing): click the dashed file drop zone to upload a reference image. The file is sent as multipart form data with the generation request. (Wan I2V — the only other upload consumer — was removed 2026-09-07; the drop zone still renders per engine schema.)
 
 ---
 
@@ -1039,7 +993,6 @@ None of these can coexist in VRAM simultaneously. The lab uses a **single-model-
 ```python
 def _unload_current():
     STATE.loaded_model = None   # Drop Python reference
-    STATE.loaded_pipe2 = None
     STATE.active_engine = None
     gc.collect()                # Python garbage collector
     torch.cuda.empty_cache()    # Release PyTorch's CUDA memory pool
@@ -1078,7 +1031,7 @@ For our case (both transformer and text encoder pre-quantized):
 - VAE (bfloat16): ~0.3 GB on GPU
 - Total: ~10.3 GB → comfortably within 15.48 GB
 
-### The `enable_model_cpu_offload()` Strategy (SD 3.5, Wan)
+### The `enable_model_cpu_offload()` Strategy (historical — SD 3.5, Wan; both REMOVED 2026-09-07)
 
 For models where individual components exceed VRAM:
 1. All model submodules start in CPU RAM
@@ -1086,18 +1039,20 @@ For models where individual components exceed VRAM:
 3. After the component runs, it moves back to CPU
 4. Only one major component (text encoder OR transformer OR VAE) is on GPU at a time
 
-For SD 3.5: T5-XXL (~9 GB bfloat16) runs on GPU during text encoding, then moves to CPU. The MMDiT transformer and VAE then run on GPU.
+Historical example: SD 3.5's T5-XXL (~9 GB bfloat16) ran on GPU during text encoding, then moved to CPU. No remaining engine uses full-pipeline CPU offload — the current pattern is encode-then-park (klein encoders, SANA), boogu's CPU-offload exception, or whole-component streaming.
 
 ### Memory Optimization Techniques Applied
 
 | Technique | Benefit | Applied To |
 |---|---|---|
-| `pipe.vae.enable_slicing()` | VAE decodes in slices, reducing peak VRAM by 2–3 GB | FLUX.2, SD 3.5 |
-| `pipe.vae.enable_tiling()` | VAE processes large images in tiles, flat memory cost | FLUX.2, SD 3.5 |
-| `pipe.enable_attention_slicing(1)` | Attention computed one head at a time, reduces peak VRAM | FLUX.2, SD 3.5 |
-| `pipe.vae.enable_slicing()` | Same as above | Wan2.2 |
-| `enable_model_cpu_offload()` | Sequential CPU↔GPU movement of major components | SD 3.5, Wan2.2 |
-| `device_map="balanced"` | accelerate-managed placement (BnB-safe) | FLUX.2 |
+| `pipe.vae.enable_slicing()` | VAE decodes in slices, reducing peak VRAM by 2–3 GB | FLUX.2 |
+| `pipe.vae.enable_tiling()` | VAE processes large images in tiles, flat memory cost | FLUX.2 |
+| `pipe.enable_attention_slicing(1)` | Attention computed one head at a time, reduces peak VRAM | FLUX.2 |
+| `device_map="balanced"` | accelerate-managed placement (BnB-safe) | FLUX.2 (historical) |
+| encode-then-park | Text encoder produces embeds, then drops to CPU / ref-dropped | klein engines, SANA |
+| encode-headroom eviction | TTS evict-all before encoder loads when VRAM is short | qwenimage (planned) |
+
+(SD 3.5 / Wan rows removed with the engines — 2026-09-07.)
 
 ---
 
@@ -1266,8 +1221,12 @@ script run — was deleted 2026-09-07 after confirming no code path reads it.)
 ├── models--ideogram-ai--ideogram-4-fp8/    (8.7 GB)
 ├── models--Qwen--Qwen3-8B/                 (16 GB — shared by klein9b + ideogram)
 ├── models--black-forest-labs--FLUX.2-klein-4B/   (15 GB)
-└── models--Wan-AI--Wan2.1-T2V-14B-Diffusers/    (Wan2.2 GGUF lives in /opt/arthur-img-models/gguf/)
+└── models--Wan-AI--Wan2.1-T2V-14B-Diffusers/    (stale leftover — Wan2.2 used GGUF; cleanup target, Phase F)
 ```
+
+(sd35/wan model dirs removed from this tree with the engines — 2026-09-07; any
+surviving `models--stabilityai--*` / `models--Wan-AI--*` blobs are Phase-F
+cleanup targets.)
 
 ### Why HF_HOME Must Be Set Before Imports
 
@@ -1292,7 +1251,7 @@ This means model loading is **offline-capable** once downloaded. The HF_TOKEN is
 |---|---|---|
 | `/opt/arthur-img/` | Python source code | ~1 MB |
 | `/opt/arthur-img/.env` | Secrets + paths | <1 KB |
-| `/opt/arthur-img-models/` | Image model cache | ~227 GB (huggingface/ 92 G + gguf/ 71 G + quantized/ 44 G + nvfp4/ 20 G) |
+| `/opt/arthur-img-models/` | Image model cache | ~227 GB at 2026-09-07 pre-cleanup (huggingface/ 92 G + gguf/ 71 G + quantized/ 44 G + nvfp4/ 20 G); sd35/wan dirs deleted under Phase F |
 | `/opt/arthur-gen/` | Generated outputs | Growing |
 | `/opt/models/` | TTS models (separate service) | 177 GB (full) |
 
@@ -1300,12 +1259,16 @@ This means model loading is **offline-capable** once downloaded. The HF_TOKEN is
 
 | Model | On-disk copies (2026-09-07 du) | VRAM | RAM (offload) |
 |---|---|---|---|
-| SD 3.5 Large | gguf/ 13 G + quantized/ 21 G + nvfp4/ 4.4 G (older quant generations kept) | ~12 GB | ~9 GB (T5 offload) |
-| Wan2.2 T2V + I2V | gguf/ 36 G + quantized/ 24 G + nvfp4/ 15 G (nvfp4 I2V is an 8 KB stub) | ~14 GB | ~15 GB (offload) |
 | FLUX.2 Klein 4B / 9B-KV | hf-cache 15 G / gguf/ 22 G (Q6_K + quant ladder) | ~10 GB each | ~1.5 GB (Qwen encoders lazy) |
 | Ideogram 4 | hf-cache 25 G (nf4 16 G + fp8 8.7 G; Qwen3-8B 16 G shared with klein9b) | 6–10 GB | — |
 | SANA Sprint + 1.5 | hf-cache 18.2 G (Gemma shards deduped) | ~11 GB (measured device peak 10.9 GB) | — (GPU-only) |
 | Boogu Turbo fp8 | hf-cache 20 G | ~13 GB transient | **~27 GB (CPU offload exception)** |
+| Z-Image Turbo | hf-cache (encoder+VAE) + gguf/zimage/ Q4_K_M ~5 G | ~10–11 GB † | ~2 GB (Qwen3-4B encoder parks) |
+| Qwen-Image 2512 | hf-cache (VL encoder+VAE) + gguf/qwenimage/ Q4_K_M ~12.3 G | ~14 GB † | encoder 4–8 GB staged then parked |
+| HiDream O1-Dev | comfy `models/checkpoints/` fp8_scaled ~8.1 G | ~11–12 GB † (separate process!) | comfy sidecar RAM +~12 GB |
+| ERNIE-Image-Turbo | hf-cache ~9.6 G (NVFP4 repo) | ~10–11 GB † | — |
+
+(SD 3.5 + Wan rows deleted 2026-09-07 — their VM files are Phase-F cleanup targets. † = estimate, calibrate live.)
 
 Recommended root disk size: **≥500 GB**. The single 630 GB root disk (shared
 with the TTS docker stack) had 133 GB free after the 2026-09-07 cleanup.
@@ -1606,13 +1569,13 @@ T=90s  Result appears in browser
 
 3. **No persistent gallery beyond gallery.json**: If the file is lost, generated images are orphaned. Fix: use SQLite for the gallery index.
 
-4. **Model eviction on every engine switch**: If a user alternates between FLUX.2 and SD 3.5, each switch takes 30–60 s to reload. Fix: implement LRU caching or allow both to coexist if VRAM permits.
+4. **Model eviction on every engine switch**: Alternating engines means a 30–60 s reload per switch. Fix: implement LRU caching or allow both to coexist if VRAM permits.
 
 5. **No progress reporting during inference**: The browser shows "Generating…" but has no step-by-step progress. Fix: use diffusers `callback_on_step_end` to emit SSE or WebSocket progress events.
 
-6. **Wan loads both T2V and I2V simultaneously**: Takes 2x the loading time and 2x the RAM even if only T2V is used. Fix: make I2V load lazy.
+6. ~~**Wan loads both T2V and I2V simultaneously**~~ — Wan removed 2026-09-07.
 
-7. **No batching for video generation**: Wan generates one video per request. Fix: batch multiple requests into one pipeline call.
+7. ~~**No batching for video generation**~~ — video engines removed 2026-09-07; plumbing retained.
 
 8. **Generated files accumulate indefinitely**: No TTL or cleanup. Fix: add a background task that purges files older than N days.
 
@@ -1620,12 +1583,13 @@ T=90s  Result appears in browser
 
 ### Planned Improvements
 
-- **LoRA support**: Load and apply LoRA weights to any engine for style fine-tuning
+- **LoRA support**: Load and apply LoRA weights to any engine for style fine-tuning (Qwen-Image 2512 Lightning 4-step LoRA is a candidate)
+- **HiDream quality ladder**: fp8_scaled → bf16 full model if VRAM ever allows
 - **Multi-GPU support**: When a second GPU is added, assign one model per GPU permanently
 - **REST API client library**: A Python client for programmatic access from other services
 - **Prompt history**: Save prompts in localStorage so users can recall previous sessions
 - **Image upscaler**: Add a lightweight Real-ESRGAN 4x pass as a post-processing step
-- **Video-to-Video**: Wan supports animating based on a source video with motion control
+- ~~**Video-to-Video**~~ — Wan removed 2026-09-07; revisit only with a future video engine
 - **Grafana alerting**: Alert when VRAM > 95% or GPU temperature > 85°C
 
 ---
@@ -1637,7 +1601,7 @@ T=90s  Result appears in browser
 | **BnB** | BitsAndBytes — a library by Tim Dettmers for 4-bit and 8-bit quantization of neural network weights |
 | **NF4** | NormalFloat4 — BitsAndBytes' 4-bit quantization format optimized for normally-distributed weights. Uses a pre-defined codebook of 16 values |
 | **DiT** | Diffusion Transformer — a class of diffusion model that uses transformer blocks instead of U-Net blocks |
-| **MMDiT** | Multimodal Diffusion Transformer — the architecture used by SD 3.5, which processes image and text tokens jointly |
+| **MMDiT** | Multimodal Diffusion Transformer — the architecture used by SD 3.5 (removed 2026-09-07), processing image and text tokens jointly |
 | **VRAM** | Video RAM — the dedicated memory on the GPU. Currently 15.48 GB on the RTX 5060 Ti |
 | **CPU offload** | Technique where model weights live in CPU RAM and are moved to GPU only during the forward pass, then moved back |
 | **device_map** | An accelerate feature that automatically distributes model layers across available devices (GPU, CPU) based on memory budget |

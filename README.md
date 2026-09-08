@@ -1,9 +1,9 @@
 # Arthur TTS Lab
 
-> 30-engine TTS benchmark + 6-engine Image/Video lab | FastAPI | Docker multi-container | Bare-metal fallback
+> 30-engine TTS benchmark + 9-engine Image lab | FastAPI | Docker multi-container | Bare-metal fallback
 > **Deployed to:** `arthur@192.168.0.87:8009` (orchestrator) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
-A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an Image/Video generation lab (FLUX.2, SD 3.5, Ideogram 4, Wan2.2).
+A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an image generation lab (FLUX.2 Klein ×2, Ideogram 4, SANA, Boogu, Z-Image, Qwen-Image 2512, HiDream O1, ERNIE-Image).
 
 Originally built for an Android scam-baiting app ("SpamBlocker") that uses a character named Arthur Henderson as an AI decoy — hence the "Arthur" naming throughout.
 
@@ -12,13 +12,13 @@ Originally built for an Android scam-baiting app ("SpamBlocker") that uses a cha
 ## Features
 
 - **30 TTS engines** — every major open-source TTS model, 16 validated + 10 experimental + 3 blocked
-- **7 Image & Video engines** — FLUX.2 Klein ×2, SD 3.5, Wan2.2, Ideogram 4, SANA 1.6B, Boogu Turbo
+- **9 Image engines** — FLUX.2 Klein ×2, Ideogram 4, SANA 1.6B, Boogu Turbo, Z-Image Turbo, Qwen-Image 2512, HiDream O1-Dev, ERNIE-Image-Turbo
 - **Side-by-side comparison** — switch engines instantly, compare voices, measure quality
 - **Voice cloning** — zero-shot cloning on 8 engines (F5-TTS, Chatterbox, Zonos, Fish Speech, StyleTTS2, XTTS, CosyVoice2, IndexTTS-2)
 - **Voice Library** — browse, play, download Persian reference voices from Common Voice
 - **RTF benchmarking** — automated Real-Time Factor measurement across all TTS engines
 - **Persian text processing** — G2P, hazm, parsivar providers with live preview
-- **NVFP4 native quantization** — Blackwell-optimized weights for FLUX.2 and Wan2.2
+- **NVFP4 native quantization** — Blackwell-optimized weights (ERNIE-Image-Turbo via Nunchaku-Lite)
 - **Containerized orchestration** — 7 Docker containers organized by dependency compatibility, not engine count
 - **Engine maturity framework** — deterministic SUPPORTED/EXPERIMENTAL/BLOCKED/DEPRECATED lifecycle
 - **Validation automation** — scripted gate tracking, auto-populated compatibility matrix, anti-drift mechanisms
@@ -423,21 +423,24 @@ Parameters are engine-specific — unused ones are silently ignored.
 
 ---
 
-## Image Lab — 7 Image & Video Engines
+## Image Lab — 9 Image Engines
 
-The project also includes a separate Image & Video generation lab on port 8002:
+The project also includes a separate image generation lab on port 8002 (all-image since the sd35/wan removal 2026-09-07):
 
 | # | Key | Label | Type | VRAM | Notes |
 |---|---|---|---|---|---|
 | 1 | `flux2klein` | FLUX.2 Klein 4B | Image | ~10 GB | Compact 4B model. Apache 2.0. Step-distilled. |
 | 2 | `flux2klein9b` | FLUX.2 Klein 9B-KV | Image | ~10 GB | 9B-KV variant. GGUF Q6_K. I2I with KV cache. |
-| 3 | `sd35` | SD 3.5 Large | Image | ~12 GB | 8B MMDiT. GGUF quantized. Turbo/Lightning presets. |
-| 4 | `wan` | Wan2.2 | Video | ~14 GB | T2V + I2V. Up to 5s cinematic video. Dual-transformer GGUF. |
-| 5 | `ideogram4` | Ideogram 4 | Image | ~6-10 GB | 9.3B DiT + Qwen3-VL. Native text rendering. NF4/FP8 quants. |
-| 6 | `sana` | SANA 1.6B | Image | ~11 GB | Sprint (1-4 steps, no CFG) + 1.5 (~20 steps, CFG) variants. Apache 2.0. |
-| 7 | `boogu` | Boogu Turbo | Image | ~13 GB | fp8 + bf16 DiT. **CPU-offload exception** (~27 GB RAM). 4 steps. |
+| 3 | `ideogram4` | Ideogram 4 | Image | ~6-10 GB | 9.3B DiT + Qwen3-VL. Native text rendering. NF4/FP8 quants. |
+| 4 | `sana` | SANA 1.6B | Image | ~11 GB | Sprint (1-4 steps, no CFG) + 1.5 (~20 steps, CFG) variants. Apache 2.0. |
+| 5 | `boogu` | Boogu Turbo | Image | ~13 GB | fp8 + bf16 DiT. **CPU-offload exception** (~27 GB RAM). 4 steps. |
+| 6 | `zimage` | Z-Image Turbo | Image | ~10-11 GB† | GGUF Q4_K_M transformer. Native text rendering. 8 steps, CFG 0. Apache 2.0. |
+| 7 | `qwenimage` | Qwen-Image 2512 | Image | ~14 GB† | 20B DiT GGUF Q4_K_M + quantised VL encoder (stage + park). 20 steps, CFG 4. Apache 2.0. |
+| 8 | `hidream` | HiDream O1-Dev | Image | ~11-12 GB† | Runs in a **ComfyUI sidecar process** (port 8188, `arthur-comfy.service`). Dev fp8_scaled. 28 steps, CFG 0. MIT. |
+| 9 | `ernie` | ERNIE-Image-Turbo | Image | ~10-11 GB† | NVFP4 (nunchaku-lite, Blackwell-native) + bnb4 text encoder. 8 steps, CFG 1. Apache 2.0. |
 
-> **Optional:** ComfyUI integration toggle via `IMGLAB_USE_COMFYUI=1` env var.
+† = estimate, calibrate live. sd35 + wan (video) removed 2026-09-07 — video
+*plumbing* (save_video, gallery type) retained for a future video engine.
 
 Image Lab deploys separately: `.\scripts\deploy\deploy_image_lab.ps1` — see [`docs/image-lab/`](docs/image-lab/).
 
