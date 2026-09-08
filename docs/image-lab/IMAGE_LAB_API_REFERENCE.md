@@ -3,7 +3,7 @@
 **Base URL:** `http://192.168.0.87:8002`  
 **Protocol:** HTTP/1.1 — all generation requests are **synchronous** (connection held open until complete)  
 **Auth:** None (local network only)  
-**Revised:** 2026-09-07 — sd35 + wan removed; Z-Image, Qwen-Image 2512, HiDream O1, ERNIE-Image added (see `SESSION_2026-09-07_IMGLAB_T2I_SWAP.md`)
+**Revised:** 2026-09-08 — sd35 + wan removed (09-07); Z-Image, Qwen-Image 2512, HiDream O1, ERNIE-Image added; §3 now carries the lab's own measured benchmark timings (5060 Ti)
 
 ---
 
@@ -68,7 +68,7 @@ Returns live service state: all engine availability, which engine is loaded, VRA
       "label":       "FLUX.2 Klein 4B",
       "description": "FLUX.2 Klein 4B — compact 4B flow transformer...",
       "output_type": "image",
-      "vram_gb":     10.0,
+      "vram_gb":     13.0,
       "available":   true,
       "loaded":      true,
       "error":       "",
@@ -131,20 +131,34 @@ Returns live service state: all engine availability, which engine is loaded, VRA
 
 ## 3. POST /generate/{engine}
 
-Runs image or video generation. **Synchronous — the connection is held open until the result is ready.** Typical durations:
+Runs image or video generation. **Synchronous — the connection is held open until the result is ready.**
 
-| Engine | Quant | Resolution | Steps | Expected time |
+### Measured timings (the lab's own RTX 5060 Ti 16 GB, 1024×1024)
+
+Measured **2026-09-07/08** via curl against the live service — wall-clock, round-trip and file save included, at each engine's **default configuration** unless noted. `cold` = engine not resident (load + generate); `warm` = engine already loaded; `load → ready` = load portion alone.
+
+| Engine (config) | Load → ready | Warm gen | Cold wall (load + gen) | Same-seed determinism |
 |---|---|---|---|---|
-| `flux2klein` | BF16/NF4 | 1024×1024 | 4 | 50 s |
-| `flux2klein9b` | Q4_K_M | 1024×1024 | 4 | 40 s |
-| `ideogram4` | NF4 (API) | 1024×1024 | 20 | 30–60 s |
-| `zimage` | GGUF Q4_K_M | 1024×1024 | 8 | † |
-| `qwenimage` | GGUF Q4_K_M | 1024×1024 | 20 | 100–200 s † |
-| `hidream` | fp8_scaled | 1024×1024 | 28 | ~80 s @2048×1376 (comfy measured, 5060 Ti) † |
-| `ernie` | NVFP4 | 1024×1024 | 8 | ~4 s/img @1024 (measured on RTX PRO 6000) † |
+| `flux2klein` (BF16, 4 st) | 13.0 s | ~20.4 s | 33.4 s | pixel-identical (BF16) |
+| `flux2klein9b` (Q6_K, 4 st) | 12–24 s | 25.3 s (09-05) | 36–47 s swap runs (09-05); 118 s cold on the 09-08 regression | quant-stable identity (cosine 0.958–0.985 Q4↔Q6) |
+| `ideogram4` (nf4, **28 st** — default preset is 20) | ~90 s | 236 s gen / 244 s wall | 758 s (incl. 502 s one-off re-download) | **NO** — bnb nf4 matmul noise |
+| `sana` sprint (4 st) | 124 s cold / 9 s warm reload | 20.8 s | 53.7 s | pixel-identical |
+| `sana` 1.5 (20 st, CFG 4.5) | same key | not re-timed | ~118 s reload | differs from Sprint (as designed) |
+| `boogu` (4 st) | 383 s first (incl. 14 GB cache top-up) | 37–41 s | 86 s | pixel-identical |
+| `zimage` (Q4_K_M, 8 st) | 16.3 s / 4.90 GiB | 48 s | ~48 s class | n/v |
+| `qwenimage` (Q4_K_S, 20 st, CFG 4.0) | 35.8 s / 11.67 GiB | 191 s | 247 s | pixel-identical |
+| `hidream` (fp8_scaled, 28 st — Comfy sidecar) | sidecar-owned | not re-timed at 1024² — ~80 s @2048×1376 (research-doc ref) | — | byte-identical across sidecar reload |
+| `ernie` (NVFP4, 8 st) | 31.2 s cold / 25.7 s warm | **12.8 s** | 40.9 s | near — seed honored, NVFP4 kernels never pixel-identical |
 
-† = expected — the lab's own 5060 Ti timings get recorded in the T2I-swap
-session doc after live verification.
+**Speed guide — fastest → slowest, one 1024² image, warm, default settings:** `ernie` 12.8 s < `flux2klein` ~20.4 s ≈ `sana` sprint 20.8 s < `flux2klein9b` 25.3 s < `boogu` 37–41 s < `zimage` 48 s < `hidream` ~80 s (28 st, sidecar ref) < `qwenimage` 191 s < `ideogram4` 236 s @28 st (≈ ¾ of that at the default 20-step preset — estimated).
+
+Planning notes for remote users:
+
+- **Scaling:** generation time scales roughly with step count. Distilled engines give their best at 1–8 steps and are the fast tier (ernie, klein ×2, zimage, boogu, sana-sprint, hidream — all CFG-free). The slow tier is the text-rendering specialists that pay a CFG double pass: qwenimage (20 st ≈ 191 s) and ideogram4 (20–48 st ≈ 4–8 min).
+- **VRAM:** every load evicts the previous resident engine, and mid-gen peaks exceed the load gate — ideogram4 CFG ≈ 14.0 GiB, qwenimage ≈ 14.2 GiB driver footprint, klein9b Q6 14,234 MiB used / 1,615 free. Heavy engines need a nearly clean card; a resident TTS container model can trip the gate → `503 CUDA out of memory` (clear with `POST /evict-all`, §8).
+- **Reproducibility:** `seed=-1` = random; the resolved seed is echoed in `params.seed`. ideogram4 and ernie reruns differ slightly on the same seed (quantised-kernel noise) — judge those two by seed-family similarity, not pixels.
+
+Detailed methodology / per-run record: `IMGLAB_DEPLOYMENT_STATE_2026-09-08.md` §3 (internal doc).
 
 > `flux2` (FLUX.2 [dev] 32B) was REMOVED 2026-08-13; `sd35` + `wan` were
 > REMOVED 2026-09-07 — see `ARTHUR_IMAGE_LAB_REFERENCE.md` §4 for the history.
@@ -164,7 +178,7 @@ session doc after live verification.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `prompt` | string | **required** | Text description of the image or video to generate |
-| `negative_prompt` | string | `""` | What NOT to include. Supported by the CFG engines (flux2klein ×2, qwenimage). Ignored elsewhere (CFG-free models force 0.0/1.0). |
+| `negative_prompt` | string | `""` | What NOT to include. Only the CFG-capable engines take it: flux2klein ×2, qwenimage, sana's 1.5-1.6b variant. Ignored elsewhere — CFG-free models clamp guidance (zimage 0.0; boogu/hidream/ernie 1.0) and have no negative-prompt path. |
 | `width` | int | `1024` | Output width in pixels. Must be a multiple of 64. |
 | `height` | int | `1024` | Output height in pixels. Must be a multiple of 64. |
 | `num_inference_steps` | int | engine default | Denoising steps. More = better quality, slower. |
@@ -258,18 +272,18 @@ Returns static engine metadata (no live state — for available/loaded, use `/st
 
 Pre-loads an engine into VRAM without generating anything. Useful for warming up before the first request.
 
-**Non-blocking:** the load runs in a worker thread — the HTTP call stays open for the duration (30–90 s), but `/status` and `/logs` keep responding and report `"loading": true` so clients can poll rather than hang. Requests are single-flight: a second preload while one is running (or during generation) returns `503`.
+**Non-blocking:** the load runs in a worker thread — the HTTP call stays open for the duration (seconds to several minutes — see the §3 load column), but `/status` and `/logs` keep responding and report `"loading": true` so clients can poll rather than hang. Requests are single-flight: a second preload while one is running (or during generation) returns `503`.
 
 ### Form Field
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `quant` | string | `""` | Quantization level to load (e.g. `"Q4_K_M"` for `qwenimage`, or a SANA variant like `"1.5-1.6b"`). Empty = engine default. Changing quant on an already-loaded engine reloads it. |
+| `quant` | string | `""` | Quantization level to load (e.g. `"Q5_K_M"` for zimage, `"Q6_K"` for flux2klein9b, or a SANA variant like `"1.5-1.6b"`). Empty = engine default. Changing quant on an already-loaded engine reloads it. |
 
 ### Response — 200
 
 ```json
-{ "loaded": "qwenimage", "quant": "Q4_K_M" }
+{ "loaded": "zimage", "quant": "Q5_K_M" }
 ```
 
 ### Response — 503 (server busy)
@@ -476,6 +490,81 @@ Deletes a gallery entry and its associated file from disk.
 
 ---
 
+### `flux2klein9b` — FLUX.2 Klein 9B-KV
+
+| Parameter | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `prompt` | string | required | — | |
+| `negative_prompt` | string | `""` | — | |
+| `reference_image` | file | null | — | I2I / style transfer |
+| `width` | int | `1024` | 256–2048, step 64 | |
+| `height` | int | `1024` | 256–2048, step 64 | |
+| `num_inference_steps` | int | `4` | 1–20 | Step-distilled — 4 is optimal |
+| `guidance_scale` | float | `3.5` | 1.0–10.0 | Ignored by distilled model (no CFG pass) |
+| `seed` | int | `-1` | -1 to 2³¹-1 | |
+| `quant` | string | `Q6_K` | see below | GGUF transformer (`from_single_file`) + Qwen3-8B **NF4** encoder + Flux2 VAE |
+
+**`quant` options:** `Q3_K_M` (4.6 GB — smallest usable for faces) · `Q4_K_M` (5.7 GB — previous default) · `Q5_K_M` (6.8 GB) · `Q6_K` (7.9 GB) ✓ default · `Q8_0` (10.0 GB — near-lossless, **exceeds the 16 GB card** — documented OOM rung, kept for a future bigger card / encoder-offload).
+
+---
+
+### `ideogram4` — Ideogram 4 (hosted-API preset ladder)
+
+| Parameter | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `prompt` | string | required | — | Plain-English caption — **no** `negative_prompt` on this engine |
+| `width` | int | `1024` | 256–2048, step 64 | |
+| `height` | int | `1024` | 256–2048, step 64 | |
+| `preset` | string | `V4_DEFAULT_20` | see below | Ladder mirrors the hosted Ideogram API tiers |
+| `num_inference_steps` | int | `0` | 0–128 | `0` = follow the preset's step count; nonzero overrides it |
+| `guidance_scale` | float | `7.0` | 1.0–30.0 | |
+| `mu` | float | `0.0` | -5.0–5.0 | Caption-lift sampler param |
+| `std` | float | `1.75` | 0.1–5.0 | Caption-lift sampler param |
+| `use_magic_prompt` | bool | `false` | — | Magic-prompt caption expansion (hosted API — needs `IDEOGRAM_API_KEY`) |
+| `magic_prompt_aspect_ratio` | string | `1:1` | 1:1 · 3:2 · 2:3 · 16:9 … | Aspect hint for the expansion service |
+| `seed` | int | `-1` | -1 to 2³¹-1 | |
+| `quant` | string | `nf4` | `nf4` · `fp8` | `nf4` ~6 GB, CUDA only ✓ default; `fp8` ~10 GB, any device |
+
+**`preset` options:** `V4_QUALITY_48` (48 steps, best quality) · `V4_DEFAULT_20` (20 steps, recommended) ✓ default · `V4_TURBO_12` (12 steps, fastest).
+
+Slowest engine in the lab (~4 min/image at 28 steps measured; see §3) but the strongest pure photo/illustration quality, with its own caption-expansion path. The 2026-08-14 blank-image bug is fixed — see `IDEOGRAM4_FIX_2026-08-14.md`. **Not deterministic on the same seed** (bnb nf4 matmul noise).
+
+---
+
+### `sana` — SANA 1.6B (Sprint)
+
+| Parameter | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `prompt` | string | required | — | |
+| `negative_prompt` | string | `""` | — | Only the 1.5-1.6b (CFG) variant takes it |
+| `width` | int | `1024` | 256–2048, step 32 | |
+| `height` | int | `1024` | 256–2048, step 32 | |
+| `num_inference_steps` | int | `4` | 1–24 | Sprint: 1–4 (distilled); 1.5-1.6b: ~20. Non-2-step Sprint runs get the linear timestep fallback (`intermediate_timesteps=None`, the SCM fix) |
+| `guidance_scale` | float | `4.5` | 1.0–20.0 | Used by the 1.5-1.6b variant; Sprint runs CFG-free |
+| `num_images` | int | `1` | 1–4 | |
+| `seed` | int | `-1` | -1 to 2³¹-1 | |
+| `quant` | string | `sprint-1.6b` | see below | Picks the pipeline + checkpoint |
+
+**`quant` options:** `sprint-1.6b` ✓ default — `SanaSprintPipeline`, 1–4 steps, CFG-free (~21 s/img measured); `1.5-1.6b` — `SanaPipeline` + SCM scheduler, ~20 steps CFG 4.5, higher fidelity, slower (not re-timed on this card).
+
+---
+
+### `boogu` — Boogu-Image 0.1 Turbo
+
+| Parameter | Type | Default | Range | Notes |
+|---|---|---|---|---|
+| `prompt` | string | required | — | |
+| `width` | int | `1024` | 256–1536, step 16 | |
+| `height` | int | `1024` | 256–1536, step 16 | |
+| `num_inference_steps` | int | `4` | 1–8 | Distilled — 4 optimal |
+| `guidance_scale` | float | `1.0` | fixed 1.0 | Distilled guidance-free — clamped |
+| `num_images` | int | `1` | 1–2 | |
+| `seed` | int | `-1` | -1 to 2³¹-1 | |
+
+**Resource exception — the only CPU-offload engine:** fp8 Qwen3-VL-8B mllm + bf16 transformer + FLUX.1 VAE; GPU peaks ~12.6 GiB **plus ~27 GB host RAM**. No `quant` param.
+
+---
+
 ### `zimage` — Z-Image Turbo
 
 | Parameter | Type | Default | Range | Notes |
@@ -489,7 +578,7 @@ Deletes a gallery entry and its associated file from disk.
 | `seed` | int | `-1` | -1 to 2³¹-1 | |
 | `quant` | string | `Q4_K_M` | see below | GGUF transformer (`jayn7/Z-Image-Turbo-GGUF`) |
 
-**`quant` options:** `Q4_K_M` (~5 GB) ✓ default · Q5_K_M · Q6_K — full ladder once verified on the VM.
+**`quant` options:** `Q3_K_S` (~3.5 GB — fastest) · `Q3_K_M` (~3.8 GB) · `Q4_K_S` (~4.3 GB) · `Q4_K_M` (~4.6 GB) ✓ default/recommended · `Q5_K_S` (~4.8 GB) · `Q5_K_M` (~5.1 GB) · `Q6_K` (~5.5 GB) · `Q8_0` (~6.7 GB — best quality). GGUF transformer ladder (`jayn7/Z-Image-Turbo-GGUF`); Q4_K_M is the quality/speed sweet spot — drop rungs only when VRAM is tight.
 
 ---
 
@@ -501,13 +590,13 @@ Deletes a gallery entry and its associated file from disk.
 | `negative_prompt` | string | `""` | — | Supported (CFG path) |
 | `width` | int | `1024` | 256–1536, step 16 | |
 | `height` | int | `1024` | 256–1536, step 16 | |
-| `num_inference_steps` | int | `20` | 1–50 | 20 ≈ daily tier; 50 = max quality (100–200 s) |
+| `num_inference_steps` | int | `20` | 1–50 | 20 ✓ daily tier (191 s measured); 50 = max quality (≈ 3× the 20-step time) |
 | `guidance_scale` | float | `4.0` | 1.0–8.0 | Maps to `true_cfg_scale` |
-| `num_images` | int | `1` | 1–2 | Full generation runs ~1–3 min per image |
+| `num_images` | int | `1` | 1–2 | ≈ 191 s per image at 20 steps — a 2-image request roughly doubles it |
 | `seed` | int | `-1` | -1 to 2³¹-1 | |
-| `quant` | string | `Q4_K_M` | see below | GGUF transformer (`unsloth/Qwen-Image-2512-GGUF`) |
+| `quant` | string | `Q4_K_S` | see below | GGUF transformer (`unsloth/Qwen-Image-2512-GGUF`) |
 
-**`quant` options:** `Q4_K_M` (~12.3 GB) ✓ default · Q4_K_S · Q5_K_S · Q6_K — full ladder once verified on the VM.
+**`quant` options:** `Q4_K_S` (~11.5 GB) ✓ default — the **only** tier on this card. The Q4_K_M rung (12.34 GB) loads then OOMs at `to("cuda")` with the card's TTS co-tenant contexts (~14.2 GiB process floor vs 15.48 GiB), so the ladder was collapsed 2026-09-08 and the dead GGUF deleted. Embed-cache encodes run with the transformer unloaded.
 
 ---
 
@@ -519,7 +608,7 @@ Deletes a gallery entry and its associated file from disk.
 | `width` | int | `1024` | 256–2048, step 64 | |
 | `height` | int | `1024` | 256–2048, step 64 | |
 | `num_inference_steps` | int | `28` | fixed 28 | Dev checkpoint — fixed-step sampler |
-| `guidance_scale` | float | `0.0` | fixed 0.0 | CFG-free — server forces 0.0 |
+| `guidance_scale` | float | `1.0` | fixed 1.0 | Distilled CFG-free sampler — field is clamped to 1.0 (no negative-prompt path) |
 | `num_images` | int | `1` | 1–4 | |
 | `seed` | int | `-1` | -1 to 2³¹-1 | |
 
@@ -670,7 +759,7 @@ ComfyUI sidecar unreachable (hidream)
 
 ## 16. curl Cookbook
 
-### Quick image — fastest (FLUX.2 Klein, 4 steps)
+### Quick image — FLUX.2 Klein 4B (4 steps, ~20 s warm)
 
 ```bash
 curl -X POST http://192.168.0.87:8002/generate/flux2klein \
@@ -687,7 +776,7 @@ curl -X POST http://192.168.0.87:8002/generate/qwenimage \
   -F "negative_prompt=blurry, low quality, watermark" \
   -F "num_inference_steps=20" \
   -F "guidance_scale=4.0" \
-  -F "quant=Q4_K_M"
+  -F "quant=Q4_K_S"   # only tier on this card (see §13)
 ```
 
 ### Typographic poster — Z-Image Turbo (plain prompt, 8 steps)
@@ -698,8 +787,6 @@ curl -X POST http://192.168.0.87:8002/generate/zimage \
   -F "num_images=2" \
   -F "seed=100"
 ```
-
-### Multiple images — Z-Image Turbo (up to 4)
 
 ### Fast high-quality — FLUX.2 Klein 4B (distilled)
 
@@ -731,7 +818,7 @@ curl -X POST http://192.168.0.87:8002/generate/hidream \
   -F "seed=7"
 ```
 
-### Fixed-8-step fast — ERNIE-Image-Turbo (NVFP4)
+### Fastest — ERNIE-Image-Turbo (NVFP4, fixed 8 steps, ~13 s warm)
 
 ```bash
 curl -X POST http://192.168.0.87:8002/generate/ernie \
@@ -795,8 +882,8 @@ curl -s -X POST http://192.168.0.87:8002/refresh
 ### Preload with a specific quant
 
 ```bash
-curl -s -X POST http://192.168.0.87:8002/engines/qwenimage/load \
-  -F "quant=Q4_K_M"     # async — /status reports loading:true while it runs
+curl -s -X POST http://192.168.0.87:8002/engines/zimage/load \
+  -F "quant=Q5_K_M"     # async — /status reports loading:true while it runs
 ```
 
 ### Filter gallery by engine
@@ -907,7 +994,7 @@ results = generate("zimage",
 ```python
 tasks = [
     ("flux2klein", dict(prompt="a cat on a rooftop", num_inference_steps=4)),
-    ("qwenimage",  dict(prompt="a bilingual poster, CN+EN text", quant="Q4_K_M")),
+    ("qwenimage",  dict(prompt="a bilingual poster, CN+EN text")),
     ("ernie",      dict(prompt="abstract digital art, neon colours")),
 ]
 
