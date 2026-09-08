@@ -137,7 +137,8 @@ UI_HTML = r"""<!DOCTYPE html>
      appears automatically if the catalogue outgrows the height budget. */
   .engine-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px;
                  padding: 8px 10px 6px; border-bottom: 1px solid var(--border);
-                 max-height: 248px; overflow-y: auto; }
+                 max-height: 248px; min-height: 0; overflow-y: auto;
+                 flex-shrink: 1; }   /* yields to the params area on short windows */
   .engine-tab  { display: flex; flex-direction: column; align-items: center;
                  justify-content: center; min-height: 40px; padding: 5px 6px;
                  text-align: center; cursor: pointer; font-size: 11px; font-weight: 600;
@@ -150,7 +151,10 @@ UI_HTML = r"""<!DOCTYPE html>
                        font-weight: 400; }
 
   /* ---- Params ---- */
-  .params-area { flex: 1; overflow-y: auto; padding: 16px; min-height: 0; }
+  /* flex-basis:auto keeps params as tall as its content when space allows and
+     min-height:140px keeps it usable on short windows — with its own scrollbar
+     it is never squeezed out of the sidebar (the tabs grid shrinks first). */
+  .params-area { flex: 1 1 auto; min-height: 140px; overflow-y: auto; padding: 16px; }
   .param-group { margin-bottom: 14px; }
   .param-group label { display: block; font-size: 12px; color: var(--muted);
                         margin-bottom: 5px; font-weight: 500; }
