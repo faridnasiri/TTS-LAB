@@ -293,10 +293,21 @@ for repo, extra in downloads:
 GGUF_ROOT = '/opt/arthur-img-models/gguf'
 jobs = [
     # (repo, filename, subfolder, destination)
+    # zimage default tier is Q4_K_M; qwenimage's ONLY live tier is Q4_K_S —
+    # Q4_K_M (12.34 GB) OOMs this card (loads to a ~14.2 GiB process floor on a
+    # 15.48 GiB card that already hosts ~1.2 GiB of TTS-container contexts;
+    # verified 3× 2026-09-08, see _QWENIMAGE_GGUF). Do NOT re-add Q4_K_M here.
     ('jayn7/Z-Image-Turbo-GGUF', 'z_image_turbo-Q4_K_M.gguf', None,
      GGUF_ROOT + '/zimage/z_image_turbo-Q4_K_M.gguf'),
-    ('unsloth/Qwen-Image-2512-GGUF', 'qwen-image-2512-Q4_K_M.gguf', None,
-     GGUF_ROOT + '/qwenimage/qwen-image-2512-Q4_K_M.gguf'),
+    ('unsloth/Qwen-Image-2512-GGUF', 'qwen-image-2512-Q4_K_S.gguf', None,
+     GGUF_ROOT + '/qwenimage/qwen-image-2512-Q4_K_S.gguf'),
+    # qwenimage-edit: Q4_K_S is the ONLY tier that fits (two-channel edit
+    # conditioning peaks 15.40 GiB driver at 1024²/20 st/CFG 4.0 — measured
+    # 2026-09-08 probe; see _QWENIMAGE_EDIT_GGUF).
+    ('unsloth/Qwen-Image-Edit-2511-GGUF', 'qwen-image-edit-2511-Q4_K_S.gguf', None,
+     GGUF_ROOT + '/qwenimage-edit/qwen-image-edit-2511-Q4_K_S.gguf'),
+    ('Qwen/Qwen-Image-Edit-2511', 'config.json', 'transformer',
+     GGUF_ROOT + '/qwenimage-edit/transformer_cfg/config.json'),
     ('Tongyi-MAI/Z-Image-Turbo', 'config.json', 'transformer',
      GGUF_ROOT + '/zimage/transformer_cfg/config.json'),
     ('Qwen/Qwen-Image-2512', 'config.json', 'transformer',

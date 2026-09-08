@@ -749,6 +749,7 @@ const DEFAULT_ENGINES = [
   {key: 'boogu',         label: 'Boogu Turbo',       available: null},
   {key: 'zimage',        label: 'Z-Image Turbo',     available: null},
   {key: 'qwenimage',     label: 'Qwen-Image 2512',   available: null},
+  {key: 'qwenimage-edit', label: 'Qwen-Image Edit',  available: null},
   {key: 'hidream',       label: 'HiDream O1',        available: null},
   {key: 'ernie',         label: 'ERNIE-Image',       available: null},
 ];

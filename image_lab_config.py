@@ -461,6 +461,77 @@ ENGINES: dict[str, EngineInfo] = {
         ],
     ),
 
+    "qwenimage-edit": EngineInfo(
+        key         = "qwenimage-edit",
+        label       = "Qwen-Image Edit",
+        description = (
+            "Qwen-Image-Edit-2511 — the instruction-following edit sibling "
+            "of Qwen-Image-2512. Consumes a reference image NATIVELY (identity "
+            "consistency + in-image text retention); the model card recommends "
+            "40 steps, true_cfg_scale 4.0. Runs the unsloth GGUF Q4_K_S "
+            "transformer (~11.56 GB) with the base engine's bnb-4bit "
+            "Qwen2.5-VL encoder for the image-conditioned encode (vision "
+            "tokens via the Qwen2VL processor; cache-miss encode parks the "
+            "transformer). Measured 2026-09-08: 12.06 s/step at 1024² → ~4 min "
+            "at the 20-step default; canvas ceiling ~1.05M px (1024² and "
+            "720×1440 both verified); driver peak 15.40 GiB — the whole card."
+        ),
+        output_type = "image",
+        image_input = "reference",  # edit pipeline natively conditions on the ref
+        vram_gb     = 15.0,  # measured gen process peak 14.64 GiB driver (2026-09-08)
+        hf_repo     = "Qwen/Qwen-Image-Edit-2511",
+        hf_repo_alt = "unsloth/Qwen-Image-Edit-2511-GGUF",
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Instruction to edit the reference image (identity, "
+                       "pose, expression, background, headline text …). The "
+                       "edit checkpoint applies it to the uploaded image — "
+                       "describe the change, not a fresh scene.",
+               required=True),
+            _p("negative_prompt",     "textarea", "",     "Negative prompt",
+               tooltip="CFG path — what to avoid in the edited image. Also "
+                       "image-conditioned (encoded against the reference)."),
+            _p("reference_image",     "file",     None,   "Reference image (required)",
+               tooltip="Consumed natively — the edit checkpoint conditions "
+                       "on this image (identity + in-image text retention). "
+                       "Upload the base image with every request.",
+               required=True),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=1536, step=16,
+               tooltip="Canvas area is capped at ~1.05M px on the 16 GB card — "
+                       "1024×1024 or 720×1440 both verified; larger canvases "
+                       "exceed the measured VRAM ceiling."),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=1536, step=16,
+               tooltip="Canvas area is capped at ~1.05M px on the 16 GB card — "
+                       "1024×1024 or 720×1440 both verified; larger canvases "
+                       "exceed the measured VRAM ceiling."),
+            _p("num_inference_steps", "int",      20,     "Steps",
+               min_=1, max_=50, step=1,
+               tooltip="20 steps ≈ ~4 min per image; the model card "
+                       "recommends 40 (~8 min) for max quality."),
+            _p("guidance_scale",      "float",    4.0,    "Guidance scale",
+               min_=1.0, max_=8.0, step=0.5,
+               tooltip="Maps to the edit pipeline's true_cfg_scale — 4.0 is "
+                       "the model-card setting."),
+            _p("num_images",          "int",      1,      "Images per request",
+               min_=1, max_=2, step=1,
+               tooltip="Max 2 — each image runs ~4 min at the 20-step "
+                       "default (12 s/step, measured)."),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1),
+            _p("quant",               "select",   "Q4_K_S", "Quantization",
+               options=[
+                   {"value": "Q4_K_S", "label": "Q4_K_S — ~11.56 GB transformer  ✓ recommended"},
+               ],
+               tooltip="GGUF quantisation via unsloth/Qwen-Image-Edit-2511-GGUF. "
+                       "Q4_K_S is the ONLY tier that fits the 16 GB card — "
+                       "the edit pipeline's two-channel conditioning (vision "
+                       "tokens + VAE ref latents) peaks at 15.40 GiB driver "
+                       "at 1024²/20 st/CFG 4.0 (measured 2026-09-08)."),
+        ],
+    ),
+
     "hidream": EngineInfo(
         key         = "hidream",
         label       = "HiDream O1",

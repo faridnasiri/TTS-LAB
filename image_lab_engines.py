@@ -8,6 +8,9 @@ image_lab_engines.py — Load / unload / generate functions for all engines:
   zimage      — Z-Image Turbo (GGUF ladder via jayn7 + lazy bnb Qwen3-4B encoder)
   qwenimage   — Qwen-Image 2512 (GGUF ladder via unsloth + bnb4 VL encoder,
                 encode-without-transformer on cache miss)
+  qwenimage-edit — Qwen-Image-Edit 2511 (GGUF Q4_K_S via unsloth + the SAME
+                bnb4 VL encoder; image-conditioned embeds — prompt + ref bytes
+                key the cache; consumes the uploaded reference image natively)
   hidream     — HiDream O1-Dev (OUT-OF-PROCESS ComfyUI sidecar, port 8188 —
                 hidream_comfy_bridge.py)
   ernie       — ERNIE-Image-Turbo (Nunchaku-Lite NVFP4 primary, fp8 fallback)
@@ -173,6 +176,10 @@ _ENCODER_NEED_MB: dict[str, int] = {
                            # unloads the ~12 GiB GGUF transformer first so
                            # free VRAM ≈ idle (~14.2 GiB) and this gate only
                            # guards the case where a TTS model is resident
+    "qwenimage-edit": 8000,  # SAME OzzyGT bnb4 encoder as qwenimage (probe-
+                             # verified 2026-09-08: edit shares the base's
+                             # Qwen2.5-VL text encoder); encode peak 6.31 GiB
+                             # torch-alloc with the transformer unloaded
 }
 
 
@@ -553,6 +560,16 @@ _VRAM_NEED_MB: dict[str, int] = {
                             # gate untouched, a resident TTS model trips it
                             # and evicts. Cache-miss encodes run with the
                             # transformer UNLOADED.
+    "qwenimage-edit": 14000,  # Q4_K_S only (see _QWENIMAGE_EDIT_GGUF).
+                            # Two-channel edit conditioning (vision tokens +
+                            # VAE ref latents) makes the DiT seq ~8.2K tokens
+                            # at 1024² → resident ~11.81 GiB torch-alloc, gen
+                            # peak 12.70 GiB torch-alloc / 15.40 GiB driver-
+                            # total / 14.64 GiB pid (nvidia-smi, 2026-09-08
+                            # probe, 1024² AND 720×1440 / 20 st / CFG 4.0 —
+                            # margin 0.53 GiB). The whole card, like
+                            # qwenimage: idle free passes untouched, a
+                            # resident TTS model trips the gate and evicts.
     "hidream":      11500,  # Out-of-process ComfyUI sidecar (fp8_scaled ~8.1
                             # GiB + pixel-space activations at ≤2048²). The
                             # gate runs after _unload_current pokes comfy
@@ -1719,6 +1736,281 @@ def _probe_qwenimage():
 
 
 # ---------------------------------------------------------------------------
+# Qwen-Image-Edit-2511  (instruction edit — consumes the ref image natively)
+# ---------------------------------------------------------------------------
+
+# GGUF Q4_K_S (~11.56 GB) is the ONLY tier that fits the 16 GB card — the
+# edit pipeline's TWO-channel conditioning (vision tokens through the VL
+# encoder at 384² area + VAE-encoded ref latents at 1024² area concatenated
+# to the noise latents) pushes the DiT sequence to ~8.2K tokens at 1024².
+# Measured 2026-09-08 (probe, production fleet resident): gen driver peak
+# 15.40 GiB at BOTH 1024² and 720×1440 / 20 st / CFG 4.0 — margin 0.53 GiB;
+# 12.06 s/step (~4 min per image); same-seed rerun pixel-identical.
+# Q4_K_M-class loads OOM (base-2512 precedent) — no higher tier has a path.
+_QWENIMAGE_EDIT_GGUF: dict[str, tuple[str, str]] = {
+    "Q4_K_S": ("unsloth/Qwen-Image-Edit-2511-GGUF",
+               "qwen-image-edit-2511-Q4_K_S.gguf"),
+}
+
+# The Qwen2VL processor merges the condition image into the prompt text at
+# encode (vision tokens + <|vision_start|> placeholder) — CPU-only, kept for
+# the encode-without-transformer path exactly like the base engine's
+# tokenizer. Loaded by _load_qwenimage_edit; None before the first load.
+_QWENIMAGE_EDIT_PROCESSOR = None
+
+
+def _load_qwenimage_edit(quant: str = "Q4_K_S"):
+    import torch
+    from diffusers import QwenImageEditPlusPipeline
+    from diffusers.models import (AutoencoderKLQwenImage,
+                                  QwenImageTransformer2DModel)
+    from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+    from transformers import Qwen2Tokenizer, Qwen2VLProcessor
+
+    if not GPU_ONLY:
+        raise RuntimeError(
+            "Qwen-Image-Edit 2511 only has a GPU-only path (GGUF transformer "
+            "+ bnb4 encoder) — no CPU/offload fallback was written for it.")
+    use_quant = quant or "Q4_K_S"
+    if use_quant not in _QWENIMAGE_EDIT_GGUF:
+        raise RuntimeError(
+            f"Qwen-Image-Edit 2511 quant '{use_quant}' not recognised. "
+            f"Valid options: {list(_QWENIMAGE_EDIT_GGUF)}"
+        )
+    t0 = time.time()
+    repo_id, fname = _QWENIMAGE_EDIT_GGUF[use_quant]
+    repo = ENGINES["qwenimage-edit"].hf_repo   # Qwen/Qwen-Image-Edit-2511
+
+    log.info("Loading Qwen-Image-Edit 2511 transformer from GGUF — "
+             "quant=%s …", use_quant)
+    gguf_path = _ensure_gguf(repo_id, fname,
+                             os.path.join(GGUF_ROOT, "qwenimage-edit"))
+    transformer = QwenImageTransformer2DModel.from_single_file(
+        gguf_path,
+        config              = _component_config_dir(repo, "transformer",
+                                                    "qwenimage-edit"),
+        quantization_config = _gguf_quant_config(),
+        torch_dtype         = torch.bfloat16,
+    ).to("cuda")
+
+    # Text encoder NEVER loads in-process with the transformer resident —
+    # cache-miss encodes run with the pipeline unloaded
+    # (_generate_qwenimage_edit unloads, encodes via the OzzyGT mirror,
+    # saves, reloads).
+    text_encoder = None
+
+    log.info("Loading Qwen-Image-Edit 2511 tokenizer / processor / "
+             "VAE / scheduler …")
+    tokenizer = Qwen2Tokenizer.from_pretrained(repo, subfolder="tokenizer")
+    processor = Qwen2VLProcessor.from_pretrained(repo, subfolder="processor")
+    global _QWENIMAGE_EDIT_PROCESSOR
+    _QWENIMAGE_EDIT_PROCESSOR = processor
+    # MUST load via the concrete AutoencoderKLQwenImage class — same
+    # Cosmos-style vae/config.json gotcha as the base 2512 repo (generic
+    # AutoencoderKL.from_pretrained mis-dispatches and dies on
+    # decoder.conv_in.bias).
+    vae       = AutoencoderKLQwenImage.from_pretrained(
+        repo, subfolder="vae", torch_dtype=torch.bfloat16, token=None,
+    )
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+        repo, subfolder="scheduler", torch_dtype=torch.bfloat16, token=None,
+    )
+
+    log.info("Assembling Qwen-Image-Edit 2511 pipeline …")
+    pipe = QwenImageEditPlusPipeline(
+        scheduler    = scheduler,
+        vae          = vae,
+        text_encoder = text_encoder,
+        tokenizer    = tokenizer,
+        processor    = processor,
+        transformer  = transformer,
+    ).to("cuda")
+    for enable in ("enable_slicing", "enable_tiling"):   # decode safety
+        if hasattr(pipe.vae, enable):
+            getattr(pipe.vae, enable)()
+    # See the qwenimage loader — with a None text encoder the pipeline's
+    # _execution_device can fall back to a cpu reading of the signature
+    # order; precomputed embeds mean generation never calls the encoder, so
+    # cement cuda.
+    pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+
+    STATE.loaded_model       = pipe
+    STATE.active_engine      = "qwenimage-edit"
+    STATE.active_quant       = quant
+    ENGINES["qwenimage-edit"].loaded = True
+    log.info("Qwen-Image-Edit 2511 ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
+
+
+def _qwenimage_edit_encode_texts(encoder, cond_img, texts: list) -> dict:
+    """Image-conditioned encode via a PARTIAL edit pipeline (encoder +
+    processor, no transformer/VAE) running the pipeline-native
+    _get_qwen_prompt_embeds. Returns {text: single-row embeds}.
+
+    No static replication is possible here (unlike the text-only base
+    engine): the EditPlus system template + 64-token prefix drop, the
+    per-image "<|vision_start|>…<|image_pad|>…" placeholder and the image
+    merge all live inside the pipeline. The probe validated this
+    partial-pipeline construction (register_modules accepts None modules;
+    the init guards the VAE accessor) — the single-sample mask collapses to
+    None, which the pipeline treats as all-valid.
+    """
+    import torch
+    from diffusers import QwenImageEditPlusPipeline
+    from diffusers.pipelines.qwenimage.pipeline_qwenimage_edit_plus import (
+        calculate_dimensions)
+
+    enc_pipe = QwenImageEditPlusPipeline(
+        scheduler    = None,
+        vae          = None,
+        text_encoder = encoder,
+        tokenizer    = None,
+        processor    = _QWENIMAGE_EDIT_PROCESSOR,
+        transformer  = None,
+    )
+    enc_pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+    # __call__-preprocess parity: the condition image is resized to the 384²
+    # area BEFORE the processor merges it (CONDITION_IMAGE_SIZE = 384 * 384).
+    cond_w, cond_h = calculate_dimensions(
+        384 * 384, cond_img.size[0] / cond_img.size[1])
+    cond_img = enc_pipe.image_processor.resize(cond_img, cond_h, cond_w)
+
+    out: dict = {}
+    try:
+        for text in texts:
+            # no_grad is MANDATORY — same autograd-graph trap as the base
+            # engine (the output row would otherwise keep the encoder's
+            # weights alive past `del encoder`).
+            with torch.no_grad():
+                pe, _mask = enc_pipe._get_qwen_prompt_embeds(
+                    text, [cond_img], device="cuda", dtype=torch.bfloat16)
+            out[text] = pe[0]              # single-row (drop batch dim)
+    finally:
+        del enc_pipe
+        torch.cuda.empty_cache()
+    return out
+
+
+def _generate_qwenimage_edit(params: dict) -> list[dict]:
+    import torch
+
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+    steps = int(params.get("num_inference_steps", 20))
+    steps = max(1, min(steps, 50))
+    guidance = float(params.get("guidance_scale", 4.0))
+    n = int(params.get("num_images", 1))
+    quant = params.get("quant", "")
+    W = int(params.get("width",  1024))
+    H = int(params.get("height", 1024))
+
+    ref_bytes = params.get("reference_image")
+    if ref_bytes is None:
+        raise ValueError(
+            "reference_image is required for Qwen-Image Edit — the edit "
+            "checkpoint consumes a base image natively (no text-only path). "
+            "Upload the image with this request.")
+    # Measured ceiling 2026-09-08: 1024² (1.05M px) AND 720×1440 both fit at
+    # 20 st/CFG 4.0 with ≤0.53 GiB margin; any larger canvas OOMs the card.
+    if W * H > 1024 * 1024:
+        raise ValueError(
+            f"Canvas {W}×{H} = {W*H/1e6:.1f}M px exceeds the ~1.05M px ceiling "
+            f"verified on the 16 GB card (1024² and 720×1440 both fit — "
+            f"measured 2026-09-08).")
+    ref = _load_ref_image(ref_bytes)       # corrupt upload → ValueError → 400
+    if max(ref.size) > 1024:               # pipeline re-resizes internally
+        from PIL import Image
+        ref.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+
+    # Prompts to encode: positive always; the negative (CFG side) only when
+    # true_cfg_scale > 1 — at guidance ≤ 1 the pipeline warns and ignores it.
+    # The edit embeds are image-conditioned, so the cache key covers the
+    # prompt text AND the uploaded image bytes: same (prompt, image) pair →
+    # identical decode → identical cond image → identical embeds.
+    need_neg = guidance > 1
+    to_encode: dict = {"prompt": params["prompt"]}
+    if need_neg:
+        to_encode["negative"] = params.get("negative_prompt", "") or ""
+    ref_digest = hashlib.sha256(ref_bytes).hexdigest()[:24]
+
+    def _cache_path(text: str) -> str:
+        digest = hashlib.sha256(
+            (ref_digest + "\x00" + text).encode("utf-8")).hexdigest()[:24]
+        return os.path.join(EMBED_CACHE_ROOT, f"v{EMBED_CACHE_VERSION}",
+                            "qwenimage-edit", digest + ".pt")
+
+    # Hit → embeds from disk, encoder never loads. Miss → the flow runs the
+    # encoder with the ~11.8 GiB Q4_K_S transformer UNLOADED (they never
+    # coexist on the 16 GB card), then reloads the pipeline (~20-50 s GGUF
+    # read) — paid once per (prompt, image bytes).
+    embeds: dict = {}
+    missing: list = []
+    for label, text in to_encode.items():
+        cached = _embed_cache_load(_cache_path(text))
+        if cached is not None:
+            embeds[label] = cached
+        else:
+            missing.append((label, text))
+    if missing:
+        log.info("Qwen-Image-Edit embed cache miss (%d prompt(s), "
+                 "image-keyed) — unloading the transformer to encode …",
+                 len(missing))
+        _unload_current()
+        _ensure_encoder_headroom("qwenimage-edit")
+        # Shared OzzyGT mirror — the edit checkpoint uses the same
+        # Qwen2.5-VL-family text encoder as the base 2512 (probe-verified).
+        encoder = _qwenimage_load_encoder()
+        try:
+            rows = _qwenimage_edit_encode_texts(
+                encoder, ref, [t for _, t in missing])
+        finally:
+            del encoder
+            gc.collect()
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+        for label, text in missing:
+            _embed_cache_save(_cache_path(text), rows[text])
+            embeds[label] = rows[text]
+        log.info("Qwen-Image-Edit encode done — reloading the transformer …")
+        _ensure_engine("qwenimage-edit", quant)
+    pipe = STATE.loaded_model
+
+    images = []
+    for i in range(n):
+        generator = torch.Generator(device="cpu").manual_seed(seed + i)
+        kw = dict(
+            image               = [ref],
+            prompt              = None,     # precomputed embeds — no re-encode
+            prompt_embeds       = embeds["prompt"].to("cuda").unsqueeze(0),
+            negative_prompt     = None,
+            negative_prompt_embeds = (embeds["negative"].to("cuda").unsqueeze(0)
+                                      if need_neg else None),
+            width               = W,
+            height              = H,
+            num_inference_steps = steps,
+            true_cfg_scale      = guidance,
+            generator           = generator,
+        )
+        result = pipe(**kw)
+        images.append(result.images[0])
+
+    final_params = {**params, "seed": seed}
+    return save_images(images, "qwenimage-edit", final_params)
+
+
+def _probe_qwenimage_edit():
+    try:
+        from diffusers import QwenImageEditPlusPipeline              # noqa: F401
+        from diffusers.models import QwenImageTransformer2DModel     # noqa: F401
+        ENGINES["qwenimage-edit"].available = True
+    except Exception as exc:
+        ENGINES["qwenimage-edit"].available = False
+        ENGINES["qwenimage-edit"].error     = str(exc)
+        log.warning("Qwen-Image-Edit 2511 unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # ERNIE-Image-Turbo  (Nunchaku-Lite NVFP4 primary, fp8 mirror fallback)
 # ---------------------------------------------------------------------------
 
@@ -1933,6 +2225,7 @@ def probe_availability():
     _probe_boogu()
     _probe_zimage()
     _probe_qwenimage()
+    _probe_qwenimage_edit()
     _probe_hidream()
     _probe_ernie()
 
@@ -2099,6 +2392,7 @@ _LOADERS = {
     "boogu":         _load_boogu,
     "zimage":        _load_zimage,
     "qwenimage":     _load_qwenimage,
+    "qwenimage-edit": _load_qwenimage_edit,
     "hidream":       _load_hidream,
     "ernie":         _load_ernie,
 }
@@ -2111,6 +2405,7 @@ _GENERATORS = {
     "boogu":         _generate_boogu,
     "zimage":        _generate_zimage,
     "qwenimage":     _generate_qwenimage,
+    "qwenimage-edit": _generate_qwenimage_edit,
     "hidream":       _generate_hidream,
     "ernie":         _generate_ernie,
 }
