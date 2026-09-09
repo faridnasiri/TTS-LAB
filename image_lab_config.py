@@ -175,6 +175,60 @@ ENGINES: dict[str, EngineInfo] = {
         ],
     ),
 
+    "flux2klein9b-nvfp4": EngineInfo(
+        key         = "flux2klein9b-nvfp4",
+        label       = "FLUX.2 Klein 9B NVFP4",
+        description = (
+            "FLUX.2 Klein 9B-NVFP4 — the same 9B-KV klein model in NVFP4 "
+            "(nunchaku-lite, lite-infer checkpoint): the lab's FAST lane. "
+            "Measured 2026-09-08/09: ~9 s load; gen 4.5-11.3 s per 4-step draw "
+            "(T2I 4.5-5.9 s) vs the Q6_K GGUF lane's 25.3 s. The NVFP4 "
+            "transformer (~4.7 GiB) and the bnb4 Qwen3-8B text encoder stay "
+            "resident TOGETHER (11.22 GiB torch-alloc at ready — the encoder "
+            "never parks, unlike the Q6 lane's lazy encode) → a whole-card "
+            "engine like qwenimage-edit. Same-seed reruns are near-identical "
+            "but NOT byte-identical (nunchaku numerics; measured MAE 3.66/255). "
+            "Canvases verified with a reference attached: 720×1440 / 1360×768 / "
+            "1536×1024 (driver peaks 15.3-15.7 GiB — 1536×1024 leaves only "
+            "~0.2 GiB of margin; anything larger OOMs on the 16 GB card)."
+        ),
+        output_type = "image",
+        image_input = "reference",   # klein natively conditions on the ref image
+        vram_gb     = 12.0,
+        hf_repo     = "lite-infer/flux.2-klein-9b-nunchaku-lite-nvfp4_r32-bnb4-text-encoder",
+        hf_repo_alt = None,
+        params      = [
+            _p("prompt",              "textarea", "",     "Prompt",
+               tooltip="Describe the image you want to generate.", required=True),
+            _p("negative_prompt",     "textarea", "",     "Negative prompt",
+               tooltip="Describe what you do NOT want in the image."),
+            _p("reference_image",     "file",     None,   "Reference image (optional)",
+               tooltip="Upload a reference image — klein natively conditions on it "
+                       "(identity / style / edit)."),
+            _p("width",               "int",      1024,   "Width (px)",
+               min_=256, max_=2048, step=16,
+               tooltip="Rendered at the nearest multiple of 16 (e.g. 1366 → 1360). "
+                       "1536×1024 is the verified ceiling (~0.2 GiB margin); larger "
+                       "canvases OOM on the 16 GB card."),
+            _p("height",              "int",      1024,   "Height (px)",
+               min_=256, max_=2048, step=16,
+               tooltip="Rendered at the nearest multiple of 16. 720×1440 verified "
+                       "with ~0.4 GiB margin."),
+            _p("num_inference_steps", "int",      4,      "Steps",
+               min_=1, max_=20, step=1,
+               tooltip="4 steps is optimal — FLUX.2-klein models are step-distilled. "
+                       "More steps rarely help (and cost VRAM)."),
+            _p("guidance_scale",      "float",    3.5,    "Guidance scale",
+               min_=1.0, max_=10.0, step=0.5,
+               tooltip="Ignored for this step-distilled model; included for UI consistency."),
+            _p("seed",                "int",      -1,     "Seed (-1 = random)",
+               min_=-1, max_=2**31-1, step=1,
+               tooltip="Fixed seed for reproducible results. NOTE: NVFP4 same-seed "
+                       "reruns are near-identical, not pixel-identical (nunchaku "
+                       "numerics) — see description."),
+        ],
+    ),
+
             "ideogram4": EngineInfo(
                 key         = "ideogram4",
                 label       = "Ideogram 4",

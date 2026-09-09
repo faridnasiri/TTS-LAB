@@ -330,8 +330,13 @@ async def evict_all():
 
     prev = STATE.active_engine
     busy = STATE.generating or STATE.loading
-    unloaded = prev is None
-    if prev is not None and not busy:
+    unloaded = False
+    if not busy:
+        # Always run the unload path, resident or not: with nothing resident,
+        # _unload_current still force-releases this process's pooled torch
+        # blocks (2026-09-08 deadlock — evict-all previously no-op'd on
+        # STATE.active_engine None and the ~4.4 GiB pool persisted until a
+        # process restart, gate-blocking every engine ~48 MiB short).
         engines.unload_engine()
         unloaded = True
 

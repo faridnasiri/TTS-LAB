@@ -400,6 +400,13 @@ def _unload_current():
         # Nothing resident in-process — but the ComfyUI sidecar may still hold
         # its ~8 GiB from before a lab restart, so hand the card back anyway.
         _poke_comfy_free()
+        # Still force-release THIS process's pooled torch blocks: after a
+        # heavy engine's encode/unload dance the caching allocator can hold
+        # ~4.4 GiB while no engine is tracked as resident (2026-09-08
+        # deadlock) — empty_cache returns those blocks to the driver, so an
+        # evict/unload call must never no-op on them.
+        log.info("Nothing resident — releasing pooled VRAM (gc + empty_cache + ipc_collect) …")
+        free_vram()
         return
     log.info("Unloading engine: %s (quant=%s)", STATE.active_engine, STATE.active_quant)
     if STATE.active_engine == "hidream":
@@ -522,6 +529,17 @@ _VRAM_NEED_MB: dict[str, int] = {
     # (12500/14800) assumed the encoder was resident.
     "flux2klein":   10500,
     "flux2klein9b": 10500,
+    # flux2klein9b-nvfp4 (nunchaku-lite NVFP4 + RESIDENT bnb4 Qwen3-8B): the
+    # encoder never parks (unlike the Q6 lane's lazy encode) → whole-card
+    # engine, qwenimage-edit class. Measured 2026-09-08/09 on the 5060 Ti:
+    # load 9.1 s → 11.22 GiB torch-alloc at ready, but the driver footprint
+    # at load is ~11.5-12.3 GiB (nunchaku scratch sits outside torch's
+    # allocator — ernie precedent); gen driver peaks 15,323-15,659 MiB with a
+    # reference attached at 720×1440 / 1360×768 / 1536×1024 (out-of-band
+    # probe next to the idle service; in-process peaks are lower). 13000
+    # forces a TTS eviction under TTS contexts, passes the idle state
+    # (~14.2 GiB free) untouched, and leaves ~1 GiB of slack over the load.
+    "flux2klein9b-nvfp4": 13000,
     # ideogram4 (own pip package, bnb nf4): load-ready state is cheap — 5,953
     # MiB used / 9,895 free after the loader's offloads (2026-09-08), so the
     # gate governs LOAD and stays moderate. But CFG generation pulls the
@@ -591,7 +609,15 @@ def _ensure_vram_headroom(need_mb: int, key: str) -> None:
     Escalation chain (GPU-only policy — image engines never fall back to CPU):
       1. Evict the TTS engine containers (they lazy-reload on their next
          TTS request, a few seconds of added latency).
-      2. Raise a clear error instead of OOMing mid-load. (The LLM container
+      2. Still short? If nothing is resident in-process, force-release THIS
+         process's pooled torch blocks (gc + empty_cache + ipc_collect) and
+         re-check before giving up — the 2026-09-08 deadlock: after a heavy
+         engine's encode/unload dance the caching allocator kept ~4.4 GiB
+         pooled with STATE.active_engine None, so mem_get_info read
+         ~10,452 MiB free and every gate failed ~48 MiB short (503) until a
+         process restart. The reclaim returns those blocks to the driver
+         when nothing live holds them.
+      3. Raise a clear error instead of OOMing mid-load. (The LLM container
          was retired 2026-08-23 — the old stop-LLM last-resort is gone.)
     """
     import torch
@@ -603,6 +629,19 @@ def _ensure_vram_headroom(need_mb: int, key: str) -> None:
     log.info("VRAM free %d MiB < %d — evicting TTS engine containers …",
              free_mb, need_mb)
     free_mb = _evict_tts_engines()
+    if free_mb < need_mb and STATE.active_engine is None:
+        # Nothing left to unload in-process — the shortfall may be pooled
+        # blocks the caching allocator can still return to the driver (see
+        # docstring). Force the release once, then re-check.
+        import time as _t
+        log.info("Still short (%d MiB < %d) with no engine resident — forcing "
+                 "gc + empty_cache + ipc_collect …", free_mb, need_mb)
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.ipc_collect()
+        _t.sleep(1)   # let the driver settle after the release
+        free_mb = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        log.info("Post-reclaim free VRAM: %d MiB", free_mb)
     if free_mb < need_mb:
         label = ENGINES.get(key).label if ENGINES.get(key) else key
         raise RuntimeError(
@@ -1024,6 +1063,108 @@ def _probe_flux2klein9b():
         ENGINES["flux2klein9b"].available = False
         ENGINES["flux2klein9b"].error     = str(exc)
         log.warning("FLUX.2 Klein 9B-KV unavailable: %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# FLUX.2 Klein 9B NVFP4 (nunchaku-lite fast lane)
+# ---------------------------------------------------------------------------
+
+def _load_flux2klein9b_nvfp4(quant: str = ""):
+    """FLUX.2 Klein 9B NVFP4 — lite-infer nunchaku-lite checkpoint.
+
+    from_pretrained loads the WHOLE pipeline resident (NVFP4 transformer +
+    bnb4 Qwen3-8B text encoder + VAE) — the encoder never parks, unlike the
+    Q6_K GGUF lane's lazy encode. Whole-card engine (qwenimage-edit class);
+    _VRAM_NEED_MB 13000 governs. Verified 2026-09-08/09 on sm_120: load
+    9.1 s, 11.22 GiB torch-alloc at ready; gen 4.5-11.3 s @ 4 steps; driver
+    gen peaks up to 15,659 MiB at 1536×1024 with a reference attached.
+    Same-seed reruns are near-identical, not byte-identical (nunchaku
+    numerics — measured MAE 3.66/255 on a 1024² rerun pair).
+    """
+    import torch
+    from diffusers import Flux2KleinPipeline
+
+    if not GPU_ONLY:
+        raise RuntimeError(
+            "FLUX.2 Klein 9B NVFP4 is CUDA-only (nunchaku-lite kernels on "
+            "sm_120) — no CPU/offload fallback exists.")
+    t0 = time.time()
+    repo = ENGINES["flux2klein9b-nvfp4"].hf_repo
+    log.info("Loading FLUX.2 Klein 9B NVFP4 (nunchaku-lite) …")
+    pipe = Flux2KleinPipeline.from_pretrained(
+        repo, torch_dtype=torch.bfloat16).to("cuda")
+    for enable in ("enable_slicing", "enable_tiling"):   # decode safety
+        if hasattr(pipe.vae, enable):
+            getattr(pipe.vae, enable)()
+    # Cement cuda as the execution device — the first-module signature-order
+    # fallback can read cpu and kill the CUDA VAE on some pipelines; here
+    # every component is already on cuda, so the override is never wrong.
+    pipe.__class__._execution_device = property(lambda self: torch.device("cuda"))
+
+    STATE.loaded_model       = pipe
+    STATE.active_engine      = "flux2klein9b-nvfp4"
+    STATE.active_quant       = quant
+    ENGINES["flux2klein9b-nvfp4"].loaded = True
+    log.info("FLUX.2 Klein 9B NVFP4 ready in %.1f s (CUDA: %.2f GiB)",
+             time.time() - t0, torch.cuda.memory_allocated() / 1024**3)
+
+
+def _generate_flux2klein9b_nvfp4(params: dict) -> list[dict]:
+    import torch
+
+    pipe = STATE.loaded_model
+    seed = params.get("seed", -1)
+    if seed == -1:
+        seed = random_seed()
+
+    generator = torch.Generator("cpu").manual_seed(seed)
+
+    # Same Gemini expansion policy as the Q6 lane (no-op without the key).
+    prompt = params["prompt"]
+    expanded = _gemini_expand_prompt(prompt) if GPU_ONLY else None
+    if expanded:
+        log.info("Gemini expanded prompt: %r → %r", prompt, expanded)
+        prompt = expanded
+
+    # Ref thumbnail — same KV-budget rule as the Q6 lane: cap the ref area at
+    # ≤768² so a full landscape screenshot passes untouched while square
+    # full-res refs can't blow the card.
+    ref_img = _load_ref_image(params.get("reference_image"))
+    if ref_img is not None:
+        w, h = ref_img.size
+        if w * h > 768 * 768:
+            log.info("Reference image %dx%d exceeds the 16 GB card's KV budget — downscaling to ≤768² px", w, h)
+            ref_img.thumbnail((768, 768))
+
+    # No guidance_scale — step-distilled klein runs without CFG (passing
+    # guidance gets it ignored with a warning). Width/height that aren't
+    # multiples of 16 are rounded by the pipeline (verified: 1366×768
+    # renders 1360×768). The resident bnb4 encoder handles the text prompt
+    # in-pipeline (no prompt-embed cache, no parking — whole-card engine).
+    result = pipe(
+        prompt              = prompt,
+        image               = ref_img,
+        width               = int(params.get("width",  1024)),
+        height              = int(params.get("height", 1024)),
+        num_inference_steps = int(params.get("num_inference_steps", 4)),
+        generator           = generator,
+    )
+    final_params = {**params, "seed": seed}
+    if expanded:
+        final_params = {**final_params, "expanded_prompt": expanded}
+    return save_images(result.images, "flux2klein9b-nvfp4", final_params)
+
+
+def _probe_flux2klein9b_nvfp4():
+    try:
+        # diffusers 0.40 nunchaku-lite dispatches the checkpoint's pipeline
+        # class from its own config (Flux2KleinPipeline, auto_encoder kwarg).
+        from diffusers import Flux2KleinPipeline  # noqa: F401
+        ENGINES["flux2klein9b-nvfp4"].available = True
+    except Exception as exc:
+        ENGINES["flux2klein9b-nvfp4"].available = False
+        ENGINES["flux2klein9b-nvfp4"].error     = str(exc)
+        log.warning("FLUX.2 Klein 9B NVFP4 unavailable: %s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -2220,6 +2361,7 @@ def probe_availability():
     """
     _probe_flux2klein()
     _probe_flux2klein9b()
+    _probe_flux2klein9b_nvfp4()
     _probe_ideogram4()
     _probe_sana()
     _probe_boogu()
@@ -2387,6 +2529,7 @@ def _load_ref_image(ref) -> Optional[Any]:
 _LOADERS = {
     "flux2klein":    _load_flux2klein,
     "flux2klein9b":  _load_flux2klein9b,
+    "flux2klein9b-nvfp4": _load_flux2klein9b_nvfp4,
     "ideogram4":     _load_ideogram4,
     "sana":          _load_sana,
     "boogu":         _load_boogu,
@@ -2400,6 +2543,7 @@ _LOADERS = {
 _GENERATORS = {
     "flux2klein":    _generate_flux2klein,
     "flux2klein9b":  _generate_flux2klein9b,
+    "flux2klein9b-nvfp4": _generate_flux2klein9b_nvfp4,
     "ideogram4":     _generate_ideogram4,
     "sana":          _generate_sana,
     "boogu":         _generate_boogu,

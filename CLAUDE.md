@@ -1,11 +1,11 @@
 # Arthur TTS Lab
 
-> 30-engine TTS benchmark + 10-engine Image lab | FastAPI | Docker multi-container | Ansible IaC
+> 30-engine TTS benchmark + 11-engine Image lab | FastAPI | Docker multi-container | Ansible IaC
 > **Deployed to:** `arthur@192.168.0.87:8009` (TTS) | **GPU:** RTX 5060 Ti 16 GB GDDR7 (Blackwell sm_120)
 
 ## Project Identity
 
-A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an Image generation lab (FLUX.2 Klein ×2, Ideogram 4, SANA 1.6B, Boogu Turbo, Z-Image Turbo, Qwen-Image 2512, Qwen-Image Edit, HiDream O1-Dev via ComfyUI sidecar, ERNIE-Image-Turbo). sd35 + Wan2.2 were removed 2026-09-07 — the lab is all-image; video plumbing stays for a future engine.
+A self-hosted, multi-engine Text-to-Speech benchmark and evaluation lab. Compare every major open-source TTS model side-by-side through a single web UI. Also includes an Image generation lab (FLUX.2 Klein ×3 — 4B, 9B-KV Q6_K GGUF, 9B-NVFP4 nunchaku fast lane; Ideogram 4, SANA 1.6B, Boogu Turbo, Z-Image Turbo, Qwen-Image 2512, Qwen-Image Edit, HiDream O1-Dev via ComfyUI sidecar, ERNIE-Image-Turbo). sd35 + Wan2.2 were removed 2026-09-07 — the lab is all-image; video plumbing stays for a future engine.
 
 Originally built for an Android scam-baiting app ("SpamBlocker") that uses a character named Arthur Henderson as an AI decoy — hence the "Arthur" naming throughout.
 
@@ -243,6 +243,8 @@ Response differs from TTS engines:
 | `docs/sessions/SESSION_2026-09-07_IMGLAB_SANA_BOOGU.md` | **SANA + Boogu integration session** — SCM 4-step fix, disk-full incident, measured VRAM/RAM verdicts |
 | `docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md` | **sd35+wan removal / 4-engine T2I swap session** — locked decisions, measured VRAM per new engine, gate recalibration |
 | `docs/sessions/SESSION_2026-09-08_IMGLAB_QWENIMAGE_EDIT.md` | **Native base-face consumption session** — capability layer (`image_input`), Qwen-Image-Edit spike (GO) + 10th engine, per-request reference upload semantics |
+| `docs/sessions/SESSION_2026-09-09_IMGLAB_NVFP4.md` | **Klein 9B NVFP4 fast lane + gate-hardening session** — 11th engine registration, canvas-sweep verdicts, pooled-allocator deadlock root-cause + 3-part reclaim fix |
+| `docs/image-lab/HANDOFF_SHORTS_BASE_FACE_2026-09-08.md` | **Shorts-pipeline dev handoff** — base-face API contract, klein fast lane vs qwenimage-edit text lane, per-request upload semantics, determinism cheat-sheet |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
 | `docs/issues/*.md` | Bug investigations (VibeVoice, S2-Pro, ChatTTS) |
