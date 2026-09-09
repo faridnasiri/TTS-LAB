@@ -65,6 +65,138 @@ pooled blocks after a heavy gen). The FHD typography win is real at native
 resolution — production use should evict-all first and treat a mid-batch 503
 as retry-at-1536.
 
+## 2026-09-09 addendum — canvas ladder with OmniVoice resident (TTS-only cleanup aftermath)
+
+User stopped qwen/mid/editx containers (OmniVoice-only TTS) → engine-current
+stays up with OmniVoice resident (~2.4 GiB card ambient vs ~0.87 GiB on the
+clear card). Q: does near-FHD still OOM in that state? Measured through the
+live :8002 API, card-wide watcher per draw, ref attached, 4 steps, fixed seed
+(lab re-draw of the dev probe methodology):
+
+| Canvas | Context | Verdict | Sampled card peak | Note |
+|---|---|---|---|---|
+| 720×1440 (1.04 MP) | OmniVoice resident | ✅ 200 | 15,712 MiB | ~600 MiB margin |
+| 1360×768 (1.04 MP) | OmniVoice resident | ✅ 200 | 15,832 MiB | prod long canvas — ~480 MiB margin |
+| 1024×1024 (1.05 MP) | OmniVoice resident | ❌ 503 | 15,798 MiB | CUDA OOM, 512 MiB request refused — same pixel area as the two ✅s: the ~1.04 MP boundary is razor-thin and allocation-order-dependent |
+| 1536×1024 (1.57 MP) | OmniVoice resident | ❌ 503 | 15,696 MiB | **the previous every-context ceiling no longer fits** |
+| 1792×1008 (1.81 MP) | OmniVoice resident | ❌ 503 | 15,836 MiB | nunchaku kernel OOM (Tensor.h:95) |
+| 1920×1072 FHD (2.06 MP) | OmniVoice resident | ❌ 503 | 15,838 MiB | CUDA OOM, 256 MiB request refused |
+
+**Verdict: the ambient tenant drops the NVFP4 canvas ceiling from 2.06 MP
+(clear-card FHD, 6/6) to ~1.04 MP.** The +1.6-1.9 GiB of card OmniVoice holds
+shrinks the imglab process's driver-allocatable ceiling from ~14.8 GiB (what
+an in-service FHD gen needs) to ~13.2-13.4 GiB; 720×1440/1360×768 gens land
+right at that wall (peaks 15,712-15,832 card-wide → only ~480-600 MiB of
+16,311 left), and any canvas whose working pattern needs a single
+allocation larger than the leftover (~480-600 MiB, or its aspect's peak
+tensor) OOMs mid-gen. The 1.04 MP class itself is marginal: 1024×1024 failed
+where same-area 720×1440/1360×768 succeeded — a 512 MiB transient vs ~480 MiB
+free at that instant. All four OOMs surfaced as clean 503s (RuntimeError
+mapping), zero service restarts, 11/11 engines stayed available, and the
+generate() error path (`_unload_current()` at image_lab_engines.py ~2456)
+released the engine after each failure — card fell from ~15.8 to ~3.9-4.2 GiB
+post-failure, so the card was never bricked.
+
+**Baked 2026-09-09 (user call — "auto evict, no other tenants when the
+engine works, OK with OmniVoice cold loading"):**
+
+1. **Load gate 13,000 → 15,000 MiB** (`_VRAM_NEED_MB["flux2klein9b-nvfp4"]`)
+   — sits ~350-450 MiB under the post-eviction max free (~15.35-15.45 GiB)
+   and above every TTS-resident free reading (OmniVoice: 13,876), so ANY
+   NVFP4 load auto-evicts the TTS tenant and a cleared card passes
+   untouched. Idle TTS containers whose CUDA contexts alone hold ~1.5-2 GiB
+   now get an honest gate 503 instead of a mid-gen OOM.
+2. **Warm tenant guard** (`_evict_tts_tenant_if_loaded` in generate() for
+   warm draws, `_WARM_TENANT_GUARD_KEYS`) — the load gate never re-runs on
+   a warm gen, so a TTS model that loaded since the last draw (card free
+   ~3.1 → ~1.5 GiB with NVFP4 resident) would OOM the gen mid-flight. The
+   warm path asks the orchestrator /status whether any TTS model is loaded
+   (deterministic — a free-VRAM floor can't separate a tenant from the
+   engine's own post-draw pooled blocks) and evicts first.
+3. Gate 503 message now states the need in exact MiB ("requires ≥ 15,000
+   MiB free") — the old "~14 GiB" integer-division wording contradicted
+   itself at the new value.
+4. Cost: every cold NVFP4 load evicts OmniVoice (~30 s reload on the next
+   TTS synth — accepted). Warm draws within a batch pay one cheap
+   orchestrator /status check each. The whole-card co-tenant OOM class is
+   unchanged for OTHER whole-card engines (ernie, ideogram4, boogu, sana —
+   their gates still pass the OmniVoice-resident state); add each to
+   `_WARM_TENANT_GUARD_KEYS` + raise its gate as measured, if the user
+   wants the same guarantee there.
+
+**Live verification after the bake (2026-09-09):**
+
+| Step | Result |
+|---|---|
+| Cold FHD 1920×1072 draw with OmniVoice resident | ✅ 200 in 31.8 s (incl. ~9 s load) — gate fired ("VRAM free 13,8xx < 15000 — evicting"), OmniVoice auto-unloaded, card peak 15,696 MiB |
+| Warm FHD draw (tenant gone) | ✅ 200 in 15.2 s, peak 15,054 MiB — guard no-op'd (nothing to evict) |
+| OmniVoice TTS synth while NVFP4 still resident | ❌ **500 CUDA OOM** — see gap below |
+| Warm FHD draw after the failed TTS reload | ✅ 200 in 15.4 s (no tenant was ever loaded — the reload had failed) |
+
+**Gap found — the reverse direction does not exist.** Nothing on the TTS
+side can evict the image lab: engine-current's lazy load OOM'd trying to
+fit OmniVoice (~1.14 GiB chunk vs ~794 MiB free) with NVFP4 resident
+(~12.3 GiB), and the orchestrator dispatch has no image-lab hook (verified
+in /opt/arthur-tts-lab/tts_lab_dispatch.py — the LLM-era evictions there
+only cover TTS containers/LLM). The imglab idle-unload is 900 s, so NVFP4
+squats the card up to 15 min after a batch → any TTS synth in that window
+500s until the engine idles out or is unloaded manually. Both the
+orchestrator and engine-current CAN reach the imglab from the compose
+bridge at http://192.168.0.87:8002 (verified HTTP 200) — a reverse hook is
+mechanically trivial but lives in the TTS-side files (other session's WIP).
+Recommended shape (for the HEAVY class): orchestrator dispatch evicts
+imglab (`POST /engines/unload`) before dispatching heavy TTS loads,
+mirroring the existing `_stop_llm_container` pattern and the
+imglab→orchestrator convention.
+
+## 2026-09-09 addendum 2 — cohabitation instead of a reverse hook (user design, verified E2E)
+
+User's counter-proposal to the reverse hook: "model load itself isn't
+harmful — can the post-draw bloat be emptied so only the model remains,
+then OmniVoice loads beside it? Next image evicts TTS. Is that logical?"
+Answer verified live: **yes — for the small-tenant class.** The gap's OOM
+was the POST-DRAW POOL, not the resident model: a fresh NVFP4 load leaves
+~3.1-4.1 GiB free; the pool collapses it to ~0.5-1.2 GiB. The pool is
+torch caching-allocator blocks — releasable via empty_cache without
+unloading the model (nunchaku scratch is outside torch but measured
+releasable too: the full working set returns).
+
+**Baked:** `_compact_after_draw()` (image_lab_engines.py) — after every
+successful guard-set draw, gc + empty_cache + ipc_collect while the engine
+stays resident; logs the free-MiB delta. ~10 lines, image-side only, no
+TTS-side change.
+
+**Live E2E (2026-09-09, all through the live APIs, card-wide watcher):**
+
+| Step | Result | Numbers |
+|---|---|---|
+| S1 cold OmniVoice load | ✅ 200 | 8 s, peak 2,469 MiB |
+| D1 cold FHD 1920×1072 with OmniVoice resident | ✅ 200 | 30 s, gate fired (free 13,280 < 15,000 → evict-all freed 1,960 MiB), peak 15,696 |
+| **Post-draw compaction** | ✅ | **released 2,878 MiB (free 796 → 3,674 MiB)** — engine kept resident, card ~12.2 GiB used |
+| S2 synth beside resident NVFP4 | ✅ **200** | 9 s, peak 14,168 — the co-load the gap said was impossible |
+| D2 warm FHD draw (tenant loaded again) | ✅ 200 | 18 s, guard fired ("tenant loaded — evicting TTS before warm gen", freed 1,960 MiB), peak 15,698 |
+| Post-draw compaction | ✅ | released 3,212 MiB (free 462 → 3,674 MiB) |
+| S3 synth again | ✅ 200 | 9 s, peak 14,168 |
+
+Both-resident state: card 14,134 MiB used (~2.1 GiB free) — OmniVoice
+synth ran comfortably in it. The floor is deterministic: free lands on
+3,674 MiB after every draw, every time.
+
+**Verdict:** the cycle the user proposed is the contract now — draws
+always get the clear card (gate 15,000 on cold loads + the warm tenant
+guard), and between draws the engine sits lean (~12.2 GiB) so a ~2 GiB
+TTS tenant co-loads beside it instead of 500ing. No squat window, no
+reverse hook needed, no TTS-side edit. Boundary: cohabitation only fits
+tenants ≲ 2-3 GiB (OmniVoice ✓). Heavy engines (EditX ~12.8 GB AWQ alone,
+s2pro) can never cohabit with a 12.3 GiB NVFP4 — for THAT class the
+reverse hook (imglab unload from the orchestrator dispatch) remains the
+completion if those containers come back. One per-draw cost: every draw
+re-ascends from a cold pool (measured cold-start FHD peak 15,696 MiB —
+still 200, ~0.6 GiB margin; per-draw overhead ~0.1-0.2 s).
+
+State left after verification: NVFP4 unloaded, OmniVoice reloaded, card
+2,630 MiB, 11/11 engines available.
+
 ## Crash reconciliation — the dev's "720×1440 NEW ALL-TIME HIGH"
 
 Dev's 5-draw probe reported 720×1440 "crashing". Root cause (from the dev's

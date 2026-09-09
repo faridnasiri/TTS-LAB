@@ -43,6 +43,11 @@ GGUF_ROOT = "/opt/arthur-img-models/gguf"
 # broker for evicting TTS models off the shared GPU (see _evict_tts_engines).
 # Also used by the dispatch-layer /evict-all for the UI "Evict VRAM" button.
 TTS_EVICT_ALL_URL = "http://localhost:8009/evict-all"
+# Orchestrator status — the warm-gen tenant guard (_tts_tenant_loaded) asks
+# the orchestrator whether any TTS model is resident instead of inferring it
+# from free VRAM (a free-memory floor can't tell a foreign tenant apart from
+# this process's own post-draw pooled blocks).
+TTS_STATUS_URL    = "http://localhost:8009/status"
 
 # Headless ComfyUI sidecar for the HiDream O1 engine (arthur-comfy.service,
 # own venv, port 8188 — see hidream_comfy_bridge.py). The lab and the sidecar
@@ -511,6 +516,98 @@ def _evict_tts_engines() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Warm-gen tenant guard — whole-card engines whose gen needs a clear card
+# ---------------------------------------------------------------------------
+
+# Engines whose measured gen working set only fits on a cleared card (TTS
+# tenants evicted; ambient ≤ ~1 GiB). A WARM draw (engine already resident)
+# never re-runs the load gate, so a TTS model that loaded since the last
+# draw would crowd the card mid-gen — for these engines the warm path evicts
+# first (see _evict_tts_tenant_if_loaded). Only whole-card engines with
+# measured clear-card requirements belong here; add as each is measured.
+_WARM_TENANT_GUARD_KEYS: frozenset[str] = frozenset({
+    "flux2klein9b-nvfp4",   # FHD-class gen needs the clear card (09-09 ladder)
+})
+
+
+def _tts_tenant_loaded() -> bool:
+    """True when any TTS engine container has a model resident right now.
+
+    Queries the orchestrator /status (the canonical broker for the shared
+    16 GB card — engine containers publish no host ports). Deterministic
+    tenant check: a free-VRAM floor is unusable warm because the engine's
+    own pooled blocks from the previous draw read as "occupied".
+    """
+    import json as _json
+    import urllib.request as _urllib
+    try:
+        req = _urllib.Request(TTS_STATUS_URL)
+        with _urllib.urlopen(req, timeout=5) as resp:
+            models = _json.loads(resp.read().decode()).get("models", {})
+    except Exception as exc:
+        # Orchestrator down → fail open (today's behavior); the cold load
+        # gate still protects the next engine load.
+        log.warning("TTS tenant check failed (%s) — assuming none loaded", exc)
+        return False
+    for e in models.values():
+        if not isinstance(e, dict):
+            continue
+        if e.get("loaded_model") or e.get("status") in ("loaded", "loading"):
+            return True
+    return False
+
+
+def _evict_tts_tenant_if_loaded(engine_key: str) -> None:
+    """Evict a TTS tenant that loaded since the last draw (warm-gen guard).
+
+    Only engines in _WARM_TENANT_GUARD_KEYS pay the check — one cheap
+    orchestrator /status call per warm gen. Measured 2026-09-09 (OmniVoice
+    resident beside NVFP4): card free drops ~3.1 → ~1.5 GiB and anything
+    above ~1.04 MP OOMs mid-gen (503). Evicting BEFORE the gen keeps the
+    engine on the clear card it was calibrated on; the TTS model pays a
+    cold reload on its next synth (accepted trade).
+    """
+    if engine_key not in _WARM_TENANT_GUARD_KEYS:
+        return
+    if not _tts_tenant_loaded():
+        return
+    log.info("%s resident + TTS tenant loaded — evicting TTS before warm gen",
+             engine_key)
+    _evict_tts_engines()
+
+
+def _compact_after_draw(engine_key: str) -> None:
+    """Release a guard-set engine's post-draw working set; model stays resident.
+
+    The gen's transient tensors die with the call but their blocks stay pooled
+    in torch's caching allocator — after an FHD draw the card reads
+    ~14.7-15.5 GiB used even though the engine is idle, and that pool OOM'd
+    OmniVoice's reload (1.14 GiB chunk vs 794 MiB free, 2026-09-09).
+    empty_cache returns the pool to the driver WITHOUT unloading the model,
+    settling the card back toward the measured fresh-load state (~13.1-13.2
+    GiB used / ~3.1 GiB free) so a ~2 GiB TTS tenant can co-load beside the
+    resident engine — the cohabitation budget (user design, 2026-09-09).
+    Nunchaku scratch sits OUTSIDE torch's allocator; the log's free-MiB delta
+    (driver-level cudaMemGetInfo) shows what actually returned, and the next
+    draw re-ascends from the cold pool (~0.1-0.2 s — negligible per draw).
+    """
+    if engine_key not in _WARM_TENANT_GUARD_KEYS:
+        return
+    import torch
+    try:
+        free_before = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+        free_vram()
+        free_after = torch.cuda.mem_get_info()[0] // (1024 * 1024)
+    except Exception as exc:
+        # Never fail a draw that already succeeded — compaction is best-effort.
+        log.warning("%s post-draw compaction failed: %s", engine_key, exc)
+        return
+    log.info("%s post-draw compaction: released %d MiB (free %d → %d MiB), "
+             "engine kept resident", engine_key, free_after - free_before,
+             free_before, free_after)
+
+
+# ---------------------------------------------------------------------------
 # VRAM headroom enforcement — every loader makes room before allocating
 # ---------------------------------------------------------------------------
 
@@ -534,15 +631,24 @@ _VRAM_NEED_MB: dict[str, int] = {
     # engine, qwenimage-edit class. Measured 2026-09-08/09 on the 5060 Ti:
     # load 9.1 s → 11.22 GiB torch-alloc at ready, but the driver footprint
     # at load is ~11.5-12.3 GiB (nunchaku scratch sits outside torch's
-    # allocator — ernie precedent); gen driver peaks 15,323-15,659 MiB with a
-    # reference attached at 720×1440 / 1360×768 / 1536×1024 (out-of-band
-    # probe next to the idle service; in-process peaks are lower). Full-HD
-    # 1920×1072 / 1072×1920 verified IN-SERVICE only 2026-09-09 (dev 4/4 +
-    # lab re-draw 2/2; card peaks 15,371-15,697 MiB — the second process's
-    # own context OOMs FHD at the 15.48 GiB per-process torch wall). 13000
-    # forces a TTS eviction under TTS contexts, passes the idle state
-    # (~14.2 GiB free) untouched, and leaves ~1 GiB of slack over the load.
-    "flux2klein9b-nvfp4": 13000,
+    # allocator — ernie precedent). The gen working set is canvas-scaled and
+    # tops out at FULL-HD: in-service peaks 15,371-15,697 MiB on a clear
+    # card (1920×1072 verified 2026-09-09, dev 4/4 + lab re-draw 2/2; every
+    # out-of-band / second-process FHD draw OOMs at the 15.48 GiB per-process
+    # torch wall). 2026-09-09 ladder with a TTS tenant resident (OmniVoice,
+    # ~2.4 GiB ambient): 720×1440 / 1360×768 still fit (~15.7-15.8 GiB card
+    # peaks, ≤ ~600 MiB margin) but 1024×1024 already died on a 512 MiB
+    # alloc and 1536×1024 / FHD were guaranteed mid-gen OOMs — the old 13000
+    # passed that state untouched (13,876 MiB free) and let the gen walk
+    # into the OOM. 15000 demands a genuinely CLEAR card: it sits ~350-450
+    # MiB under the post-eviction max free (~15.35-15.45 GiB) and above
+    # every TTS-resident free reading, so any load auto-evicts the TTS
+    # tenant (OmniVoice pays a ~30 s cold reload on its next synth —
+    # accepted 2026-09-09) and a cleared card passes untouched. Warm draws
+    # are covered by _evict_tts_tenant_if_loaded. Idle TTS containers whose
+    # contexts alone hold ~1.5-2 GiB now 503 the load honestly instead of
+    # OOMing mid-gen.
+    "flux2klein9b-nvfp4": 15000,
     # ideogram4 (own pip package, bnb nf4): load-ready state is cheap — 5,953
     # MiB used / 9,895 free after the loader's offloads (2026-09-08), so the
     # gate governs LOAD and stays moderate. But CFG generation pulls the
@@ -648,7 +754,7 @@ def _ensure_vram_headroom(need_mb: int, key: str) -> None:
     if free_mb < need_mb:
         label = ENGINES.get(key).label if ENGINES.get(key) else key
         raise RuntimeError(
-            f"{label} needs ~{need_mb // 1024} GiB free VRAM; only {free_mb} MiB "
+            f"{label} requires ≥ {need_mb:,} MiB free; only {free_mb:,} MiB "
             f"available after evicting the TTS engine containers. "
             f"(GPU-only policy — no CPU offloading.)")
 
@@ -1078,13 +1184,18 @@ def _load_flux2klein9b_nvfp4(quant: str = ""):
     from_pretrained loads the WHOLE pipeline resident (NVFP4 transformer +
     bnb4 Qwen3-8B text encoder + VAE) — the encoder never parks, unlike the
     Q6_K GGUF lane's lazy encode. Whole-card engine (qwenimage-edit class);
-    _VRAM_NEED_MB 13000 governs. Verified 2026-09-08/09 on sm_120: load
-    9.1 s, 11.22 GiB torch-alloc at ready; gen 4.5-11.3 s @ 4 steps; driver
-    gen peaks up to 15,659 MiB at 1536×1024 with a reference attached.
-    Full-HD 1920×1072 verified IN-SERVICE on a clear card 2026-09-09
-    (dev 4/4 + lab 2/2, 13.4 s steady, peaks 15,371-15,697 MiB) — every
-    out-of-band/second-process FHD draw OOMs, so >1536² canvases are
-    service-context only.
+    _VRAM_NEED_MB 15000 governs — the gate demands a genuinely CLEAR card,
+    so any load auto-evicts a resident TTS tenant (OmniVoice pays a ~30 s
+    cold reload on its next synth, accepted 2026-09-09); warm draws are
+    guarded by _evict_tts_tenant_if_loaded. Verified 2026-09-08/09 on
+    sm_120: load 9.1 s, 11.22 GiB torch-alloc at ready; gen 4.5-11.3 s @ 4
+    steps; driver gen peaks up to 15,659 MiB at 1536×1024 with a reference
+    attached. Full-HD 1920×1072 verified IN-SERVICE on a clear card
+    2026-09-09 (dev 4/4 + lab 2/2, 13.4 s steady, peaks 15,371-15,697 MiB)
+    — every out-of-band/second-process FHD draw OOMs, so >1536² canvases
+    are service-context only; idle TTS containers holding ~1.5-2 GiB of
+    contexts also 503 the load honestly (gate message) instead of letting
+    the gen walk into a mid-gen OOM.
     Same-seed reruns are near-identical, not byte-identical (nunchaku
     numerics — measured MAE 3.66/255 on a 1024² rerun pair).
     """
@@ -2450,6 +2561,12 @@ def generate(engine_key: str, params: dict) -> list[dict]:
             STATE.run_loaded_at = 0.0
             _unload_current()
             raise
+        if not need_load:
+            # Warm draw: the engine is resident, so the load gate above did
+            # not re-run — evict any TTS model that loaded since the last
+            # draw so the gen gets the clear card it was calibrated on
+            # (whole-card engines only; see _evict_tts_tenant_if_loaded).
+            _evict_tts_tenant_if_loaded(engine_key)
         generator_fn = _GENERATORS[engine_key]
         try:
             results = generator_fn(params)
@@ -2464,6 +2581,12 @@ def generate(engine_key: str, params: dict) -> list[dict]:
             _unload_current()
             raise
         STATE.last_used = time.time()
+        # Guard-set engines (clear-card class) leave the gen's working set
+        # pooled after a successful draw — release it while the engine stays
+        # resident so a TTS tenant can co-load beside it (cohabitation;
+        # the pooled state OOM'd OmniVoice's 1.14 GiB load chunk at 794 MiB
+        # free, 2026-09-09). Best-effort; see _compact_after_draw.
+        _compact_after_draw(engine_key)
         return results
     finally:
         STATE.generating = False

@@ -194,7 +194,15 @@ ENGINES: dict[str, EngineInfo] = {
             "verified 2026-09-09 (dev probe 4/4 + lab re-draw 2/2 through the "
             "live API on a clear card; card peaks 15.37-15.70 GiB, ~0.6-0.9 GiB "
             "margin). Any second CUDA process or added ambient tenant OOMs FHD "
-            "(out-of-band dies at the 15.48 GiB per-process torch wall)."
+            "(out-of-band dies at the 15.48 GiB per-process torch wall). "
+            "Auto-evicts TTS tenants since 2026-09-09: loads and warm draws "
+            "demand a clear card (load gate 15,000 MiB + a warm tenant guard), "
+            "so full-HD renders without a manual evict-all. After every draw "
+            "the post-draw working set is released while the engine stays "
+            "resident (post-draw compaction, verified live: card falls "
+            "15.7 → ~12.2 GiB used, ~3.6 GiB free) — so a ~2 GiB TTS tenant "
+            "co-loads beside the idle engine instead of 500ing, and only an "
+            "actual draw evicts it (its next synth pays the ~9-30 s reload)."
         ),
         output_type = "image",
         image_input = "reference",   # klein natively conditions on the ref image
@@ -212,16 +220,19 @@ ENGINES: dict[str, EngineInfo] = {
             _p("width",               "int",      1024,   "Width (px)",
                min_=256, max_=2048, step=16,
                tooltip="Rendered at the nearest multiple of 16 (e.g. 1366 → 1360). "
-                       "1536×1024 is the every-context safe ceiling. Full-HD "
-                       "1920×1072 verified in-service (API) on a CLEAR card — "
-                       "~0.6-0.9 GiB margin, ambient-sensitive; a resident engine "
-                       "or concurrent tenant OOMs it mid-gen (503). See the "
-                       "description."),
+                       "Full-HD 1920×1072 works in-service — the engine "
+                       "clears the card itself (clear-card gate + warm tenant "
+                       "guard) and compacts after each draw (~3.6 GiB free "
+                       "with the engine resident), so a TTS synth co-loads "
+                       "beside an idle engine. Only a NON-TTS foreign tenant "
+                       "(comfy sidecar, second CUDA process) still 503s it. "
+                       "See the description."),
             _p("height",              "int",      1024,   "Height (px)",
                min_=256, max_=2048, step=16,
                tooltip="Rendered at the nearest multiple of 16. 720×1440 verified "
                        "everywhere; 1072×1920 full-HD shorts verified in-service "
-                       "only (clear card — same caveat as width)."),
+                       "— the engine clears the card itself (see the width "
+                       "tooltip)."),
             _p("num_inference_steps", "int",      4,      "Steps",
                min_=1, max_=20, step=1,
                tooltip="4 steps is optimal — FLUX.2-klein models are step-distilled. "
