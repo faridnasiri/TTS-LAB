@@ -536,7 +536,10 @@ _VRAM_NEED_MB: dict[str, int] = {
     # at load is ~11.5-12.3 GiB (nunchaku scratch sits outside torch's
     # allocator — ernie precedent); gen driver peaks 15,323-15,659 MiB with a
     # reference attached at 720×1440 / 1360×768 / 1536×1024 (out-of-band
-    # probe next to the idle service; in-process peaks are lower). 13000
+    # probe next to the idle service; in-process peaks are lower). Full-HD
+    # 1920×1072 / 1072×1920 verified IN-SERVICE only 2026-09-09 (dev 4/4 +
+    # lab re-draw 2/2; card peaks 15,371-15,697 MiB — the second process's
+    # own context OOMs FHD at the 15.48 GiB per-process torch wall). 13000
     # forces a TTS eviction under TTS contexts, passes the idle state
     # (~14.2 GiB free) untouched, and leaves ~1 GiB of slack over the load.
     "flux2klein9b-nvfp4": 13000,
@@ -1078,6 +1081,10 @@ def _load_flux2klein9b_nvfp4(quant: str = ""):
     _VRAM_NEED_MB 13000 governs. Verified 2026-09-08/09 on sm_120: load
     9.1 s, 11.22 GiB torch-alloc at ready; gen 4.5-11.3 s @ 4 steps; driver
     gen peaks up to 15,659 MiB at 1536×1024 with a reference attached.
+    Full-HD 1920×1072 verified IN-SERVICE on a clear card 2026-09-09
+    (dev 4/4 + lab 2/2, 13.4 s steady, peaks 15,371-15,697 MiB) — every
+    out-of-band/second-process FHD draw OOMs, so >1536² canvases are
+    service-context only.
     Same-seed reruns are near-identical, not byte-identical (nunchaku
     numerics — measured MAE 3.66/255 on a 1024² rerun pair).
     """

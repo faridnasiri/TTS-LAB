@@ -29,14 +29,41 @@ bnb4 Qwen3-8B encoder — no embed cache, no encoder parking.
 | vs Q6 lane | Q6 25.3 s/draw @4 st; same-seed cross-lane MAE 23.95 (different images — judge by eye) |
 
 Canvas sweep (ref attached, out-of-band probe next to the idle service —
-i.e. the dev's exact context):
+the LAB's probe context; the dev's own draws run IN the service, which is a
+different, cheaper context — see the FHD section below):
 
-| Canvas | Verdict | Driver peak | Notes |
-|---|---|---|---|
-| 720×1440 | ✅ | 15,483 MiB | dev's "crash" canvas — fits (crash root-caused separately, below) |
-| 1366×768 | ✅ | 15,323 MiB | renders **1360×768** — 1366 isn't a multiple of 16 |
-| 1536×1024 | ✅ (ceiling) | 15,659 MiB | ~0.2 GiB margin vs 15,849 usable — nothing bigger fits |
-| full-res 1536×1024 ref, 720×1440 | ✅ | 15,399 MiB | unthumbed ref also fits |
+| Canvas | Context | Verdict | Driver peak | Notes |
+|---|---|---|---|---|
+| 720×1440 | out-of-band | ✅ | 15,483 MiB | dev's "crash" canvas — fits (crash root-caused separately, below) |
+| 1366×768 | out-of-band | ✅ | 15,323 MiB | renders **1360×768** — 1366 isn't a multiple of 16 |
+| 1536×1024 | out-of-band | ✅ | 15,416-15,659 MiB | every-context safe ceiling (~0.3-0.6 GiB margin on this card) |
+| full-res 1536×1024 ref, 720×1440 | out-of-band | ✅ | 15,399 MiB | unthumbed ref also fits |
+| 1920×1072 / 1072×1920 | in-service (API) | ✅ 6/6 | 15,371-15,697 MiB | dev 4/4 + lab re-draw 2/2 on a clear card; steady 13.4 s/draw; ~0.6-0.9 GiB margin |
+| 1920×1072 / 1072×1920 | second process | ❌ OOM | died at 15,660 MiB | 1,006 MiB request vs 503 MiB free — the second process's own context hits the 15.48 GiB per-process torch wall |
+
+## FHD correction — the dev's full-HD 4/4 was real (and in-service only)
+
+The 09-09 verdict ("1536×1024 ceiling, nothing bigger fits") extrapolated the
+**out-of-band** measurement into an absolute; it holds for every context with a
+second CUDA process, but the dev's production draws run in the SERVICE, where
+that ~1 GiB of duplicated process context does not exist. Their full-HD probe
+(1080×1920/1920×1080 → pipe floors to 1072×1920/1920×1072) returned 4/4 × 200 —
+confirmed in journald (real 32,160-token renders, 13-16 s each; the 2.5 s/it
+step time vs 1.95 s/it at 1536×1024 matches the 31%-bigger latent exactly).
+
+Lab re-measurement with a card-wide watcher while the service itself drew
+(no second CUDA process): cold FHD draw (incl. 8.7 s load) peaked **15,697 MiB**
+in 21.6 s; steady-state FHD (resident) peaked **15,371 MiB** in 13.4 s — both
+200, matching the dev's timings. Margin over the 16,311 MiB card total is
+~0.6-0.9 GiB: real but ambient-sensitive. A second process drawing the same
+canvas OOM'd (this run) — the lab's original ceiling stands for that context.
+
+**Bottom line:** canvases up to 1536×1024 are safe everywhere. Full-HD draws
+are service-context-only: fine on a clear card (6/6 evidence), 503s mid-gen if
+anything else holds the card (TTS container resident, comfy sidecar busy,
+pooled blocks after a heavy gen). The FHD typography win is real at native
+resolution — production use should evict-all first and treat a mid-batch 503
+as retry-at-1536.
 
 ## Crash reconciliation — the dev's "720×1440 NEW ALL-TIME HIGH"
 
@@ -95,4 +122,6 @@ forced here.
   16 renders exact; else rounded), `num_inference_steps` (4), `seed`.
   No guidance (step-distilled), no quant select.
 - Canvas rule for the shorts pipeline: short 720×1440, long 1360×768 (request
-  1360, not 1366) — 1536×1024 remains the absolute ceiling.
+  1360, not 1366) — 1536×1024 is the every-context safe ceiling. Full-HD
+  1920×1072 / 1072×1920 is verified in-service only (FHD section above):
+  evict-all first, accept the thin margin.
