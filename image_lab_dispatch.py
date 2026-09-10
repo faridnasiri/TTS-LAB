@@ -81,6 +81,10 @@ async def generate(
     magic_prompt_aspect_ratio: str      = Form("1:1"),
     # Optional reference image (FLUX.2 I2I)
     reference_image:      Optional[UploadFile] = File(None),
+    # Opt-in: refuse to generate at all when no reference arrives, instead of
+    # silently drawing text-only. Callers that *mean* to send a reference
+    # (i2i lanes) set this; callers that don't (txt2img lanes) leave it off.
+    require_reference:    bool          = Form(False),
     # Quantization format (engine-specific; empty = use engine default)
     quant:                str           = Form(""),
 ):
@@ -93,6 +97,24 @@ async def generate(
         if len(ref_bytes) > 10 * 1024 * 1024:
             raise HTTPException(
                 400, "Reference image exceeds the 10 MB upload limit.")
+
+    # A malformed upload (unterminated final part, wrong field name, empty
+    # body) reaches us as "no reference" with HTTP 200 — the failure is
+    # invisible in the response and in the image. Callers that require one
+    # turn that into a hard 400 here rather than discovering it downstream.
+    if require_reference and not ref_bytes:
+        log.warning(
+            "require_reference=true but no reference_image part arrived (engine=%s)",
+            engine_key,
+        )
+        raise HTTPException(
+            400,
+            "require_reference=true but no reference_image part was received "
+            "(or it was empty). Check that the multipart body is well-formed "
+            "and the field is named exactly 'reference_image' as a file part — "
+            "a missing CRLF before the closing delimiter, or a different field "
+            "name, drops the part silently while every other field parses.",
+        )
 
     params = {
         "prompt":               prompt,

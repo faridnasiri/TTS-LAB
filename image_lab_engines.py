@@ -887,6 +887,7 @@ def _generate_flux2klein(params: dict) -> list[dict]:
         if w * h > 768 * 768:
             log.info("Reference image %dx%d exceeds the 16 GB card's KV budget — downscaling to ≤768² px", w, h)
             ref_img.thumbnail((768, 768))
+            log.info("reference_image scaled to %dx%d (what the model sees)", ref_img.width, ref_img.height)
 
     try:
         result = pipe(
@@ -1139,6 +1140,7 @@ def _generate_flux2klein9b(params: dict) -> list[dict]:
         if w * h > 768 * 768:
             log.info("Reference image %dx%d exceeds the 16 GB card's KV budget — downscaling to ≤768² px", w, h)
             ref_img.thumbnail((768, 768))
+            log.info("reference_image scaled to %dx%d (what the model sees)", ref_img.width, ref_img.height)
 
     try:
         # Note: no guidance_scale — step-distilled klein models run without CFG
@@ -1253,6 +1255,7 @@ def _generate_flux2klein9b_nvfp4(params: dict) -> list[dict]:
         if w * h > 768 * 768:
             log.info("Reference image %dx%d exceeds the 16 GB card's KV budget — downscaling to ≤768² px", w, h)
             ref_img.thumbnail((768, 768))
+            log.info("reference_image scaled to %dx%d (what the model sees)", ref_img.width, ref_img.height)
 
     # No guidance_scale — step-distilled klein runs without CFG (passing
     # guidance gets it ignored with a warning). Width/height that aren't
@@ -2627,6 +2630,14 @@ def _load_ref_image(ref) -> Optional[Any]:
     Corrupt/undecodable uploads raise ValueError (surfaces as a 400 from the
     API) instead of silently degrading to None — a silently dropped reference
     would generate without the identity the caller asked for.
+
+    Every successful decode logs exactly one "consumed reference_image" line,
+    on purpose. A client whose reference never arrives (bad multipart framing,
+    wrong field name, unterminated final part) still gets a 200 and a
+    normal-looking image, so the *absence* of this line on a request that
+    meant to send a reference is the only signal that distinguishes
+    "reference used" from "no reference". Callers that must not silently fall
+    back can pass require_reference=true to the API and get a 400 instead.
     """
     if ref is None:
         return None
@@ -2640,16 +2651,24 @@ def _load_ref_image(ref) -> Optional[Any]:
             # Image.open alone accepts truncated/corrupt data silently.
             img = Image.open(_io.BytesIO(ref))
             img.load()
-            return img.convert("RGB")
-        if isinstance(ref, str) and os.path.exists(ref):
-            return Image.open(ref).convert("RGB")
+            n_bytes = len(ref)
+        elif isinstance(ref, str) and os.path.exists(ref):
+            img = Image.open(ref)
+            n_bytes = os.path.getsize(ref)
+        else:
+            return None
+        img = img.convert("RGB")
+        log.info(
+            "consumed reference_image: %dx%d, %d bytes",
+            img.width, img.height, n_bytes,
+        )
+        return img
     except ValueError:
         raise
     except Exception as exc:
         raise ValueError(
             f"Reference image could not be decoded: {type(exc).__name__}: {exc}"
         ) from exc
-    return None
 
 
 # ---------------------------------------------------------------------------
