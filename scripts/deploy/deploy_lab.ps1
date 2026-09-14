@@ -294,6 +294,29 @@ else
     ok "Piper model already present"
 fi
 
+# Piper Persian voices — fa_IR-gyro-medium (community) + fa_IR-mana-medium
+# (Mana-TTS fine-tune, ~1000 epochs — the better Persian voice). Both are
+# plain .onnx + .onnx.json pairs in /opt/models/tts, which is bind-mounted
+# into every container (symlinked /opt/arthur/models) — the lab's Piper
+# engine + UI auto-discover them on next /status sweep, no code changes.
+for voice in fa_IR-gyro-medium fa_IR-mana-medium; do
+    case "$voice" in
+        fa_IR-gyro-medium)
+            VOICE_BASE="https://huggingface.co/rhasspy/piper-voices/resolve/main/fa/fa_IR/gyro/medium"
+            ;;
+        fa_IR-mana-medium)
+            VOICE_BASE="https://huggingface.co/MahtaFetrat/Mana-Persian-Piper/resolve/main"
+            ;;
+    esac
+    if [ ! -f "/opt/models/tts/${voice}.onnx" ]; then
+        wget -q -O "/opt/models/tts/${voice}.onnx" "${VOICE_BASE}/${voice}.onnx" \
+          && wget -q -O "/opt/models/tts/${voice}.onnx.json" "${VOICE_BASE}/${voice}.onnx.json" \
+          && ok "Piper ${voice}" || warn "Piper ${voice} download failed"
+    else
+        ok "Piper ${voice} already present"
+    fi
+done
+
 # Kokoro ONNX
 python - << 'PYEOF' || warn "Kokoro download skipped"
 from kokoro_onnx import Kokoro

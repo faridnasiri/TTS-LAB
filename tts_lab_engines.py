@@ -507,6 +507,58 @@ def _synth_xtts(inst, text, params):
     return _to_wav(np.array(arr, dtype=np.float32), 24000), 24000
 
 
+# ── 10b. XTTS-v2 ParsVoice fine-tune (fa) ───────────────────────────────────
+# ParsVoice-XTTS: XTTS-v2 fine-tuned on the 2,200-hour ParsVoice corpus
+# (1,800+ speakers, University of Tehran) — native Persian cadence, zero
+# foreign-accent leak. CPML license — no commercial use. Runs in the
+# engine-fa container (coqui-tts on stable torch 2.13; the nightly stack's
+# XTTS is broken — torchcodec conflict).
+#
+# ⚠️ STATUS 2026-09-01: NO WEIGHTS PUBLISHED. Verified on HF: the repo
+# `MohammadJRanjbar/ParsVoice-XTTS` contains only README.md + .gitattributes
+# (the usage example in that README points at `parsvoice-xtts-v2`, which does
+# not exist — 404). The only other Persian XTTS fine-tunes
+# (`alikhabazian/XTTS_Persian`, `Xtts_persian_v2`) have 0-byte LFS stubs.
+# The author's paper is EMNLP 2026 Main Conference — weights presumably to
+# follow. Engine is PARKED until then: `_load_xttsfa` tries the repo each
+# load and raises this clear error instead of a confusing coqui traceback.
+PARSXTTS_MODEL_ID = "MohammadJRanjbar/ParsVoice-XTTS"
+PARSXTTS_ALIAS_ID = "MohammadJRanjbar/parsvoice-xtts-v2"  # README's example id — 404 today, retried in case it appears
+
+
+def _load_xttsfa():
+    # All transformers 5.x shims applied at startup in tts_lab_shims.py
+    os.environ["COQUI_TOS_AGREED"] = "1"
+    from TTS.api import TTS
+    for mid in (PARSXTTS_MODEL_ID, PARSXTTS_ALIAS_ID):
+        try:
+            return TTS(mid, progress_bar=False, gpu=(DEVICE == "cuda"))
+        except Exception:
+            continue
+    raise RuntimeError(
+        f"ParsVoice-XTTS weights are NOT published yet ({PARSXTTS_MODEL_ID}). "
+        "As of 2026-09-01 the HF repo is README-only (no config.json, no .pth); "
+        "the other Persian XTTS fine-tunes on HF are 0-byte LFS stubs. "
+        "Engine parked — nothing to download. See the repo page: "
+        "https://huggingface.co/MohammadJRanjbar/ParsVoice-XTTS"
+    )
+
+
+def _synth_xttsfa(inst, text, params):
+    kw = dict(text=text, language="fa")
+    if params.get("temperature"):
+        kw["temperature"] = float(params["temperature"])
+    # Zero-shot clone — ref WAV only (XTTS needs just the audio, no transcript)
+    ref_id = (params.get("audio_prompt_id") or params.get("ref_audio") or "").strip()
+    if ref_id:
+        ref_path = _ref_wav_path(ref_id)
+        if not ref_path:
+            raise SynthParamError(f"Reference WAV not found: {ref_id}")
+        kw["speaker_wav"] = str(ref_path)
+    arr = inst.tts(**kw)
+    return _to_wav(np.array(arr, dtype=np.float32), 24000), 24000
+
+
 # ── 11. CosyVoice2 ────────────────────────────────────────────────────────────
 def _load_cosyvoice():
     import importlib.util as _ilu
@@ -2522,7 +2574,8 @@ LOADERS: dict = {
     "chattts":    _load_chattts,  "outetts":   _load_outetts,
     "bark":       _load_bark,     "styletts2": _load_styletts2,
     "f5tts":      _load_f5tts,    "dia":       _load_dia,
-    "xtts":       _load_xtts,     "cosyvoice": _load_cosyvoice,
+    "xtts":       _load_xtts,     "xttsfa":    _load_xttsfa,
+    "cosyvoice":  _load_cosyvoice,
     "parler":     _load_parler,   "chatterbox":_load_chatterbox,
     "chatterboxturbo": _load_chatterboxturbo,
     "fishspeech": _load_fishspeech,
@@ -2542,7 +2595,8 @@ SYNTHERS: dict = {
     "chattts":    _synth_chattts,  "outetts":   _synth_outetts,
     "bark":       _synth_bark,     "styletts2": _synth_styletts2,
     "f5tts":      _synth_f5tts,    "dia":       _synth_dia,
-    "xtts":       _synth_xtts,     "cosyvoice": _synth_cosyvoice,
+    "xtts":       _synth_xtts,     "xttsfa":    _synth_xttsfa,
+    "cosyvoice":  _synth_cosyvoice,
     "parler":     _synth_parler,   "chatterbox":_synth_chatterbox,
     "chatterboxturbo": _synth_chatterboxturbo,
     "fishspeech": _synth_fishspeech,

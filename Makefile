@@ -8,9 +8,9 @@
 #   make rebuild                            # Full chain rebuild (all 7 images)
 #   make sweep                              # Run engine synthesis sweep
 #
-#   ENGINE values:  current | mid | qwen | legacy | orpheus | editx
+#   ENGINE values:  current | mid | qwen | legacy | orpheus | editx | fa
 #   IMAGE values:   tts-lab-engine-$(ENGINE) | tts-lab-orchestrator | tts-lab-sglang-omni
-#   PORT values:    8101 | 8102 | 8103 | 8104 | 8105
+#   PORT values:    8101 | 8102 | 8103 | 8104 | 8105 | 8106
 #
 #   S2-Pro (sglang-omni image):
 #     docker build -f docker/Dockerfile.sglang -t tts-lab-sglang-omni:latest .
@@ -43,7 +43,7 @@ help:
 	@echo "  make build-sglang-omni              Build S2-Pro omni image (sgl-omni serve)"
 	@echo "  make deploy-sglang-omni             Build + deploy S2-Pro container"
 	@echo ""
-	@echo "  ENGINE values: current | mid | qwen | legacy | orpheus | editx"
+	@echo "  ENGINE values: current | mid | qwen | legacy | orpheus | editx | fa"
 
 # ── Cache Management ──────────────────────────────────────────────────
 clean-cache:
@@ -130,6 +130,7 @@ deploy-orchestrator: build-orchestrator
 		-e ORPHEUS_URL=http://localhost:8002 \
 		-e S2PRO_SGLANG_URL=http://localhost:8005/v1/audio/speech \
 		-e EDITX_URL=http://localhost:8105 \
+		-e XTTSFA_URL=http://localhost:8106 \
 		-e QWEN36_URL=http://localhost:8006 \
 		--restart unless-stopped \
 		tts-lab-orchestrator:latest \

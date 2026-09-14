@@ -32,6 +32,12 @@ stacks:
     python: '3.12'
     cuda: '12.8'
     note: Step-Audio-EditX own container (ubuntu24.04) — python 3.12 required (repo >=3.12,<3.14). vLLM 0.26 nightly wheel from wheels.vllm.ai (commit 30b34171b) + torch 2.13.0 stable — the repo's pinned wheel (torch-2.9.1-era) links c10_cuda_check_implementation, REMOVED from every sm_120-capable torch. Lab's other images are python 3.11 — cannot be reused. All 4 fix layers baked into Dockerfile.engine-editx (step1 intermediate_tensors default, CCCL version-gate, pip cu13 layout symlinks, tts.py BatchEncoding coercion).
+  fa:
+    torch: 2.13.0+cu130 (stable — sm_120)
+    transformers: '>=4.57,<5.0'
+    python: '3.12'
+    cuda: '12.8'
+    note: Persian-native container (ubuntu24.04) — coqui-tts 0.27.x + torch 2.13.0 stable. XTTS (coqui-tts) cannot synthesize on the lab's torch nightly stack ("torchcodec vs torch nightly" — engine SKIPPED in engine-current). coqui-tts >=0.27.4 bundles no torch (installed here) and torchcodec is only the optional `codec` extra — so this stack sidesteps the whole torchcodec class of breakage. Hosts xttsfa (ParsVoice-XTTS — PARKED, weights not published as of 2026-09-01, see engine entry; CPML license).
 engines:
   piper:
     status: supported
@@ -143,6 +149,12 @@ engines:
     stack: current
     vram_est_mb: 2000
     notes: torchcodec issue with torch nightly — coqui-tts installs but may not synth
+  xttsfa:
+    status: experimental
+    container: engine-fa
+    stack: fa
+    vram_est_mb: 3200
+    notes: 'PARKED 2026-09-01 — ParsVoice-XTTS weights NOT published: HF repo MohammadJRanjbar/ParsVoice-XTTS is README-only (verified with VM token; the README''s example id parsvoice-xtts-v2 404s; alikhabazian/XTTS_Persian is 0-byte LFS stubs). Paper is EMNLP 2026 — loader retries each load and raises a clear error until weights land. When it works: XTTS-v2 fine-tuned on 2,200h ParsVoice (1,800+ speakers, native Farsi), zero-shot clone via ref WAV, CPML (no commercial), ~1.8 GB first-load, port 8106, compose profile `fa`.'
   qwen3tts:
     status: supported
     container: engine-qwen
@@ -333,7 +345,7 @@ engines:
       voice_clone:
         status: verified
         last_tested: 2026-08-23
-        description: references[{audio_path, text}] — en-leo + transcript → 3.8 s / 44.1 kHz WAV, error=None (full stop/start protocol round-trip). Persian: fa-ryan + sidecar transcript → 6.4 s / 44.1 kHz (language "fa" now mapped to Auto — enum-only validation otherwise 400s)
+        description: 'references[{audio_path, text}] — en-leo + transcript → 3.8 s / 44.1 kHz WAV, error=None (full stop/start protocol round-trip). Persian: fa-ryan + sidecar transcript → 6.4 s / 44.1 kHz (language "fa" now mapped to Auto — enum-only validation otherwise 400s)'
       vram_measured:
         status: verified
         last_tested: 2026-08-22

@@ -238,6 +238,7 @@ async def voices(model: str):
         "outetts":   [v for v, _ in OUTETTS_SPEAKERS],
         "bark":      [v for v, _ in BARK_PRESETS],
         "xtts":      ALL_XTTS_SPEAKERS,
+        "xttsfa":    ["ParsVoice — model default (clone via ref WAV)"],
         "cosyvoice": ["English Female", "English Male"],
         "matcha":    [v for v, _ in MATCHA_VOICES],
         "manatts":   ["Persian Female (built-in)"],

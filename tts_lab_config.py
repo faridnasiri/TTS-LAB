@@ -283,6 +283,7 @@ MODEL_INFO = {
     "f5tts":      {"label":"F5-TTS",        "size":"1.2 GB",             "rtf_est":"RTF 5.45×",            "ram_est_mb":2000, "heavy":True, "notes":"Best zero-shot voice cloning. Needs ref WAV + hf-hub>=1.0.","arthur_fit":4},
     "dia":        {"label":"Dia-1.6B",      "size":"3 GB",               "rtf_est":"RTF 7.20×",            "ram_est_mb":3000, "heavy":True, "notes":"Dialogue-native. [S1]/[S2] speakers + emotion tags.","arthur_fit":5},
     "xtts":       {"label":"XTTS-v2",       "size":"1.8 GB",             "rtf_est":"⚠ broken",              "ram_est_mb":3200, "heavy":True, "notes":"⚠ SKIPPED: torchcodec vs torch nightly.","arthur_fit":5},
+    "xttsfa":     {"label":"XTTS-v2 ParsVoice (fa)","size":"1.8 GB fine-tune","rtf_est":"zero-shot (GPU)",   "ram_est_mb":3200, "heavy":True, "notes":"ParsVoice 2200h fine-tune — native Farsi, no accent leak. Zero-shot clone via ref WAV. ⚠️ PARKED: weights not published (README-only repo as of 2026-09-01, EMNLP'26 paper). CPML (no commercial). Own container (engine-fa): coqui-tts on stable torch 2.13.","arthur_fit":4},
     "cosyvoice":  {"label":"CosyVoice2",    "size":"2 GB",               "rtf_est":"not built",             "ram_est_mb":2500, "heavy":True, "notes":"⚠ git clone needed + openai-whisper build failure.","arthur_fit":3},
     "parler":     {"label":"Parler-TTS",    "size":"2.5-3.3 GB",         "rtf_est":"skipped",               "ram_est_mb":1500, "heavy":True, "notes":"⚠ SKIPPED: needs legacy stack (torch 1.x + tf 4.x).","arthur_fit":4},
     "chatterbox": {"label":"Chatterbox",    "size":"3.0 GB",             "rtf_est":"RTF 2.42×",            "ram_est_mb":1800, "heavy":True, "notes":"Persian T3 (30-layer, 2454 tokens). Voice cloning. Auto-chunks long text.","arthur_fit":5},
@@ -306,7 +307,7 @@ MODEL_INFO = {
 
 MODEL_ORDER = [
     "piper","kokoro","melo","matcha",
-    "chattts","outetts","bark","styletts2","f5tts","dia","xtts",
+    "chattts","outetts","bark","styletts2","f5tts","dia","xtts","xttsfa",
     "cosyvoice","parler","chatterbox","chatterboxturbo","fishspeech","csm","qwen3tts","orpheus",
     "indextts","manatts","mmsfas","zonos","openvoice",
     "vibevoice","higgs","omnivoice","s2pro","editx",
@@ -358,6 +359,8 @@ SYNTH_TIMEOUT: dict[str, int] = {
     "chattts":   90,
     # vLLM engine warmup on first load can exceed the 300 s default
     "editx":     600,
+    # ParsVoice-XTTS first load: ~1.8 GB gated HF download + model init
+    "xttsfa":    300,
     # sgl-omni first request after a container start: boot + one-time
     # flashinfer sm_120 JIT kernel compile (~3 min each, verified 2026-08-23)
     "s2pro":     600,

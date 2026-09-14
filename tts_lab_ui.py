@@ -263,6 +263,21 @@ def _build_params(name: str) -> str:
             + _row(_grp('Temperature <span class="range-val">0.3</span>', _rng("temperature", "0.01", "1.0", "0.01", "0.3", "lower=more stable")))
         )
 
+    if name == "xttsfa":
+        return (
+            '<div class="alert alert-warning py-2 small mb-2">'
+            'XTTS-v2 fine-tuned on the 2,200-hour <b>ParsVoice</b> corpus (1,800+ speakers) — '
+            'native Persian (فارسی) cadence with no foreign-accent leak. '
+            'License CPML — no commercial use. Runs in the engine-fa container.<br>'
+            '<b>⚠️ Parked — weights not published yet.</b> As of 2026-09-01 the HF repo is '
+            'README-only (no model files; the README&#39;s example id <code>parsvoice-xtts-v2</code> '
+            'doesn&#39;t exist either). The author&#39;s paper is EMNLP 2026 — the fine-tune will '
+            'appear here when weights land: <code>huggingface.co/MohammadJRanjbar/ParsVoice-XTTS</code>.</div>'
+            + '<div class="mt-3 mb-1" style="font-size:.72rem;font-weight:700;color:#7eb8f7;text-transform:uppercase;letter-spacing:.08em">Voice clone <span style="font-weight:400;color:#888">(optional — no ref = model default voice)</span></div>'
+            + f'<div class="param-row">{_upload_widget("xfa-file", "xfa-status", "xfa-prompt-id", "Reference WAV — 6-15s of the Persian voice to clone (16 kHz+, minimal noise)")}</div>'
+            + _row(_grp('Temperature <span class="range-val">0.3</span>', _rng("temperature", "0.01", "1.0", "0.01", "0.3", "lower=more stable")))
+        )
+
     if name == "cosyvoice":
         transcript = ('<input type="text" class="form-control form-control-sm bg-dark text-light border-secondary" '
                       'data-param="transcript" placeholder="Optional: transcript of reference WAV (improves quality)">')

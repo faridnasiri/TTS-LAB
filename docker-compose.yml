@@ -7,6 +7,7 @@
 #   engine-current   — 21 engines on torch 2.10 + tf 5.12 (port 8101)
 #   engine-legacy    — 3 engines on torch 1.13 + tf 4.46 (port 8102)
 #   engine-editx     — Step Audio EditX via vLLM (port 8105, GPU)
+#   engine-fa        — ParsVoice-XTTS Persian fine-tune (port 8106, GPU)
 #   orpheus          — Orpheus 3B via vllm (port 8002, GPU mandatory)
 #   vibevoice        — SGLang: VibeVoice-1.5B (port 8003, GPU, POC)
 #   higgs            — SGLang: Higgs Audio v3 4B (port 8004, GPU, POC)
@@ -25,8 +26,11 @@
 #   + Step Audio EditX (needs GPU, ~9 GB VRAM AWQ):
 #     docker compose --profile editx up -d
 #
+#   + Persian-native engines (ParsVoice-XTTS, ~2 GB VRAM):
+#     docker compose --profile fa up -d
+#
 #   Everything:
-#     docker compose --profile gpu --profile sglang --profile editx up -d
+#     docker compose --profile gpu --profile sglang --profile editx --profile fa up -d
 #
 #   Stop:
 #     docker compose --profile gpu --profile sglang --profile editx down
@@ -117,6 +121,9 @@ services:
       S2PRO_SGLANG_URL: http://s2pro:8000/v1/audio/speech
       # Step Audio EditX — dedicated vLLM container
       EDITX_URL: http://engine-editx:8105
+      # Persian-native engines — engine-fa (coqui-tts on stable torch;
+      # the nightly stack's XTTS is broken — torchcodec conflict)
+      XTTSFA_URL: http://engine-fa:8106
       # Voice Library lives on engine-current (numpy + f5_tts/whisper) —
       # the orchestrator proxies /voice-library/* here (ML-free).
       VOICE_LIB_URL: http://engine-current:8101
@@ -393,6 +400,39 @@ services:
       timeout: 10s
       retries: 3
       start_period: 180s    # model download + load on first start
+    networks:
+      - tts-lab-net
+
+  # ═══════════════════════════════════════════════════════════════
+  # Engine-FA — Persian-native XTTS (ParsVoice fine-tune) on stable torch
+  # Own stack: python 3.12 + torch 2.13.0+cu130 (sm_120) + coqui-tts
+  # ═══════════════════════════════════════════════════════════════
+  engine-fa:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.engine-fa
+    image: tts-lab-engine-fa:latest
+    container_name: tts-lab-engine-fa
+    <<: *model-volume
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      <<: *common-env
+      HF_TOKEN: ${HF_TOKEN:-}
+    restart: unless-stopped
+    profiles:
+      - fa
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8106/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
     networks:
       - tts-lab-net
 

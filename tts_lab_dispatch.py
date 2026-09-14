@@ -45,8 +45,8 @@ _VLLM_CONTAINERS: dict[str, str] = {
 # Engine containers (for PID→container mapping of GPU processes).
 _GPU_CONTAINERS: tuple[str, ...] = (
     "tts-lab-engine-current", "tts-lab-engine-qwen", "tts-lab-engine-mid",
-    "tts-lab-engine-legacy", "tts-lab-engine-editx", "tts-lab-s2pro",
-    "tts-lab-orpheus", "tts-lab-vibevoice", "tts-lab-higgs",
+    "tts-lab-engine-legacy", "tts-lab-engine-editx", "tts-lab-engine-fa",
+    "tts-lab-s2pro", "tts-lab-orpheus", "tts-lab-vibevoice", "tts-lab-higgs",
 )
 
 
@@ -337,6 +337,7 @@ def _check_available_local(name: str) -> Tuple[bool, str]:
         "f5tts":      "f5_tts",
         "dia":        "dia",
         "xtts":       "TTS",
+        "xttsfa":     "TTS",
         "cosyvoice":  None,
         "parler":     "parler_tts",
         "chatterbox": "chatterbox",
