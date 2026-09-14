@@ -1,5 +1,121 @@
 # Arthur TTS Lab — Known Issues & Next Steps
 
+## Housekeeping — 2026-09-14 stability pass ✅
+
+- **`arthur.service` (legacy “Arthur Henderson AI Bridge”, :8000) DISABLED.** Its venv
+  `/opt/arthur-env` and app `/opt/arthur/arthur_server.py` were removed during the container
+  migration (code archived at `archive/arthur_server.py`), but the unit stayed `enabled` with
+  `Restart=always` / `RestartSec=5`. It had attempted a restart **453,690 times** — roughly one
+  every 5 seconds since ~2026-08-19 — emitting ~4,800 journal lines/hour of pure noise. Fixed with
+  `systemctl disable --now arthur.service`; re-enable only if that runtime is restored.
+  *It was invisible to `systemctl --failed`, because a unit in auto-restart is `activating`, not
+  `failed`. “No failed units” is not “nothing is failing” — also check
+  `systemctl list-units --state=activating`.*
+- **Reclaimed 18 GB of disk** (523 → 505 GB used; 83% → 81%) by deleting one unreferenced
+  dangling image (`a01e7be6fcf5`, built 2026-08-22 — 32.3 GB apparent, 18 GB actually freed once
+  shared layers were accounted for). Docker's reclaimable total dropped 29 GB → 2 GB. Worth
+  re-checking periodically: this box has had a disk-full incident before.
+- **Deliberately not touched:** the load average of ~12–16 on 12 cores is the operator's own
+  *niced* Picocrypt volume brute-force (`~/picocrypt-venv/bin/recover.py`), not lab
+  infrastructure. It yields to normal-priority work, so it slows diagnosis without starving the lab.
+- **Diagnostic note — engine containers publish no host ports.** `engine-current` has no `ports:`
+  in compose, so a failing `curl localhost:8101/health` is *expected*, not a fault: the orchestrator
+  reaches it at `engine-current:8101` over the docker network. Only :8009 (orchestrator) and :8002
+  (image lab) listen on the host.
+
+### Reboot to kernel 6.8.0-138 — done 2026-09-14 ✅
+
+The `reboot-required` flag (set since Sep 10 for kernel `6.8.0-138` + `libc6` security fixes) is now
+cleared. Pre-flight mattered here, because booting the wrong kernel would have meant **no GPU at
+all** — DKMS has an NVIDIA module only for 6.8.0-136/138, not for the 5.15.0-x entries also present:
+
+- GRUB's default entry verified to point at `/boot/vmlinuz-6.8.0-138-generic` ✅
+- `Filesystem state: clean` — the Sep-2026 boot hang was an *unclean* ext4 plus a refused `fsck -p`,
+  so this check was not ceremonial.
+- Every running service audited for reboot survival (only `static` units listed — nothing lost).
+- The 6 stopped, profile-gated engines pinned to `--restart=no` so they could not all self-start and
+  fight over the 16 GB GPU during boot.
+
+Post-reboot: kernel `6.8.0-138`; module **and** userspace both `580.178.04` (no skew); module loaded
+from `/lib/modules/6.8.0-138-generic/updates/dkms/nvidia.ko`; CDI spec regenerated with 89 refs to
+`580.178.04`; **a newly-started GPU container works**; both health checks exit 0; zero failed units
+and zero units in auto-restart. The system clock had drifted ~7 h behind and NTP corrected it at
+boot (now `synchronized: yes`) — worth knowing when reading older journal timestamps.
+
+### New: host health check (`tts-lab-host-health.timer`, every 30 min)
+
+`scripts/utils/check_host_health.sh` (deployed to `/opt/tts-lab-ops/`) covers precisely the two
+classes that hid from us: units stuck in `auto-restart` (invisible to `systemctl --failed`) and
+disk/upgrade conditions. Read-only. `--quiet` suppresses routine OK lines but **never** problems or
+warnings. `--install` writes its own unit + timer.
+
+### ⚠️ 37 packages are pending — do NOT blanket-upgrade them
+
+`apt-get upgrade` currently wants 37 packages, including a **major Docker/containerd jump**
+(`docker-ce` 29.6.0, `containerd.io` 2.2.5, `docker-compose-plugin` 5.1.4), **Grafana 13**, the
+**CUDA 12.8 toolkit**, and an NVIDIA driver *repackaging*. The repackaging is subtle: the NVIDIA CUDA
+repo is pinned at priority **600** vs Ubuntu's **500**, so apt wants to move the driver from
+`580.178.04-0ubuntu0.22.04.1` (Ubuntu) to `580.178.04-1ubuntu1` (NVIDIA) — the **same** driver
+version, only different packaging provenance. No functional gain, non-trivial risk.
+
+Apply these deliberately and one concern at a time, with a reboot wherever a driver is involved.
+`check_host_health.sh` reports them as a `DELIBERATE-UPGRADE set` for this reason, and
+`unattended-upgrades` is blacklisted from `nvidia-`/`libnvidia-` (see the 2026-09-13 entry).
+
+---
+
+## Latest incident — 2026-09-13 NVIDIA driver skew + stale CDI spec ✅ FIXED (hardened)
+
+- **Was:** `nvidia-smi` on the VM reported `Failed to initialize NVML: Driver/library version
+  mismatch`. The report was accurate — but it described only one of **three** faults, and the
+  missing two were the ones that actually threatened the lab.
+- **Root causes (all three had to line up):**
+  1. **Driver upgraded without a reboot.** `unattended-upgrades` installed nvidia `580.178.04` on
+     2026-09-11 06:48; the module resident in RAM stayed `580.173.02`. `nvidia-smi`, host
+     CuPy/PyTorch, and every *new* host CUDA process failed (error 804 `forward compatibility was
+     attempted on non supported HW`).
+  2. **The CDI refresh died with status 127.** The same upgrade triggered
+     `nvidia-cdi-refresh.service`, whose guard is `nvidia-smi -L || /usr/sbin/nvidia-smi -L ||
+     /usr/lib/wsl/lib/nvidia-smi -L`. Ubuntu has no `/usr/lib/wsl/...`; with `nvidia-smi` failing
+     *for reason 1* the shell chain ended on a missing binary and exited **127 “command not
+     found”** — which reads as a broken unit rather than a broken driver. So
+     `/var/run/cdi/nvidia.yaml` was never regenerated and kept **89 references to `580.173.02`**
+     libraries `apt` had deleted.
+  3. **No retry.** The unit sets `Restart=on-failure`, but it is `Type=oneshot` and systemd
+     **ignores `Restart=` for oneshot services**. It stayed failed for two days, unnoticed.
+- **Impact — wider than the host fault:** the container toolkit bind-mounts the libraries named in
+  that spec into every GPU container, so **every GPU container start failed** with
+  `failed to fulfil mount request: open .../libEGL_nvidia.so.580.173.02`. That covers restarts by
+  deploy, by `systemctl`, **and by a reboot**. The lab only *looked* healthy because
+  `tts-lab-engine-current` had been up since 2026-09-08 — before the upgrade. A reboot (the obvious
+  fix for the host symptom) would have taken the whole lab down with no way back short of
+  regenerating the spec by hand.
+- **Fix applied:** stopped the GPU consumers, `modprobe -r`/`modprobe nvidia` (the on-disk `.ko`
+  was already `580.178.04` for the running kernel 6.8.0-136 *and* the pending 6.8.0-138, so no
+  reboot was required), then `nvidia-ctk cdi generate` to regenerate the spec. Verified: host
+  `nvidia-smi` → `580.178.04`; a **newly started** GPU container gets the GPU; in-container
+  `torch.cuda.is_available()` True with a real GPU matmul; image lab :8002 and orchestrator :8009
+  both 200.
+- **Hardening (so it cannot recur silently):** systemd drop-in replacing the brittle guard with
+  `ExecStartPre=nvidia-smi -L` + `ExecStart=nvidia-ctk cdi generate`; a 10-min
+  `nvidia-cdi-refresh.timer` so a failed refresh self-heals; a 15-min `tts-lab-gpu-health.timer`
+  reporting module/user-space/CDI drift; and an `unattended-upgrades` blacklist for
+  `nvidia-`/`libnvidia-` so a driver bump is a deliberate act.
+- **`tts-lab-gpu-probe` is NOT a broken container.** It had shown "unhealthy" for days and was the
+  session's first false trail, but it is deliberate infrastructure — `tts_lab_dispatch.py::_gpu_probe_exec`
+  creates and reuses it (`tail -f /dev/null`, host PID namespace, GPU request) to run `nvidia-smi`
+  in-container. Deleting it is futile (the next probe recreates it). What was wrong was its health
+  state: it inherits the engine image's `HEALTHCHECK` (`curl :8105/health`), which cannot pass in a
+  container running only `tail`, so `docker ps` always showed one unhealthy container on a healthy
+  GPU host. Fixed in `tts_lab_dispatch.py` via `"Healthcheck": {"Test": ["NONE"]}` — effective on
+  the next dispatch rebuild.
+- **Files:** `scripts/utils/fix_nvidia_driver_mismatch.sh` (repair, idempotent, `--dry-run`),
+  `scripts/utils/check_gpu_stack.sh` (deployed to `/opt/tts-lab-ops/`, drift detector),
+  `scripts/utils/harden_nvidia_driver.sh` (applies the hardening).
+- **Detail:** [session log 2026-09-13 NVIDIA driver + CDI](../sessions/SESSION_2026-09-13_NVIDIA_DRIVER_CDI.md)
+
+---
+
 ## Latest incident — 2026-08-24 EditX garbage voices ✅ FIXED (see session log)
 
 - **Was:** "editx tts produces garbage voices only" — all EditX clones came out as

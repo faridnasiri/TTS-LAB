@@ -981,6 +981,15 @@ def _gpu_probe_exec(cmd: str, timeout: float = 15.0) -> str:
         payload = _j.dumps({
             "Image": img,
             "Cmd": ["tail", "-f", "/dev/null"],
+            # This container only parks a shell for `docker exec nvidia-smi` (see
+            # _gpu_probe_exec). It inherits the image's HEALTHCHECK -- the engine
+            # images curl their own :8105/:8101 health endpoint -- which can never
+            # succeed here because no server runs in it. That left a permanently
+            # "unhealthy" container in `docker ps` on the GPU host: a false signal
+            # that reads exactly like a broken GPU stack, and it did send one
+            # diagnosis down the wrong path. The probe only ever checks whether
+            # this container is *running*.
+            "Healthcheck": {"Test": ["NONE"]},
             "HostConfig": {
                 "PidMode": "host",
                 "AutoRemove": True,

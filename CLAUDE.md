@@ -145,6 +145,36 @@ ansible-playbook -i ansible/inventory.yml ansible/site.yml
 ansible-playbook -i ansible/inventory.yml ansible/site.yml --tags deploy
 ```
 
+### GPU Driver Health & Repair (arthur-vm)
+
+The NVIDIA driver is two halves that must version-match: the kernel module in RAM and the
+user-space libraries on disk. A driver upgrade without a reboot splits them, and a second,
+independent failure follows (stale container CDI spec) that breaks container *starts* even after
+the host looks fixed — see `docs/sessions/SESSION_2026-09-13_NVIDIA_DRIVER_CDI.md`.
+
+```bash
+# 1. Diagnose GPU stack — module vs user-space vs CDI-spec drift (exit 1 = problem)
+ssh arthur@192.168.0.87 'sudo /opt/tts-lab-ops/check_gpu_stack.sh'
+
+# 1b. Diagnose host — crash loops (systemctl --failed is BLIND to units in auto-restart,
+#     which is how a service racked up 453,690 restarts unnoticed), disk, pending upgrades
+ssh arthur@192.168.0.87 'sudo /opt/tts-lab-ops/check_host_health.sh'
+
+# 2. Repair a mismatch: module reload + CDI-spec regen (no reboot, ~1 min downtime)
+Get-Content scripts/utils/fix_nvidia_driver_mismatch.sh | ssh arthur@192.168.0.87 'bash -s'
+
+# 3. Apply/re-apply the hardening (guard fix, retry timer, health timer, apt pin)
+Get-Content scripts/utils/harden_nvidia_driver.sh | ssh arthur@192.168.0.87 'bash -s'
+```
+
+⚠️ **Never blanket-run `apt upgrade` on the lab VM.** It currently wants ~37 packages including a
+major Docker/containerd jump, Grafana 13, the CUDA toolkit, and an NVIDIA driver *repackaging*
+(the NVIDIA CUDA repo is pinned at priority 600 vs Ubuntu's 500, so apt prefers NVIDIA's build of
+the **same** driver version). Apply those deliberately, one concern at a time, with a reboot where a
+driver is involved. `check_host_health.sh` lists them as the `DELIBERATE-UPGRADE set`.
+
+Append `-- --dry-run` to either script to inspect what it would do without changing anything.
+
 ## API Endpoints
 
 ### Orchestrator (port 8009)
@@ -207,6 +237,16 @@ Response differs from TTS engines:
 
 ## Common Gotchas
 
+- **NVIDIA driver upgrade without a reboot breaks containers, not just the host:** `apt` swaps the
+  user-space libraries while the module already loaded in RAM stays old, so host CUDA fails. Worse,
+  the upgrade triggers `nvidia-cdi-refresh.service`, whose guard falls through to the non-existent
+  `/usr/lib/wsl/lib/nvidia-smi` and exits **127**, so `/var/run/cdi/nvidia.yaml` is never
+  regenerated — and **every GPU container start then fails** (`failed to fulfil mount request: open
+  .../libEGL_nvidia.so.<old version>`), *including after the reboot that was supposed to fix it*.
+  Running containers hide this, because they predate the upgrade. Repair with
+  `scripts/utils/fix_nvidia_driver_mismatch.sh` (needs **both** a module reload and a CDI-spec
+  regen). Unattended driver upgrades are now blacklisted on the VM. Detail:
+  `docs/sessions/SESSION_2026-09-13_NVIDIA_DRIVER_CDI.md`.
 - **numpy<2.0 requirement:** `vllm` pulls in numpy 2.x which breaks `numpy.core.multiarray`. Pinned as `numpy>=1.24,<2.0` and `protobuf>=3.20,<4.0` in `requirements.txt`.
 - **torch nightly for sm_120:** RTX 5060 Ti (Blackwell) needs torch >= 2.12 nightly builds with CUDA 12.8+. Stable torch releases before 2.12 lack sm_120 support. Current (stack current/mid): `2.12.0.dev20260408+cu128`. **Exception — Stack:editx:** torch **2.13.0+cu130 stable** (the first stable torch with sm_120) + vllm 0.26 nightly wheel; the repo's pinned vllm wheel (torch-2.9.1-era) links a symbol removed from every sm_120-capable torch.
 - **torchcodec metadata stub:** Must create a dummy `torchcodec-99.0.0.dist-info/METADATA` in site-packages (see `Dockerfile.stack.current` line 12). If missing, Chatterbox and Zonos fail.
@@ -245,6 +285,7 @@ Response differs from TTS engines:
 | `docs/sessions/SESSION_2026-09-07_IMGLAB_T2I_SWAP.md` | **sd35+wan removal / 4-engine T2I swap session** — locked decisions, measured VRAM per new engine, gate recalibration |
 | `docs/sessions/SESSION_2026-09-08_IMGLAB_QWENIMAGE_EDIT.md` | **Native base-face consumption session** — capability layer (`image_input`), Qwen-Image-Edit spike (GO) + 10th engine, per-request reference upload semantics |
 | `docs/sessions/SESSION_2026-09-09_IMGLAB_NVFP4.md` | **Klein 9B NVFP4 fast lane + gate-hardening session** — 11th engine registration, canvas-sweep verdicts, pooled-allocator deadlock root-cause + 3-part reclaim fix |
+| `docs/sessions/SESSION_2026-09-13_NVIDIA_DRIVER_CDI.md` | **NVIDIA driver skew + stale CDI spec incident** — the three-fault chain, why a reboot would NOT have fixed it, repair + hardening scripts |
 | `docs/image-lab/HANDOFF_SHORTS_BASE_FACE_2026-09-08.md` | **Shorts-pipeline dev handoff** — base-face API contract, klein fast lane vs qwenimage-edit text lane, per-request upload semantics, determinism cheat-sheet |
 | `docs/image-lab/*.md` | Image Lab subsystem docs |
 | `docs/sessions/SESSION_SUMMARY.md` | Rolling master session summary |
@@ -265,7 +306,9 @@ Response differs from TTS engines:
 - **Models:** `/opt/models/` (~650 GB), HF cache: `/opt/models/huggingface/`
 - **Bare-metal venv:** `/opt/arthur-bench-env/` (Python 3.11)
 - **Lab code:** `/opt/arthur/`
-- **Services:** `arthur-lab.service` (port 8001), `arthur-imglab.service` (port 8002)
+- **Services:** `arthur-lab.service` (port 8001) — **retired/masked 2026-08-17**;
+  `arthur.service` (:8000) — **disabled 2026-09-14** (venv + app removed, was crash-looping);
+  `arthur-imglab.service` (:8002) and `arthur-comfy.service` (:8188) — active
 - **Image Lab models:** `/opt/arthur-img-models/` (separate disk)
 - **Container registry:** `ghcr.io/farid-nasiri/tts-lab-*`
 - **Engine status:** See `docs/engine_compatibility.yaml` — 18 supported, 9 experimental, 3 blocked (+1 planned LLM)
