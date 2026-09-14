@@ -341,6 +341,10 @@ if (should_run 5) {
         @{ L = "tts_lab_engines.py";        R = "/opt/arthur/tts_lab_engines.py"        },
         @{ L = "tts_lab_dispatch.py";       R = "/opt/arthur/tts_lab_dispatch.py"       },
         @{ L = "tts_lab_ui.py";             R = "/opt/arthur/tts_lab_ui.py"             },
+        # tts_lab.py imports lab_infra at module scope (GET /infra) — the bare-metal
+        # deploy would otherwise ship a lab that dies on ImportError.
+        @{ L = "lab_infra.py";              R = "/opt/arthur/lab_infra.py"              },
+        @{ L = "lab_infra_ui.py";           R = "/opt/arthur/lab_infra_ui.py"           },
         @{ L = "patches\patch_parler_tts.py";       R = "/opt/arthur/patch_parler_tts.py"       },
         @{ L = "patches\patch_transformers_stubs.py"; R = "/opt/arthur/patch_transformers_stubs.py" },
         @{ L = "patches\fix_transformers_shims.py"; R = "/opt/arthur/fix_transformers_shims.py" }
@@ -352,9 +356,9 @@ if (should_run 5) {
         else                 { warn "  Missing locally: $($f.L)" }
     }
 
-    # syntax check all 7 modules
-    $chk = vm "source /opt/arthur-bench-env/bin/activate && python3 -c `"import ast; files=['tts_lab','tts_lab_shims','tts_lab_config','tts_lab_utils','tts_lab_engines','tts_lab_dispatch','tts_lab_ui']; [ast.parse(open('/opt/arthur/'+f+'.py').read()) for f in files]; print('SYNTAX_OK')`"" -nocheck
-    if ($chk -match "SYNTAX_OK") { ok "All 7 modules syntax clean" }
+    # syntax check the core modules
+    $chk = vm "source /opt/arthur-bench-env/bin/activate && python3 -c `"import ast; files=['tts_lab','tts_lab_shims','tts_lab_config','tts_lab_utils','tts_lab_engines','tts_lab_dispatch','tts_lab_ui','lab_infra','lab_infra_ui']; [ast.parse(open('/opt/arthur/'+f+'.py').read()) for f in files]; print('SYNTAX_OK')`"" -nocheck
+    if ($chk -match "SYNTAX_OK") { ok "All 9 modules syntax clean" }
     else                         { fail "Syntax error in one of the modules:`n$chk" }
 
     ok "Phase 5 complete"

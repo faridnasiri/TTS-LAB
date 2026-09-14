@@ -92,6 +92,9 @@ from image_lab_dispatch import router
 from image_lab_engines import probe_availability
 from image_lab_ui import get_ui_html
 from image_lab_utils import ensure_dirs
+# Shared container/infrastructure dashboard (GET /infra) — identical router is
+# mounted in tts_lab.py, so both labs serve the same page.
+from lab_infra import router as infra_router
 
 # ---------------------------------------------------------------------------
 # Lifespan
@@ -174,6 +177,7 @@ app = FastAPI(
 )
 
 app.include_router(router)
+app.include_router(infra_router)
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

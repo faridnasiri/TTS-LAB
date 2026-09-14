@@ -227,6 +227,7 @@ Response differs from TTS engines:
 | `docs/containerization/05-STATE-2026-06-21.md` | Deployment state snapshot |
 | `docs/engine_compatibility.yaml` | **Single source of truth** — stacks, engines, versions, validation status |
 | `docs/reference/ARCHITECTURE_REFERENCE.md` | Deployed architecture, container topology, VRAM budget |
+| `docs/reference/CONTAINER_DASHBOARD.md` | **`/infra` container dashboard** — Docker-over-socket API, derived topology/GPU views, deploy + verification recipe |
 | `docs/reference/KNOWN_ISSUES.md` | Current bugs, engine fix history |
 | `docs/reference/TTS_MODEL_COMPARISON.md` / `*2.md` | Side-by-side quality comparison v1/v2 |
 | `docs/reference/PERSIAN_TTS_MODELS.md` | Comprehensive Persian/Farsi TTS reference |

@@ -344,6 +344,8 @@ Run-Phase 5 "SCP code files to VM" {
         "$repoRoot\image_lab_dispatch.py",
         "$repoRoot\image_lab_ui.py",
         "$repoRoot\image_lab_utils.py",
+        "$repoRoot\lab_infra.py",
+        "$repoRoot\lab_infra_ui.py",
         "$repoRoot\scripts\download\gguf_download.py",
         "$repoRoot\scripts\utils\nvfp4_save.py",
         "$repoRoot\ideogram4_lab_engine.py",

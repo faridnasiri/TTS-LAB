@@ -32,6 +32,9 @@ COPY tts_lab_config.py /opt/arthur/
 COPY tts_lab_ui.py /opt/arthur/
 COPY tts_lab_dispatch.py /opt/arthur/
 COPY tts_lab_history.py /opt/arthur/
+# Shared /infra container dashboard (mounted by tts_lab.py)
+COPY lab_infra.py /opt/arthur/
+COPY lab_infra_ui.py /opt/arthur/
 
 EXPOSE 8009
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=10s \

@@ -1887,6 +1887,25 @@ function loadDescriptions() {
 // Load saved descriptions on page load
 document.addEventListener('DOMContentLoaded', loadDescriptions);
 
+// ── Infrastructure (shared /infra container dashboard) ──
+function showInfra() {
+  document.querySelectorAll('.engine-btn').forEach(b => b.classList.remove('active'));
+  document.querySelector('[data-engine="infra"]')?.classList.add('active');
+  document.querySelectorAll('.engine-pane').forEach(p => p.style.display = 'none');
+  document.getElementById('pane-infra').style.display = 'block';
+  activeEngine = null;
+  const f = document.getElementById('infra-frame');
+  if (f && !f.getAttribute('src')) f.setAttribute('src', f.dataset.src);
+  // sidebar badge: running/total containers, read from the dashboard's API
+  fetch('/infra/api/overview?probe=0')
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById('infra-count');
+      if (el && d.counts) el.textContent = d.counts.running + '/' + d.counts.total + ' up';
+    })
+    .catch(() => {});
+}
+
 // ── Voice Library ──
 let voiceCache = [];
 
@@ -2329,6 +2348,18 @@ def build_page() -> str:
         '</button>'
     )
 
+    # ── Infrastructure sidebar item ──
+    sidebar_items.append(
+        '<div class="sidebar-section" style="margin-top:8px">🖥 Infrastructure</div>'
+        '<button class="engine-btn" data-engine="infra" data-label="Infrastructure containers" '
+        'onclick="showInfra()" style="border-left:3px solid var(--accent2)">'
+        '<span class="eng-dot">🖥</span>'
+        '<span class="eng-name">Containers</span>'
+        '<span class="eng-rtf" id="infra-count">—</span>'
+        '<span class="eng-stars">🐳</span>'
+        '</button>'
+    )
+
     history_engine_opts = "".join(
         f'<option value="{n}">{MODEL_INFO[n]["label"]}</option>'
         for n in MODEL_ORDER
@@ -2371,6 +2402,7 @@ def build_page() -> str:
   </div>
   <button id="btn-evict" class="btn-action" onclick="evictAllVRAM()" style="white-space:nowrap" title="Evict all TTS engines from VRAM">Evict VRAM</button>
 	  <button id="btn-refresh" class="btn-action" onclick="refreshAvailability()" style="white-space:nowrap">🔄 Refresh</button>
+  <button id="btn-infra" class="btn-action" onclick="showInfra()" style="white-space:nowrap" title="Docker containers, pipes, images, VRAM holders">🖥 Containers</button>
 </div>
 
 <div class="main-wrap">
@@ -2397,6 +2429,21 @@ def build_page() -> str:
     </div>
     <div class="engine-panel">
       {"".join(pane_items)}
+      <!-- Infrastructure Pane — the shared container dashboard (/infra),
+           embedded. src is attached on first open so it does not poll at boot. -->
+      <div class="engine-pane" id="pane-infra" style="display:none">
+        <div class="engine-header">
+          <span class="engine-title">🖥 Infrastructure</span>
+          <span class="rtf-badge">containers · pipes · images · host</span>
+          <a class="btn-action" href="/infra" target="_blank" rel="noopener"
+             style="text-decoration:none;margin-left:auto">↗ Open in a tab</a>
+        </div>
+        <div class="engine-meta">
+          <span>🐳 Docker daemon, container topology, engine&nbsp;→&nbsp;container routing, images, networks, volumes, bare-metal units</span>
+        </div>
+        <iframe id="infra-frame" data-src="/infra" title="Container infrastructure dashboard"
+                style="width:100%;height:calc(100vh - 250px);min-height:420px;border:1px solid var(--border);border-radius:8px;background:#080a0f;margin-top:8px"></iframe>
+      </div>
       <!-- Voice Library Pane -->
       <div class="engine-pane" id="pane-voicelib" style="display:none">
         <div class="engine-header">

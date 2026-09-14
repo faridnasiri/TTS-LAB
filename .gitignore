@@ -26,7 +26,12 @@ Boogu-Image/
 
 # Runtime output
 output/
-scripts/
+
+# NOTE: `scripts/` was previously ignored here, but 40 files under it are already
+# tracked (every deploy/test/benchmark script CLAUDE.md documents). The rule only
+# ever blocked NEW tooling from being added — e.g. the NVIDIA driver repair and
+# check scripts would have been silently uncommittable. If you want to keep
+# generated scripts out of git, ignore them specifically rather than the whole tree.
 
 # Large binaries
 *.wav

@@ -63,6 +63,9 @@ from tts_lab_history import (
     save_generation, list_history, get_history_path,
     delete_history_entry, history_stats,
 )
+# Shared container/infrastructure dashboard (GET /infra) — same router is
+# mounted in image_lab.py so both labs serve one identical page.
+from lab_infra import router as infra_router
 
 # ── Conditional imports (not available in orchestrator mode) ────
 if _ORCHESTRATOR_MODE:
@@ -101,6 +104,7 @@ else:
         voice_library_mod = None
 
 app = FastAPI(title="Arthur TTS Lab")
+app.include_router(infra_router)
 
 
 class SynthReq(BaseModel):

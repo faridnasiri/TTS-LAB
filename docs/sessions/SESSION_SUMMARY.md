@@ -1,6 +1,25 @@
 # Arthur Server — Session Summary
-> Chat sessions: 2026-03-23 → 2026-09-07
+> Chat sessions: 2026-03-23 → 2026-09-14
 > Branch: `main`
+
+---
+
+## Session 2026-09-14 — Container / Infrastructure dashboard (`/infra`) on both labs
+
+Full write-up: [SESSION_2026-09-14_INFRA_DASHBOARD.md](SESSION_2026-09-14_INFRA_DASHBOARD.md).
+API surface + env vars + design rationale: [CONTAINER_DASHBOARD.md](../reference/CONTAINER_DASHBOARD.md).
+
+One page (`lab_infra.py` + `lab_infra_ui.py`) mounted in **both** labs — `:8009/infra` in the
+orchestrator container and `:8002/infra` in the bare-metal image lab — talking to the Docker
+Engine API over the unix socket via `httpx(uds=)`, so no `docker` CLI and no `docker` package.
+Topology, engine→container routing, pipe health, GPU contention, images/networks/volumes/disk,
+host + systemd units, and start/stop actions, all derived from the daemon rather than configured.
+
+Deploy is **asymmetric** and that is the trap: the orchestrator needs an image rebuild + recreate,
+the image lab needs a service restart. Three silent rendering defects found and fixed (table markup
+into a `<div>`, an edge to a non-existent node id, a tab whose renderer never ran). Verified live
+in the browser on both labs; `docker compose up -d` without `--no-deps` also starts the
+deliberately-stopped `tts-lab-engine-qwen`.
 
 ---
 

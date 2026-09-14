@@ -371,9 +371,11 @@ UI_HTML = r"""<!DOCTYPE html>
 
     <!-- View tabs -->
     <div class="view-tabs">
-      <div class="view-tab active" onclick="switchView('generate')">Generate</div>
-      <div class="view-tab"        onclick="switchView('gallery')">Gallery</div>
-      <div class="view-tab"        onclick="switchView('logs')">Logs</div>
+      <div class="view-tab active" data-view="generate" onclick="switchView('generate')">Generate</div>
+      <div class="view-tab" data-view="gallery" onclick="switchView('gallery')">Gallery</div>
+      <div class="view-tab" data-view="logs" onclick="switchView('logs')">Logs</div>
+      <div class="view-tab" data-view="infra" onclick="switchView('infra')"
+           title="Docker containers, pipes, images, VRAM holders">🖥 Infrastructure</div>
     </div>
 
     <!-- Generate view -->
@@ -399,6 +401,19 @@ UI_HTML = r"""<!DOCTYPE html>
         </select>
       </div>
       <div class="gallery-grid" id="galleryGrid"></div>
+    </div>
+
+    <!-- Infrastructure view — the shared container dashboard (/infra), embedded.
+         src is set on first activation so it does not poll at boot. -->
+    <div class="view-panel" id="viewInfra">
+      <div class="gallery-header">
+        <h2>Infrastructure</h2>
+        <span style="color:var(--muted);font-size:12px">containers · pipes · images · host — shared by both labs</span>
+        <a class="btn-copy" href="/infra" target="_blank" rel="noopener"
+           style="margin-left:auto;padding:6px 14px;font-size:12px;text-decoration:none">↗ Open in a tab</a>
+      </div>
+      <iframe id="infraFrame" data-src="/infra" title="Container infrastructure dashboard"
+              style="flex:1;width:100%;border:0;background:#080a0f;min-height:420px"></iframe>
     </div>
 
     <!-- Logs view -->
@@ -1445,14 +1460,18 @@ if (USE_COMFYUI) {
 }
 
 function switchView(name) {
-  document.querySelectorAll('.view-tab').forEach((t,i) => {
-    t.classList.toggle('active', ['generate','gallery','logs'][i] === name);
+  document.querySelectorAll('.view-tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.view === name);
   });
   document.querySelectorAll('.view-panel').forEach(p => {
     p.classList.toggle('active', p.id === 'view' + name.charAt(0).toUpperCase() + name.slice(1));
   });
   if (name === 'gallery') loadGallery();
   if (name === 'logs') loadLogs();
+  if (name === 'infra') {
+    const f = document.getElementById('infraFrame');
+    if (f && !f.getAttribute('src')) f.setAttribute('src', f.dataset.src);
+  }
 }
 
 async function loadLogs() {
