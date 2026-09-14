@@ -2568,6 +2568,33 @@ def _synth_qwen36(inst, text, params):
 
 
 # ── Dispatch tables ───────────────────────────────────────────────────────────
+
+def _engine_load_arg(name: str, params: dict) -> object:
+    """Map request params to the loader argument for voice/model-keyed engines.
+
+    Shared by the orchestrator's _ensure_loaded (local mode) and the
+    engine-container server's _load_engine (remote mode) so a voice or model
+    selection reaches the loader in BOTH deployment modes. The engine-server
+    previously called LOADERS[name]() with no args — in remote mode the UI's
+    piper voice dropdown silently loaded the default (en_US-ryan-high), so
+    Persian text was phonemized with the English espeak voice (letter-by-letter
+    spelling). None = loader takes no argument.
+    """
+    if name == "piper":
+        return params.get("voice", "en_US-ryan-high")
+    if name == "matcha":
+        return params.get("voice", "khadijah")
+    if name == "chatterbox":
+        return params.get("model", "persian")
+    if name == "outetts":
+        return params.get("model_path", "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf")
+    if name == "parler":
+        return params.get("model_id", "parler-tts/parler-tts-mini-v1")
+    if name == "zonos":
+        return params.get("variant", "transformer")
+    return None
+
+
 LOADERS: dict = {
     "piper":      _load_piper,    "kokoro":    _load_kokoro,
     "melo":       _load_melo,     "matcha":    _load_matcha,

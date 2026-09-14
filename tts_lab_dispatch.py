@@ -554,22 +554,11 @@ def _ensure_loaded(name: str, params: dict) -> None:
             st["status"] = "loading"
             t0 = time.perf_counter()
             try:
-                if name == "piper":
-                    model_arg = params.get("voice", "en_US-ryan-high")
-                elif name == "matcha":
-                    model_arg = params.get("voice", "khadijah")
-                elif name == "chatterbox":
-                    model_arg = params.get("model", "persian")
-                elif name == "outetts":
-                    model_arg = params.get("model_path", "/opt/models/outetts-gguf/OuteTTS-1.0-0.6B-Q4_K_M.gguf")
-                elif name == "parler":
-                    model_arg = params.get("model_id", "parler-tts/parler-tts-mini-v1")
-                elif name == "zonos":
-                    model_arg = params.get("variant", "transformer")
-                else:
-                    model_arg = None
+                # Single source of truth for voice/model-keyed load args —
+                # shared with the engine-container server (_load_engine).
+                from tts_lab_engines import LOADERS, _engine_load_arg
+                model_arg = _engine_load_arg(name, params)
                 slog("LOAD", name, f"Loading{'  arg=' + repr(model_arg) if model_arg else ''}  …")
-                from tts_lab_engines import LOADERS
                 if model_arg is not None:
                     st["instance"] = LOADERS[name](model_arg)
                 else:

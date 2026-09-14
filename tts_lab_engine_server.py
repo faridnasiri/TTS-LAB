@@ -56,7 +56,7 @@ from pydantic import BaseModel
 
 from tts_lab_config import MODEL_ORDER, MODEL_INFO, _state, _server_log, _server_log_seq, slog, UPLOAD_DIR
 from tts_lab_dispatch import _available
-from tts_lab_engines import LOADERS, SYNTHERS, SynthParamError
+from tts_lab_engines import LOADERS, SYNTHERS, SynthParamError, _engine_load_arg
 from tts_lab_utils import _wav_dur, _safe_del
 
 app = FastAPI(title=f"TTS Lab — Engine Server ({_STACK} stack)")
@@ -69,6 +69,7 @@ _load_times: dict[str, float] = {}   # engine_name → last load time (cached)
 # Current loaded engine — AT MOST ONE
 _current_engine: str | None = None
 _current_instance: object | None = None
+_current_arg: object | None = None   # voice/model arg the instance was loaded with
 _lock = threading.Lock()
 
 # vLLM-backed stack (editx): a failed vLLM engine-core init leaves its memory
@@ -106,7 +107,7 @@ class HealthResponse(BaseModel):
 
 def _evict_current() -> None:
     """Unload the currently loaded engine and free GPU memory."""
-    global _current_engine, _current_instance
+    global _current_engine, _current_instance, _current_arg
     if _current_instance is not None:
         name = _current_engine
         print(f"[engine-server:{_STACK}] Evicting {name} ...")
@@ -123,6 +124,7 @@ def _evict_current() -> None:
         _safe_del(_current_instance)
         _current_instance = None
         _current_engine = None
+        _current_arg = None
         # Force full GC cycle to release all dangling references
         import gc
         gc.collect()
@@ -142,25 +144,44 @@ def _evict_current() -> None:
             pass
 
 
-def _load_engine(name: str) -> object:
+def _load_engine(name: str, params: dict | None = None) -> object:
     """Evict current engine (if any), load `name`, return instance.
-    Thread-safe: only one load at a time."""
-    global _current_engine, _current_instance
+    Thread-safe: only one load at a time.
+
+    params carries the voice/model selection for arg-keyed engines (piper,
+    matcha, outetts, parler, zonos, chatterbox) via _engine_load_arg. The
+    loaded instance is cached per (engine, arg) — a voice change evicts and
+    reloads. Before this, remote mode always loaded the default arg
+    (e.g. piper → en_US-ryan-high), so non-default voices in the UI were
+    silently ignored and Persian text got spelled by the English espeak voice.
+    """
+    global _current_engine, _current_instance, _current_arg
+
+    params = params or {}
+    model_arg = _engine_load_arg(name, params)
 
     with _lock:
-        # Already loaded? Return it.
-        if _current_engine == name and _current_instance is not None:
+        # Already loaded with the same arg? Return it.
+        if _current_engine == name and _current_instance is not None \
+                and _current_arg == model_arg:
             print(f"[engine-server:{_STACK}] {name} already loaded — reusing")
             return _current_instance
+
+        if _current_instance is not None:
+            if _current_engine == name:
+                print(f"[engine-server:{_STACK}] {name} arg change "
+                      f"{_current_arg!r} → {model_arg!r} — reloading")
 
         # Evict whatever is currently loaded
         _evict_current()
 
         # Load the requested engine
-        print(f"[engine-server:{_STACK}] Loading {name} ...")
+        print(f"[engine-server:{_STACK}] Loading {name} ..."
+              + (f"  arg={model_arg!r}" if model_arg else ""))
         t0 = time.perf_counter()
         try:
-            instance = LOADERS[name]()
+            instance = LOADERS[name](model_arg) if model_arg is not None \
+                else LOADERS[name]()
         except Exception as e:
             print(f"[engine-server:{_STACK}] {name} LOAD FAILED: {e}")
             traceback.print_exc()
@@ -170,10 +191,18 @@ def _load_engine(name: str) -> object:
                 torch.cuda.empty_cache()
             except Exception:
                 pass
-            if _HAS_VLLM:
+            if _HAS_VLLM and name == "editx":
                 # A failed vLLM core can't be retried in-process AND its arena
                 # stays pinned — die and let Docker recycle the container, so
                 # the next request starts from a clean 0 MiB process.
+                # Gated on name == "editx": engine-current has vllm installed
+                # (find_spec → _HAS_VLLM True) but hosts no vLLM engines — a
+                # plain load failure there (e.g. a bogus piper voice from the
+                # UI → FileNotFoundError) must 500 cleanly, NOT kill the
+                # container. Recycle was previously triggered by any failed
+                # load in any vllm-capable container (observed 2026-09-01:
+                # container exiting 0 and restarting after unknown-voice
+                # requests).
                 print(f"[engine-server:{_STACK}] vLLM load failed — exiting in "
                       f"1.5 s for container restart (restart: unless-stopped)")
                 threading.Timer(1.5, _recycle_container).start()
@@ -185,6 +214,7 @@ def _load_engine(name: str) -> object:
         elapsed = round(time.perf_counter() - t0, 2)
         _current_instance = instance
         _current_engine = name
+        _current_arg = model_arg
         _load_times[name] = elapsed
         _state[name]["instance"] = instance
         _state[name]["status"] = "loaded"
@@ -289,8 +319,9 @@ async def synthesize(req: SynthRequest):
             detail=f"Engine '{req.engine}' not available in this container"
         )
 
-    # Lazy-load (evicts previous engine, loads this one)
-    instance = _load_engine(req.engine)
+    # Lazy-load (evicts previous engine, loads this one) — pass params so
+    # voice/model-keyed engines (piper, matcha, outetts, ...) get their arg.
+    instance = _load_engine(req.engine, req.params)
 
     def _clear_cuda_cache():
         """Release CUDA caching allocator retained memory — combats
@@ -346,7 +377,7 @@ async def synthesize(req: SynthRequest):
         print(f"[engine-server:{_STACK}] Synthesis failed — auto-evicting {req.engine} and retrying")
         _evict_current()
         try:
-            instance = _load_engine(req.engine)
+            instance = _load_engine(req.engine, req.params)
             t0 = time.perf_counter()
             wav, sr = SYNTHERS[req.engine](instance, req.text, req.params)
             synth_ms = int((time.perf_counter() - t0) * 1000)
