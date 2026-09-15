@@ -144,13 +144,21 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check the parent image is published
-        run: docker pull ${{ matrix.entry.parent }}
+      - name: Note where the parent comes from
+        run: |
+          echo "parent : ${{ matrix.entry.parent }}"
+          # Diagnostic only, deliberately NOT fatal: buildx resolves the parent itself
+          # (with the credentials from the login above) and reports far better than a
+          # bare `docker pull` can. A failing guard here once skipped a build that would
+          # otherwise have worked, which is strictly worse than the error it explained.
+          docker pull "${{ matrix.entry.parent }}" || echo "::warning::pre-pull failed; buildx will resolve the parent"
+
       - name: Free disk space
         if: matrix.entry.freespace
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
           df -h / | tail -1
+
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -187,8 +195,11 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Check the parent image is published
-        run: docker pull ${{ matrix.entry.parent }}
+      - name: Note where the parent comes from
+        run: |
+          echo "parent : ${{ matrix.entry.parent }}"
+          # See the tier-2 note: a diagnostic, not a gate.
+          docker pull "${{ matrix.entry.parent }}" || echo "::warning::pre-pull failed; buildx will resolve the parent"
       - name: Free disk space
         if: matrix.entry.freespace
         run: |
