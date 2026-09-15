@@ -18,7 +18,10 @@
 # REBUILT: When torch or transformers needs updating for mid engines
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-base:latest
+# Parent layer — overridable so CI can use the GHCR build of the same stack;
+# the default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-base:latest
+FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — ML Stack mid"
 LABEL org.opencontainers.image.description="torch nightly, transformers 4.x, CUDA 12.8 — sm_120 support"
 LABEL tts-lab.tier="2-stack"

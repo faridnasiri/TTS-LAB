@@ -116,6 +116,13 @@ COPY tts_lab_utils.py .
 COPY tts_lab_engines.py .
 COPY tts_lab_dispatch.py .
 COPY tts_lab_ui.py .
+# tts_lab.py imports all three at module scope: the history store, and the /infra
+# router (mounted in image_lab.py too). Without them this layer carries a
+# tts_lab.py that cannot be imported — the same failure mode that makes a deploy
+# which copies tts_lab.py but not lab_infra.py die on ImportError.
+COPY tts_lab_history.py .
+COPY lab_infra.py .
+COPY lab_infra_ui.py .
 COPY patches/ ./patches/
 
 # ── Runtime configuration ────────────────────────────────────────

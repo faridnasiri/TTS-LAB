@@ -1,4 +1,7 @@
-FROM tts-lab-stack-legacy:latest
+# Parent layer — overridable so CI can use the GHCR build of the stack; the
+# default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-stack-legacy:latest
+FROM ${BASE_IMAGE}
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="legacy"
 RUN pip install --no-cache-dir git+https://github.com/index-tts/index-tts.git

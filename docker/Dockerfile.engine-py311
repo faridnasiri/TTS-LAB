@@ -10,7 +10,10 @@
 # index (cu130), ensuring matching CUDA 13 nvidia packages.
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-stack-py311:latest
+# Parent layer — overridable so CI can use the GHCR build of the stack; the
+# default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-stack-py311:latest
+FROM ${BASE_IMAGE}
 
 # ── Engine packages ───────────────────────────────────────────────
 RUN pip install --no-cache-dir piper-tts>=1.2.0 kokoro-onnx>=0.4.0 sherpa-onnx

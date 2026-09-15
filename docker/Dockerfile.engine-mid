@@ -16,7 +16,10 @@
 # SIZE: ~12.5 GB (base 1.5 + stack 3.0 + engines 8.0)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-stack-mid:latest
+# Parent layer — overridable so CI can use the GHCR build of the stack; the
+# default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-stack-mid:latest
+FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (mid stack)"
 LABEL org.opencontainers.image.description="3 engines on torch 2.10 stable + transformers 4.x"
 LABEL tts-lab.tier="3-engine"

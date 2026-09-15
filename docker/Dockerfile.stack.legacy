@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
-FROM tts-lab-base:latest
+# Parent layer — overridable so CI can use the GHCR build of the same stack;
+# the default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-base:latest
+FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab - ML Stack legacy"
 LABEL org.opencontainers.image.description="torch 1.13, transformers 4.46 — zero framework patches"
 LABEL tts-lab.tier="2-stack"

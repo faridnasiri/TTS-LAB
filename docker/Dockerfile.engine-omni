@@ -7,7 +7,10 @@
 # architecture). Uses engine-py311 as base (Python 3.11 + CUDA 13).
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-stack-py311:latest
+# Parent layer — overridable so CI can use the GHCR build of the stack; the
+# default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-stack-py311:latest
+FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (omni)"
 LABEL org.opencontainers.image.description="OmniVoice on latest transformers"
 LABEL tts-lab.tier="3-engine"

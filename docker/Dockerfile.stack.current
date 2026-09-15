@@ -1,4 +1,7 @@
-FROM tts-lab-base:latest
+# Parent layer — overridable so CI can use the GHCR build of the same stack;
+# the default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-base:latest
+FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab - ML Stack current"
 LABEL org.opencontainers.image.description="torch nightly, transformers 5.12, CUDA 12.8"
 LABEL tts-lab.tier="2-stack"

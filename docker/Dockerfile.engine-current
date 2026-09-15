@@ -9,7 +9,10 @@
 # SIZE: ~17 GB (base 1.5 + stack 3.5 + engines 12)
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-stack-current:latest
+# Parent layer — overridable so CI can use the GHCR build of the stack; the
+# default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-stack-current:latest
+FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (current stack)"
 LABEL org.opencontainers.image.description="22 engines on torch 2.12 nightly + transformers 5.12"
 LABEL tts-lab.tier="3-engine"

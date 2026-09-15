@@ -7,7 +7,10 @@
 # Shared by engine-py311, engine-omni, engine-qwen.
 # ═══════════════════════════════════════════════════════════════════
 
-FROM tts-lab-base-py311:latest
+# Parent layer — overridable so CI can use the GHCR build of the same stack;
+# the default is the local tag name that `make` produces on the VM.
+ARG BASE_IMAGE=tts-lab-base-py311:latest
+FROM ${BASE_IMAGE}
 
 # ── Unified CUDA 13 Nightly Stack ─────────────────────────────────
 # Explicit LD_LIBRARY_PATH ensures wheels validate at build time
