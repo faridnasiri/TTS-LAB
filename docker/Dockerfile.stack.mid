@@ -7,12 +7,18 @@
 # These engines cannot use stack-current (transformers 5.x broke ROPE
 # init, model config parsing changed) or stack-legacy (torch 1.13 too old).
 #
-# Engines: qwen3tts, VibeVoice-1.5B, Higgs Audio v3 4B
+# Engines: qwen3tts (its own container), VibeVoice-1.5B, Higgs Audio v3 4B
 #
 # KEY DIFFERENCES from stack-current:
-#   - torch 2.10 STABLE (cu121) — not nightly, these engines predate sm_120
-#   - transformers 4.x — before ROPE API changed (has ROPE_INIT_FUNCTIONS["default"])
+#   - transformers 4.x (>=4.50,<5.0) — still has ROPE_INIT_FUNCTIONS["default"],
+#     which tf 5.x removed. That version window is the entire reason this stack
+#     exists; everything else here tracks stack-current.
 #   - No patches needed — transformers 4.x APIs are stable
+#
+# torch is NOT pinned to an older release here: this layer installs the same
+# `--pre torch torchaudio` nightly from the cu130 index that stack-current uses.
+# The header previously claimed "torch 2.10 STABLE (cu121)" and contradicted the
+# LABEL below it.
 #
 # SIZE: ~4.5 GB (base 1.5 + stack 3.0)
 # REBUILT: When torch or transformers needs updating for mid engines
@@ -23,7 +29,7 @@
 ARG BASE_IMAGE=tts-lab-base:latest
 FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — ML Stack mid"
-LABEL org.opencontainers.image.description="torch nightly, transformers 4.x, CUDA 12.8 — sm_120 support"
+LABEL org.opencontainers.image.description="torch nightly (cu130 wheels), transformers 4.x, CUDA 12.8 runtime — sm_120 support"
 LABEL tts-lab.tier="2-stack"
 LABEL tts-lab.stack-version="mid"
 

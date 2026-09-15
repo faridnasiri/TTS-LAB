@@ -10,9 +10,8 @@
 # and engine-legacy (torch 1.13 too old for qwen_tts).
 #
 # STACK (inherited from tts-lab-stack-mid):
-#   torch 2.10 stable (cu121)   — stable, well-tested CUDA 12.1
+#   torch nightly (cu130 wheels) — same nightly line as stack-current
 #   transformers 4.x            — before ROPE API removal in 5.x
-#   No nightly regressions
 #   No install-then-downgrade
 #
 # PINNED (this layer):
@@ -41,7 +40,7 @@
 ARG BASE_IMAGE=tts-lab-stack-mid:latest
 FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (qwen)"
-LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B — torch 2.10 stable + tf 4.51-4.54"
+LABEL org.opencontainers.image.description="Qwen3-TTS 1.7B — torch nightly (stack-mid) + transformers 4.53.3"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="qwen"
 LABEL tts-lab.maturity="experimental"

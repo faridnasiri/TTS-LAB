@@ -21,7 +21,7 @@
 ARG BASE_IMAGE=tts-lab-stack-mid:latest
 FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.title="TTS Lab — Engine Server (mid stack)"
-LABEL org.opencontainers.image.description="3 engines on torch 2.10 stable + transformers 4.x"
+LABEL org.opencontainers.image.description="3 engines on torch nightly (stack-mid) + transformers 4.x"
 LABEL tts-lab.tier="3-engine"
 LABEL tts-lab.stack="mid"
 
