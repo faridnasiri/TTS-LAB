@@ -42,8 +42,21 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-22.04
-    if: secrets.VM_HOST != ''  # Only run if VM secrets are configured
     steps:
+      # The guard cannot be a job-level `if:` — GitHub exposes only
+      # github/needs/vars/inputs to `jobs.<job_id>.if`, so referring to `secrets`
+      # there makes the whole workflow file fail validation (and it reports that
+      # as a failed run against whatever commit was pushed, which is what the
+      # Actions history shows). Testing it in a step keeps the file valid and
+      # still refuses to deploy when the VM secrets are missing.
+      - name: Check VM secrets are configured
+        env:
+          VM_HOST_SET: ${{ secrets.VM_HOST }}
+        run: |
+          if [ -z "$VM_HOST_SET" ]; then
+            echo "::error::VM_HOST / VM_USER / VM_SSH_KEY secrets are not set — add them under Settings > Secrets and variables > Actions before deploying."
+            exit 1
+          fi
       - name: Checkout
         uses: actions/checkout@v4
 

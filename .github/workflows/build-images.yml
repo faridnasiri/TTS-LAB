@@ -106,6 +106,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -134,6 +135,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull base image for cache
         run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest || true
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -164,6 +166,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull base image for cache
         run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest || true
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -195,6 +198,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull stack image for cache
         run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-stack-current:latest || true
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -226,6 +230,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull stack image for cache
         run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-stack-legacy:latest || true
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -256,6 +261,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull base image for cache
         run: docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/tts-lab-base:latest || true
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
@@ -283,6 +289,7 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@v3
       - uses: docker/build-push-action@v6
         with:
           context: .
