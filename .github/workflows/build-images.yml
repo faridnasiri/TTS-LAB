@@ -62,8 +62,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  # GHCR paths must be lowercase, and ${{ github.repository }} is not.
-  IMAGE_PREFIX: ${{ github.repository_owner }}/tts-lab
+  # Must include the registry host: the planner builds every tag and parent ref
+  # from this string, and a bare "owner/repo" silently becomes a Docker Hub path.
+  # (That is what broke run #150: "pull access denied, repository does not
+  # exist" for a parent that exists and is publicly pullable.)
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/tts-lab
 
 jobs:
   # ── Decide what to rebuild ──────────────────────────────────────

@@ -154,6 +154,14 @@ def plan(changed: list[str], prefix: str) -> dict[str, list[dict]]:
 def main() -> int:
     prefix = os.environ.get("IMAGE_PREFIX", "ghcr.io/faridnasiri/tts-lab")
 
+    # Every emitted tag/parent starts with this string. Without the registry host
+    # the refs read as Docker Hub paths, and the failure shows up much later and
+    # much less clearly ("pull access denied, repository does not exist") in a
+    # build job rather than here.
+    if "." not in prefix.split("/")[0]:
+        print(f"::error::IMAGE_PREFIX must include the registry host, got {prefix!r}")
+        return 1
+
     if "--list" in sys.argv:
         for tier, name, dockerfile, parent, own, free in TABLE:
             anc = [s for s in effective_sources(name) if s not in own]

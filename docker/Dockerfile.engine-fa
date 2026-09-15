@@ -15,10 +15,17 @@
 #   coqui-tts    0.27.x (torch NOT bundled since 0.27.4 — we install it;
 #                torchcodec is only the `codec`/`codec-cuda` extra)
 #   transformers >=4.57 (coqui-tts pin — tf 4.x, unlike stack:current 5.x)
-#   model        MohammadJRanjbar/ParsVoice-XTTS — GATED repo (contact-
-#                info gate): HF_TOKEN must belong to an account that
-#                accepted access. ~1.8 GB into the shared
+#   model        MohammadJRanjbar/ParsVoice-XTTS — PARKED, see below.
+#                ~1.8 GB when it lands, into the shared
 #                /opt/models/huggingface cache. CPML license (no comm.)
+#
+# ⚠️ The weights are NOT published (verified 2026-09-01): the HF repo is
+#    README-only — no config.json, no .pth — and the README's own example id
+#    `parsvoice-xtts-v2` 404s. This comment previously described it as merely
+#    "GATED (contact-info gate)", i.e. downloadable with an accepted HF_TOKEN,
+#    which is a different and wrong claim: there is nothing to download yet.
+#    The image builds fine and _load_xttsfa raises a clear "weights not
+#    published" error, so the engine is wired but inert.
 #
 # SIZE: ~7 GB · VRAM: ~2 GB (XTTS v2, lazy-loaded, /evict-able)
 # ═══════════════════════════════════════════════════════════════════
