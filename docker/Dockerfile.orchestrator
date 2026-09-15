@@ -7,7 +7,11 @@
 # engine synthesis requests to engine containers via HTTP.
 #
 # Inherits directly from tts-lab-base (no ML stack).
-# All 28 engines are HTTP-remote. No torch/numpy/transformers needed.
+# Every engine is HTTP-remote (a container on the compose network), so this
+# image needs no torch/numpy/transformers — only fastapi/uvicorn and httpx.
+#
+# It also serves the shared container dashboard at GET /infra (lab_infra.py +
+# lab_infra_ui.py, copied below), the same router image_lab.py mounts on :8002.
 #
 # SIZE: ~1.5 GB (same as base)
 # ═══════════════════════════════════════════════════════════════════
