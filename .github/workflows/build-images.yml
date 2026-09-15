@@ -14,13 +14,16 @@ name: Build and Push Docker Images
 #   - Docker layer cache via GitHub Actions cache (type=gha)
 #
 # Images produced:
-#   ghcr.io/faridnasiri/tts-lab-orchestrator:latest    (~1.5 GB)
-#   ghcr.io/faridnasiri/tts-lab-stack-current:latest   (~5 GB)
-#   ghcr.io/faridnasiri/tts-lab-stack-legacy:latest    (~4 GB)
-#   ghcr.io/faridnasiri/tts-lab-engine-current:latest  (~5 GB)
-#   ghcr.io/faridnasiri/tts-lab-engine-legacy:latest   (~4 GB)
-#   ghcr.io/faridnasiri/tts-lab-orpheus:latest         (~7 GB)
-#   ghcr.io/faridnasiri/tts-lab-base:latest            (~1.5 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-orchestrator:latest    (~1.5 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-stack-current:latest   (~5 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-stack-legacy:latest    (~4 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-engine-current:latest  (~5 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-engine-legacy:latest   (~4 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-orpheus:latest         (~7 GB)
+#   ghcr.io/faridnasiri/tts-lab/tts-lab-base:latest            (~1.5 GB)
+#
+# The extra `tts-lab/` segment is the package prefix (IMAGE_PREFIX) — GHCR shows
+# these as packages named `tts-lab/tts-lab-<image>`, linked to this repository.
 # ═══════════════════════════════════════════════════════════════════
 
 on:

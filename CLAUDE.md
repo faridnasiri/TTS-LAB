@@ -310,5 +310,5 @@ Response differs from TTS engines:
   `arthur.service` (:8000) — **disabled 2026-09-14** (venv + app removed, was crash-looping);
   `arthur-imglab.service` (:8002) and `arthur-comfy.service` (:8188) — active
 - **Image Lab models:** `/opt/arthur-img-models/` (separate disk)
-- **Container registry:** `ghcr.io/farid-nasiri/tts-lab-*`
+- **Container registry:** `ghcr.io/faridnasiri/tts-lab/tts-lab-*` (published by CI on push to main; the VM still builds locally)
 - **Engine status:** See `docs/engine_compatibility.yaml` — 18 supported, 9 experimental, 3 blocked (+1 planned LLM)
