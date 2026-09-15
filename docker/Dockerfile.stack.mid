@@ -3,7 +3,8 @@
 # TIER 2 — tts-lab-stack-mid  (Middle-Ground ML Stack)
 # ═══════════════════════════════════════════════════════════════════
 #
-# For engines that need transformers 4.x + torch 2.x stable.
+# For engines that need transformers 4.x. torch is NOT older here — this layer
+# tracks the same nightly line as stack-current (see the note further down).
 # These engines cannot use stack-current (transformers 5.x broke ROPE
 # init, model config parsing changed) or stack-legacy (torch 1.13 too old).
 #

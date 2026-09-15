@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # ═══════════════════════════════════════════════════════════════════
-# TIER 3 — engine-mid  (3 engines on torch 2.10 stable + tf 4.x)
+# TIER 3 — engine-mid  (3 engines: transformers 4.x on the mid stack)
 # ═══════════════════════════════════════════════════════════════════
 #
 # Middle-ground container for engines that need transformers 4.x

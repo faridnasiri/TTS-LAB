@@ -15,17 +15,23 @@
 #   No install-then-downgrade
 #
 # PINNED (this layer):
-#   transformers == 4.53.3      — auto_docstring present (>= 4.52), before
-#                                  TransformGetItemToIndex (>= 4.54)
+#   qwen-tts == 0.1.1           — last known-compatible release; it resolves its
+#                                  OWN transformers (4.57.3 when this was written)
 #   huggingface-hub 0.34–1.0    — qwen_tts 0.1.1 compatibility
-#   qwen-tts == 0.1.1           — last known-compatible release
+#
+# There is no transformers pin here any more. An earlier revision of this file
+# pinned tf and force-reinstalled it below qwen_tts's own requirement, and this
+# header still described that; the current approach lets qwen-tts resolve it and
+# relies on tts_lab_shims.py patching TransformGetItemToIndex at runtime.
 #
 # INCOMPATIBILITIES THIS AVOIDS:
 #   - ROPE_INIT_FUNCTIONS["default"] removed in tf 5.x
 #   - TransformGetItemToIndex added in tf 4.54 (qwen_tts 0.1.1 crashes)
 #   - huggingface-hub >= 1.0 removes is_offline_mode (qwen_tts 0.1.1)
 #   - inputs_embeds signature changed in tf 5.x
-#   Deployed fix: install qwen-tts first, then --force-reinstall tf==4.51.3
+#   TransformGetItemToIndex is the one that still bites: qwen_tts wants it
+#   present, so tts_lab_shims.py patches it at runtime rather than this layer
+#   pinning transformers backwards.
 #
 # MODEL: Qwen/Qwen3-TTS-12Hz-1.7B-Base  (gated — needs HF_TOKEN)
 # Switched from CustomVoice (no voice clone) to Base (generate_voice_clone + x-vector mode)
