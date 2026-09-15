@@ -14,13 +14,13 @@ name: Build and Push Docker Images
 #   - Docker layer cache via GitHub Actions cache (type=gha)
 #
 # Images produced:
-#   ghcr.io/farid-nasiri/tts-lab-orchestrator:latest    (~1.5 GB)
-#   ghcr.io/farid-nasiri/tts-lab-stack-current:latest   (~5 GB)
-#   ghcr.io/farid-nasiri/tts-lab-stack-legacy:latest    (~4 GB)
-#   ghcr.io/farid-nasiri/tts-lab-engine-current:latest  (~5 GB)
-#   ghcr.io/farid-nasiri/tts-lab-engine-legacy:latest   (~4 GB)
-#   ghcr.io/farid-nasiri/tts-lab-orpheus:latest         (~7 GB)
-#   ghcr.io/farid-nasiri/tts-lab-base:latest            (~1.5 GB)
+#   ghcr.io/faridnasiri/tts-lab-orchestrator:latest    (~1.5 GB)
+#   ghcr.io/faridnasiri/tts-lab-stack-current:latest   (~5 GB)
+#   ghcr.io/faridnasiri/tts-lab-stack-legacy:latest    (~4 GB)
+#   ghcr.io/faridnasiri/tts-lab-engine-current:latest  (~5 GB)
+#   ghcr.io/faridnasiri/tts-lab-engine-legacy:latest   (~4 GB)
+#   ghcr.io/faridnasiri/tts-lab-orpheus:latest         (~7 GB)
+#   ghcr.io/faridnasiri/tts-lab-base:latest            (~1.5 GB)
 # ═══════════════════════════════════════════════════════════════════
 
 on:
@@ -45,7 +45,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_PREFIX: ${{ github.repository }}
+  # GHCR paths must be lowercase and ${{ github.repository }} is not -- it is
+  # "faridnasiri/TTS-LAB", which made every build die before it started with
+  # `invalid tag ...: repository name must be lowercase`. repository_owner is
+  # already lowercase, so only the repo name has to be spelled out here.
+  IMAGE_PREFIX: ${{ github.repository_owner }}/tts-lab
 
 jobs:
   # ── Detect changed files ────────────────────────────────────────
